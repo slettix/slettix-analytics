@@ -69,5 +69,20 @@ services:
       - ./spark/conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
       - ./jobs:/opt/spark/jobs
 
+  # ── Jupyter Lab ────────────────────────────────────────────────────────────
+  jupyter:
+    build:
+      context: docker/jupyter
+    image: slettix-analytics/jupyter:3.5.8
+    container_name: jupyter
+    ports:
+      - "8888:8888"   # Jupyter Lab
+    volumes:
+      - ./notebooks:/home/spark/notebooks
+      - ./spark/conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
+    depends_on:
+      spark-master:
+        condition: service_healthy
+
 volumes:
   minio_data:

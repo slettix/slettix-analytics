@@ -32,6 +32,7 @@ docker compose up --build
 |----------------|-------------------------|
 | Spark Web UI   | http://localhost:8080   |
 | MinIO Console  | http://localhost:9001   |
+| Jupyter Lab    | http://localhost:8888   |
 
 ### Kjør smoke test
 
@@ -49,8 +50,10 @@ Forventet output: `>> Smoke test PASSED`
 ```
 slettix-analytics/
 ├── docker-compose.yml
-├── docker/spark/Dockerfile   # Spark + Delta Lake + S3A JARs
-├── spark/conf/               # spark-defaults.conf
-├── jobs/                     # PySpark-jobber
-└── notebooks/                # Jupyter-notebooks (kommer)
+├── docker/spark/Dockerfile     # Spark + Delta Lake + S3A JARs
+├── docker/jupyter/Dockerfile   # Jupyter Lab + PySpark-kernel
+├── spark/conf/                 # spark-defaults.conf
+├── jobs/                       # PySpark-jobber (spark-submit)
+└── notebooks/                  # Jupyter-notebooks
+    └── 01_getting_started.ipynb
 ```
