@@ -39,7 +39,7 @@ Verifiser at Spark kan skrive og lese Delta-tabeller på MinIO:
 
 ```bash
 docker exec spark-master \
-  spark-submit /opt/spark/jobs/smoke_test.py
+  /opt/spark/bin/spark-submit /opt/spark/jobs/smoke_test.py
 ```
 
 Forventet output: `>> Smoke test PASSED`
