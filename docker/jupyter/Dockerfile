@@ -17,6 +17,8 @@ RUN curl -fsSL -o /opt/spark/jars/delta-spark_2.12-3.2.0.jar \
     curl -fsSL -o /opt/spark/jars/aws-java-sdk-bundle-1.12.262.jar \
       https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar
 
+ENV HOME=/home/spark
+
 RUN mkdir -p /home/spark/notebooks && chown -R spark /home/spark
 
 EXPOSE 8888
