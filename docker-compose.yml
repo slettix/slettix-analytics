@@ -49,6 +49,8 @@ services:
     volumes:
       - ./spark/conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
       - ./jobs:/opt/spark/jobs
+      - ./tests:/opt/spark/tests
+      - ./data:/opt/spark/data
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080"]
       interval: 15s
