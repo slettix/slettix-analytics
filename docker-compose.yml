@@ -49,6 +49,7 @@ services:
     volumes:
       - ./spark/conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
       - ./jobs:/opt/spark/jobs
+      - ./conf:/opt/spark/app/conf
       - ./tests:/opt/spark/tests
       - ./data:/opt/spark/data
     healthcheck:
