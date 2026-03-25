@@ -1,0 +1,17 @@
+{
+  "source": "s3a://bronze/employees",
+  "target": "s3a://silver/employees",
+  "primary_key": "id",
+  "null_handling": {
+    "drop_if_null": ["id", "name"],
+    "fill": {
+      "department": "unknown",
+      "salary": 0
+    }
+  },
+  "cast": {
+    "id":        "integer",
+    "salary":    "integer",
+    "hire_date": "date"
+  }
+}
