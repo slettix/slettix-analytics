@@ -12,4 +12,7 @@ RUN curl -fsSL -o /opt/spark/jars/delta-spark_2.12-3.2.0.jar \
     curl -fsSL -o /opt/spark/jars/aws-java-sdk-bundle-1.12.262.jar \
       https://repo1.maven.org/maven2/com/amazonaws/aws-java-sdk-bundle/1.12.262/aws-java-sdk-bundle-1.12.262.jar
 
+# Install delta-spark Python bindings (matches the Delta Lake JAR version above)
+RUN pip install --no-cache-dir delta-spark==3.2.0
+
 USER spark
