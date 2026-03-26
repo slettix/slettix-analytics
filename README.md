@@ -28,11 +28,12 @@ cp .env.example .env       # Juster passord ved behov
 docker compose up --build
 ```
 
-| Tjeneste       | URL                     |
-|----------------|-------------------------|
-| Spark Web UI   | http://localhost:8080   |
-| MinIO Console  | http://localhost:9001   |
-| Jupyter Lab    | http://localhost:8888   |
+| Tjeneste       | URL                       | Bruker / passord  |
+|----------------|---------------------------|-------------------|
+| Spark Web UI   | http://localhost:8080     | –                 |
+| MinIO Console  | http://localhost:9001     | admin / changeme  |
+| Jupyter Lab    | http://localhost:8888     | –                 |
+| Airflow UI     | http://localhost:8081     | admin / admin     |
 
 ### Kjør smoke test
 

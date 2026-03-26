@@ -5,3 +5,5 @@ __pycache__/
 .pytest_cache/
 dist/
 .ipynb_checkpoints/
+airflow/logs/**
+!airflow/logs/.gitkeep
