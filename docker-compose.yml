@@ -33,6 +33,8 @@ services:
         mc mb --ignore-existing local/bronze;
         mc mb --ignore-existing local/silver;
         mc mb --ignore-existing local/gold;
+        mc mb --ignore-existing local/raw/stream-input;
+        mc mb --ignore-existing local/checkpoints;
         echo 'Buckets ready.';
       "
 

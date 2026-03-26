@@ -1,0 +1,2 @@
+{"event_id": "b2c3d4e5-0001", "event_type": "employee_hired", "employee_id": 203, "department": "sales", "salary": 59000, "event_timestamp": "2024-03-02T08:30:00"}
+{"event_id": "b2c3d4e5-0002", "event_type": "employee_left", "employee_id": 6, "department": "sales", "salary": null, "event_timestamp": "2024-03-02T17:00:00"}
