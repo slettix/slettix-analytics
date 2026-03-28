@@ -1,12 +1,12 @@
 {
-  "source": "s3a://bronze/employees",
-  "target": "s3a://silver/employees",
+  "source":      "s3a://bronze/hr/employees",
+  "target":      "s3a://silver/hr/employees",
   "primary_key": "id",
   "null_handling": {
     "drop_if_null": ["id", "name"],
     "fill": {
       "department": "unknown",
-      "salary": 0
+      "salary":     0
     }
   },
   "cast": {

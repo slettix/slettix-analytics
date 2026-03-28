@@ -60,9 +60,14 @@ services:
         mc mb --ignore-existing local/bronze;
         mc mb --ignore-existing local/silver;
         mc mb --ignore-existing local/gold;
-        mc mb --ignore-existing local/raw/stream-input;
         mc mb --ignore-existing local/checkpoints;
-        echo 'Buckets ready.';
+        mc mb --ignore-existing local/raw/stream-input;
+        mc cp /dev/null local/raw/hr/employees/.domain;
+        mc cp /dev/null local/bronze/hr/employees/.domain;
+        mc cp /dev/null local/silver/hr/employees/.domain;
+        mc cp /dev/null local/gold/hr/department_stats/.domain;
+        mc cp /dev/null local/gold/data_products/.domain;
+        echo 'Buckets and domain structure ready.';
       "
 
   # ── Spark ──────────────────────────────────────────────────────────────────

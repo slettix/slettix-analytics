@@ -1,0 +1,15 @@
+{
+  "source":      "s3a://silver/hr/employees",
+  "target":      "s3a://gold/hr/department_stats",
+  "primary_key": "department",
+  "description": "Department-level salary and headcount statistics derived from Silver employees table.",
+  "columns": {
+    "department":       "Department name",
+    "headcount":        "Number of active employees in the department",
+    "avg_salary":       "Average salary (USD) across all employees in the department",
+    "min_salary":       "Lowest salary (USD) in the department",
+    "max_salary":       "Highest salary (USD) in the department",
+    "total_payroll":    "Sum of all salaries (USD) in the department",
+    "_gold_updated_at": "Timestamp when this row was last refreshed in the Gold layer"
+  }
+}

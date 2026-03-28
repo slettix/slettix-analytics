@@ -115,7 +115,7 @@ def validate_silver_employees(**context):
     }
 
     log.info("Leser Silver/employees via delta-rs ...")
-    dt = DeltaTable("s3://silver/employees", storage_options=storage_options)
+    dt = DeltaTable("s3://silver/hr/employees", storage_options=storage_options)
     df = dt.to_pandas()
     log.info(f"Leste {len(df)} rader fra Silver.")
 
@@ -204,8 +204,8 @@ with DAG(
         packages=DELTA_JARS,
         conf=SPARK_CONF,
         application_args=[
-            "--source", "s3a://raw/employees",
-            "--target", "s3a://bronze/employees",
+            "--source", "s3a://raw/hr/employees",
+            "--target", "s3a://bronze/hr/employees",
             "--format", "csv",
             "--ingestion-date", "{{ ds }}",
         ],
@@ -220,7 +220,7 @@ with DAG(
         packages=DELTA_JARS,
         conf=SPARK_CONF,
         application_args=[
-            "--config", "/opt/airflow/spark_conf/silver/employees.json",
+            "--config", "/opt/airflow/spark_conf/silver/hr/employees.json",
         ],
         name="bronze_to_silver_employees",
         execution_timeout=timedelta(minutes=15),
@@ -233,7 +233,7 @@ with DAG(
         packages=DELTA_JARS,
         conf=SPARK_CONF,
         application_args=[
-            "--config", "/opt/airflow/spark_conf/gold/department_stats.json",
+            "--config", "/opt/airflow/spark_conf/gold/hr/department_stats.json",
         ],
         name="build_gold_department_stats",
         execution_timeout=timedelta(minutes=15),

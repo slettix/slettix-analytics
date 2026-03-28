@@ -1,0 +1,18 @@
+{
+  "id":          "hr.department_stats",
+  "name":        "Department Statistics",
+  "domain":      "hr",
+  "owner":       "hr-team",
+  "version":     "1.0.0",
+  "description": "Aggregerte nøkkeltall per avdeling: antall ansatte, gjennomsnittslønn, min/maks-lønn og total lønnskostnad. Beregnes daglig fra Silver employees-tabellen.",
+  "source_path": "s3://gold/hr/department_stats",
+  "format":      "delta",
+  "primary_key": "department",
+  "dag_id":      "01_slettix_pipeline",
+  "quality_sla": {
+    "max_null_rate":    0.0,
+    "freshness_hours":  25
+  },
+  "access": "public",
+  "tags": ["hr", "aggregated", "department", "salary"]
+}

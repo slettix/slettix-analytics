@@ -1,0 +1,84 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://slettix-analytics/schemas/data-product/v1.json",
+  "title": "DataProductManifest",
+  "description": "Schema for a Slettix Analytics data product manifest",
+  "type": "object",
+  "required": ["id", "name", "domain", "owner", "version", "description", "source_path", "format"],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z0-9_]+\\.[a-z0-9_]+$",
+      "description": "Unique product identifier on the form <domain>.<product> (e.g. hr.employees)"
+    },
+    "name": {
+      "type": "string",
+      "description": "Human-readable product name"
+    },
+    "domain": {
+      "type": "string",
+      "pattern": "^[a-z0-9_]+$",
+      "description": "Owning domain (e.g. hr, finance, sales)"
+    },
+    "owner": {
+      "type": "string",
+      "description": "Team or person responsible for this product"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^\\d+\\.\\d+\\.\\d+$",
+      "description": "Semantic version (MAJOR.MINOR.PATCH)"
+    },
+    "description": {
+      "type": "string",
+      "description": "What the product contains and when it should be used"
+    },
+    "source_path": {
+      "type": "string",
+      "description": "S3/MinIO path to the underlying data (s3://...)"
+    },
+    "format": {
+      "type": "string",
+      "enum": ["delta", "parquet", "csv"],
+      "description": "Storage format of the data product"
+    },
+    "primary_key": {
+      "type": "string",
+      "description": "Primary key column name (used for deduplication and merge)"
+    },
+    "dag_id": {
+      "type": "string",
+      "description": "Airflow DAG ID that produces this product"
+    },
+    "quality_sla": {
+      "type": "object",
+      "description": "Data quality and freshness requirements",
+      "properties": {
+        "max_null_rate": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1,
+          "description": "Maximum allowed fraction of null values (0 = no nulls allowed)"
+        },
+        "freshness_hours": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Maximum allowed age of data in hours before SLA is breached"
+        }
+      },
+      "additionalProperties": false
+    },
+    "access": {
+      "type": "string",
+      "enum": ["public", "restricted"],
+      "default": "public",
+      "description": "Visibility: public = anyone, restricted = requires API key"
+    },
+    "tags": {
+      "type": "array",
+      "items": { "type": "string" },
+      "description": "Free-form tags for search and filtering"
+    }
+  }
+}

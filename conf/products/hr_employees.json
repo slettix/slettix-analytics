@@ -1,0 +1,18 @@
+{
+  "id":          "hr.employees",
+  "name":        "Employees",
+  "domain":      "hr",
+  "owner":       "hr-team",
+  "version":     "1.0.0",
+  "description": "Alle aktive ansatte med stilling, avdeling, lønn og ansettelsesdato. Oppdateres daglig fra kildesystemet via Bronze → Silver pipeline.",
+  "source_path": "s3://silver/hr/employees",
+  "format":      "delta",
+  "primary_key": "id",
+  "dag_id":      "01_slettix_pipeline",
+  "quality_sla": {
+    "max_null_rate":    0.0,
+    "freshness_hours":  25
+  },
+  "access": "restricted",
+  "tags": ["hr", "pii", "employees", "salary"]
+}
