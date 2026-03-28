@@ -15,17 +15,15 @@ Idempotency:
 """
 
 import argparse
-import logging
+import time
 from datetime import date
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='{"ts": "%(asctime)s", "level": "%(levelname)s", "job": "ingest_to_bronze", "msg": "%(message)s"}',
-)
-log = logging.getLogger(__name__)
+from spark_logger import get_logger
+
+log = get_logger("ingest_to_bronze")
 
 SUPPORTED_FORMATS = ("csv", "json", "parquet")
 
@@ -78,6 +76,7 @@ def parse_args():
 
 def main():
     args = parse_args()
+    t0 = time.time()
 
     spark = (
         SparkSession.builder
@@ -86,18 +85,22 @@ def main():
     )
     spark.sparkContext.setLogLevel("WARN")
 
-    log.info(f"Reading {args.fmt} files from {args.source}")
-    df = read_source(spark, args.source, args.fmt)
+    log.info("Job started", extra={
+        "event": "job_start", "source": args.source,
+        "target": args.target, "ingestion_date": args.ingestion_date,
+    })
 
+    df = read_source(spark, args.source, args.fmt)
     row_count = df.count()
-    log.info(f"Read {row_count} rows from source")
+    log.info("Source read", extra={"event": "read_done", "rows_read": row_count, "source": args.source})
 
     df = add_metadata(df, args.ingestion_date, args.source)
-
-    log.info(f"Writing {row_count} rows to {args.target} (partition: ingestion_date={args.ingestion_date})")
     write_bronze(df, args.target, args.ingestion_date)
 
-    log.info(f"Done — wrote {row_count} rows to {args.target}")
+    log.info("Job completed", extra={
+        "event": "job_end", "rows_written": row_count,
+        "target": args.target, "elapsed_s": round(time.time() - t0, 2),
+    })
     spark.stop()
 
 

@@ -10,13 +10,15 @@ x-airflow-common:
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__WEBSERVER__SECRET_KEY: slettix-analytics-dev-key
     AIRFLOW__CORE__FERNET_KEY: ""
-    # Spark connection (URI format: spark://host:port)
-    AIRFLOW_CONN_SPARK_DEFAULT: spark://spark-master:7077
+    # Spark connection — host must include spark:// prefix so SparkSubmitOperator
+    # builds the correct --master spark://spark-master:7077 argument
+    AIRFLOW_CONN_SPARK_DEFAULT: '{"conn_type": "spark", "host": "spark://spark-master", "port": 7077}'
   volumes:
     - ./airflow/dags:/opt/airflow/dags
     - ./airflow/logs:/opt/airflow/logs
     - ./jobs:/opt/airflow/spark_jobs
     - ./conf:/opt/airflow/spark_conf
+    - ./spark/logs:/opt/spark/logs
   depends_on:
     postgres:
       condition: service_healthy
@@ -79,6 +81,7 @@ services:
       - ./conf:/opt/spark/app/conf
       - ./tests:/opt/spark/tests
       - ./data:/opt/spark/data
+      - ./spark/logs:/opt/spark/logs
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080"]
       interval: 15s

@@ -7,3 +7,5 @@ dist/
 .ipynb_checkpoints/
 airflow/logs/**
 !airflow/logs/.gitkeep
+spark/logs/**
+!spark/logs/.gitkeep

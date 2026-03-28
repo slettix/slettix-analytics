@@ -25,8 +25,6 @@ Event schema (JSON Lines, one object per file or per line):
   }
 """
 
-import logging
-
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 from pyspark.sql.types import (
@@ -37,11 +35,9 @@ from pyspark.sql.types import (
     TimestampType,
 )
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='{"ts": "%(asctime)s", "level": "%(levelname)s", "job": "stream_to_bronze", "msg": "%(message)s"}',
-)
-log = logging.getLogger(__name__)
+from spark_logger import get_logger
+
+log = get_logger("stream_to_bronze")
 
 SOURCE_PATH     = "s3a://raw/stream-input"
 TARGET_PATH     = "s3a://bronze/stream_events"
@@ -85,9 +81,11 @@ def main():
     )
     spark.sparkContext.setLogLevel("WARN")
 
-    log.info(f"Starting stream: {SOURCE_PATH} → {TARGET_PATH}")
-    log.info(f"Checkpoint: {CHECKPOINT_PATH}")
-    log.info(f"Trigger interval: {TRIGGER_SECONDS}s")
+    log.info("Job started", extra={
+        "event": "job_start", "source": SOURCE_PATH,
+        "target": TARGET_PATH, "checkpoint": CHECKPOINT_PATH,
+        "trigger_s": TRIGGER_SECONDS,
+    })
 
     stream_df = build_stream(spark)
     enriched_df = enrich(stream_df)
@@ -101,8 +99,10 @@ def main():
         .start(TARGET_PATH)
     )
 
-    log.info("Stream running. Upload JSON files to s3a://raw/stream-input/ to trigger processing.")
-    log.info("Stop with Ctrl-C — checkpoint ensures no data loss on restart.")
+    log.info("Stream running", extra={
+        "event": "stream_active",
+        "msg": "Upload JSON files to s3a://raw/stream-input/ to trigger processing. Stop with Ctrl-C.",
+    })
 
     query.awaitTermination()
 

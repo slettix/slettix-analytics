@@ -5,7 +5,10 @@ USER root
 # Install JupyterLab and the Delta Lake Python bindings
 RUN pip install --no-cache-dir \
       jupyterlab==4.* \
-      delta-spark==3.2.0
+      delta-spark==3.2.0 \
+      duckdb>=1.1.0 \
+      pandas \
+      numpy
 
 # Download the same JARs as the Spark cluster image
 RUN curl -fsSL -o /opt/spark/jars/delta-spark_2.12-3.2.0.jar \

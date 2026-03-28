@@ -27,17 +27,15 @@ Config format (see conf/silver/employees.json):
 
 import argparse
 import json
-import logging
+import time
 from pathlib import Path
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='{"ts": "%(asctime)s", "level": "%(levelname)s", "job": "transform_bronze_to_silver", "msg": "%(message)s"}',
-)
-log = logging.getLogger(__name__)
+from spark_logger import get_logger
+
+log = get_logger("transform_bronze_to_silver")
 
 # Bronze metadata columns that should not carry over to Silver
 BRONZE_META_COLS = {"ingestion_date", "_source_path", "_ingested_at"}
@@ -127,18 +125,38 @@ def run(spark: SparkSession, config: dict) -> None:
     primary_key = config["primary_key"]
     null_rules  = config.get("null_handling", {})
     cast_rules  = config.get("cast", {})
+    t0          = time.time()
 
-    log.info(f"Reading Bronze from {source}")
+    log.info("Job started", extra={"event": "job_start", "source": source, "target": target})
+
     df = spark.read.format("delta").load(source)
-    log.info(f"Read {df.count()} rows")
+    rows_read = df.count()
+    log.info("Bronze read", extra={"event": "read_done", "rows_read": rows_read, "source": source})
 
     df = apply_casts(df, cast_rules)
     df = apply_null_rules(df, null_rules)
+
+    # Keep only the latest record per primary key to satisfy Delta merge's
+    # requirement that each target row matches at most one source row.
+    # Must happen before drop_bronze_metadata so _ingested_at is still available.
+    from pyspark.sql.window import Window
+    df = (
+        df.withColumn("_rn", F.row_number().over(
+            Window.partitionBy(primary_key).orderBy(F.col("_ingested_at").desc())
+        ))
+        .filter(F.col("_rn") == 1)
+        .drop("_rn")
+    )
+
     df = drop_bronze_metadata(df)
     df = add_silver_metadata(df)
 
+    rows_out = df.count()
     upsert_to_silver(spark, df, target, primary_key)
-    log.info("Done")
+    log.info("Job completed", extra={
+        "event": "job_end", "rows_read": rows_read, "rows_written": rows_out,
+        "target": target, "elapsed_s": round(time.time() - t0, 2),
+    })
 
 
 def main():

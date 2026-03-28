@@ -15,17 +15,15 @@ Usage:
 
 import argparse
 import json
-import logging
+import time
 from pathlib import Path
 
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.sql import functions as F
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='{"ts": "%(asctime)s", "level": "%(levelname)s", "job": "build_gold_table", "msg": "%(message)s"}',
-)
-log = logging.getLogger(__name__)
+from spark_logger import get_logger
+
+log = get_logger("build_gold_table")
 
 
 def aggregate(spark: SparkSession, source: str) -> DataFrame:
@@ -95,14 +93,20 @@ def run(spark: SparkSession, config: dict) -> None:
     source      = config["source"]
     target      = config["target"]
     primary_key = config["primary_key"]
+    t0          = time.time()
 
-    log.info(f"Reading Silver from {source}")
+    log.info("Job started", extra={"event": "job_start", "source": source, "target": target})
+
     df = aggregate(spark, source)
-    log.info(f"Aggregated {df.count()} department rows")
+    rows_out = df.count()
+    log.info("Aggregation done", extra={"event": "agg_done", "rows": rows_out, "source": source})
 
     upsert_to_gold(spark, df, target, primary_key)
     apply_metadata(spark, target, config)
-    log.info("Done")
+    log.info("Job completed", extra={
+        "event": "job_end", "rows_written": rows_out,
+        "target": target, "elapsed_s": round(time.time() - t0, 2),
+    })
 
 
 def main():
