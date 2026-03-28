@@ -4,8 +4,9 @@ Slettix Analytics — end-to-end pipeline DAG
 Kjørerekke:
   ingest_employees_to_bronze
       → bronze_to_silver_employees
-          → build_gold_department_stats
-              → pipeline_complete  (log-oppgave)
+          → validate_silver_employees   (Great Expectations)
+              → build_gold_department_stats
+                  → pipeline_complete  (log-oppgave)
 
 Egenskaper:
 - Kjøres daglig @daily, kan også trigges manuelt fra Airflow UI
@@ -88,6 +89,79 @@ def on_task_failure(context):
             context["task_instance"].log.warning(f"Slack-varsling feilet: {e}")
 
 
+def validate_silver_employees(**context):
+    """
+    Les Silver-tabellen med delta-rs (ingen Spark nødvendig) og kjør
+    Great Expectations-validering. Kaster AirflowException ved brudd
+    slik at nedstrøms Gold-jobb stoppes.
+
+    Expectation suite — silver/employees:
+      - id, name, department: aldri null
+      - id: unik per rad
+      - salary: mellom 0 og 500 000
+    """
+    import great_expectations as gx
+    from airflow.exceptions import AirflowException
+    from deltalake import DeltaTable
+
+    log = context["task_instance"].log
+
+    storage_options = {
+        "AWS_ENDPOINT_URL":               "http://minio:9000",
+        "AWS_ACCESS_KEY_ID":              "admin",
+        "AWS_SECRET_ACCESS_KEY":          "changeme",
+        "AWS_ALLOW_HTTP":                 "true",
+        "AWS_S3_ALLOW_UNSAFE_RENAME":     "true",
+    }
+
+    log.info("Leser Silver/employees via delta-rs ...")
+    dt = DeltaTable("s3://silver/employees", storage_options=storage_options)
+    df = dt.to_pandas()
+    log.info(f"Leste {len(df)} rader fra Silver.")
+
+    # ── Great Expectations ─────────────────────────────────────────────
+    gx_ctx = gx.get_context(mode="ephemeral")
+
+    ds         = gx_ctx.data_sources.add_pandas("silver_source")
+    asset      = ds.add_dataframe_asset("employees_asset")
+    batch_def  = asset.add_batch_definition_whole_dataframe("full_batch")
+
+    suite = gx_ctx.suites.add(gx.ExpectationSuite(name="silver_employees"))
+    suite.add_expectation(gx.expectations.ExpectColumnValuesToNotBeNull(column="id"))
+    suite.add_expectation(gx.expectations.ExpectColumnValuesToNotBeNull(column="name"))
+    suite.add_expectation(gx.expectations.ExpectColumnValuesToNotBeNull(column="department"))
+    suite.add_expectation(gx.expectations.ExpectColumnValuesToBeUnique(column="id"))
+    suite.add_expectation(gx.expectations.ExpectColumnValuesToBeBetween(
+        column="salary", min_value=0, max_value=500_000,
+    ))
+
+    val_def = gx_ctx.validation_definitions.add(
+        gx.ValidationDefinition(
+            name="validate_silver_employees",
+            data=batch_def,
+            suite=suite,
+        )
+    )
+
+    result = val_def.run(batch_parameters={"dataframe": df})
+
+    # ── Logg resultat ──────────────────────────────────────────────────
+    passed  = sum(1 for r in result.results if r.success)
+    failed  = [r for r in result.results if not r.success]
+    log.info(f"GE-validering: {passed}/{len(result.results)} forventninger bestått.")
+
+    if not result.success:
+        failures = "\n".join(
+            f"  - {r.expectation_config.type} ({r.expectation_config.kwargs})"
+            for r in failed
+        )
+        raise AirflowException(
+            f"Silver-validering feilet — {len(failed)} brudd:\n{failures}"
+        )
+
+    log.info("Silver-validering OK — alle forventninger bestått.")
+
+
 def log_pipeline_success(**context):
     """Avsluttende task som bekrefter at hele pipeline er fullført."""
     run_id   = context["run_id"]
@@ -96,7 +170,7 @@ def log_pipeline_success(**context):
         f"✅ Slettix Analytics pipeline fullført\n"
         f"  Exec date : {exec_date}\n"
         f"  Run ID    : {run_id}\n"
-        f"  Kjørerekke: ingest → bronze → silver → gold ✓"
+        f"  Kjørerekke: ingest → bronze → silver → validate → gold ✓"
     )
 
 
@@ -165,9 +239,15 @@ with DAG(
         execution_timeout=timedelta(minutes=15),
     )
 
+    validate_silver = PythonOperator(
+        task_id="validate_silver_employees",
+        python_callable=validate_silver_employees,
+        execution_timeout=timedelta(minutes=10),
+    )
+
     complete = PythonOperator(
         task_id="pipeline_complete",
         python_callable=log_pipeline_success,
     )
 
-    ingest >> bronze_to_silver >> build_gold >> complete
+    ingest >> bronze_to_silver >> validate_silver >> build_gold >> complete
