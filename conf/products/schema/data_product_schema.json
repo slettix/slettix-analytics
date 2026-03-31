@@ -79,6 +79,21 @@
       "type": "array",
       "items": { "type": "string" },
       "description": "Free-form tags for search and filtering"
+    },
+    "schema": {
+      "type": "array",
+      "description": "Delta table schema (auto-injected by publish.py)",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name":        { "type": "string" },
+          "type":        { "type": "string" },
+          "nullable":    { "type": "boolean" },
+          "description": { "type": "string" }
+        },
+        "required": ["name", "type"],
+        "additionalProperties": false
+      }
     }
   }
 }

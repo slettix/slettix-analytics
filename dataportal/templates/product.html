@@ -247,20 +247,41 @@ print(df.head())</pre>
       </div>
     </div>
 
-    {# versjonshistorikk #}
-    {% if history|length > 1 %}
+    {# versjonshistorikk som tidslinje #}
+    {% if history %}
     <div class="card mb-4">
       <div class="card-header bg-white fw-semibold">
-        <i class="bi bi-clock-history me-2"></i>Versjoner
+        <i class="bi bi-clock-history me-2"></i>Versjonshistorikk
       </div>
-      <ul class="list-group list-group-flush">
-        {% for entry in history[:5] %}
-        <li class="list-group-item d-flex justify-content-between align-items-center">
-          <code>v{{ entry.version }}</code>
-          <small class="text-muted">{{ entry.registered_at[:10] }}</small>
-        </li>
-        {% endfor %}
-      </ul>
+      <div class="card-body py-2 px-3">
+        <div class="position-relative" style="padding-left:1.5rem;">
+          {# vertikal linje #}
+          <div style="position:absolute;left:.45rem;top:0;bottom:0;width:2px;background:#dee2e6;"></div>
+          {% for entry in history %}
+          <div class="d-flex align-items-start mb-3 position-relative">
+            {# sirkel på linjen #}
+            <div style="position:absolute;left:-1.5rem;top:.25rem;width:10px;height:10px;border-radius:50%;
+                        background:{% if loop.first %}#0d6efd{% else %}#dee2e6{% endif %};
+                        border:2px solid {% if loop.first %}#0d6efd{% else %}#adb5bd{% endif %};
+                        flex-shrink:0;"></div>
+            <div>
+              <div class="d-flex align-items-center gap-2">
+                <code class="{% if loop.first %}text-primary fw-bold{% endif %}">v{{ entry.version }}</code>
+                {% if loop.first %}<span class="badge bg-primary" style="font-size:.65rem;">Siste</span>{% endif %}
+                <small class="text-muted">{{ entry.registered_at[:10] }}</small>
+              </div>
+              {% if entry.changes %}
+              <ul class="mb-0 mt-1 ps-3" style="font-size:.8rem;">
+                {% for change in entry.changes %}
+                <li class="text-muted">{{ change }}</li>
+                {% endfor %}
+              </ul>
+              {% endif %}
+            </div>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
     </div>
     {% endif %}
 

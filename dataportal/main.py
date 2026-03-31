@@ -162,6 +162,36 @@ def _get_dag_timeline(dag_id: str, days: int = 7) -> list[dict]:
     return [{"date": d, "status": s} for d, s in date_status.items()]
 
 
+def _diff_manifests(prev: dict, curr: dict) -> list[str]:
+    """Returner lesbar liste over hva som endret seg fra prev til curr."""
+    changes = []
+    watch = ["version", "description", "owner", "source_path", "format", "access", "tags", "schema"]
+    for key in watch:
+        p, c = prev.get(key), curr.get(key)
+        if p == c:
+            continue
+        if key == "schema":
+            prev_cols = {f["name"] for f in (p or [])}
+            curr_cols = {f["name"] for f in (c or [])}
+            added   = curr_cols - prev_cols
+            removed = prev_cols - curr_cols
+            if added:
+                changes.append(f"Schema: +{', '.join(sorted(added))}")
+            if removed:
+                changes.append(f"Schema: -{', '.join(sorted(removed))}")
+            if not added and not removed:
+                changes.append("Schema: type-endringer")
+        elif key == "tags":
+            changes.append(f"Tags endret")
+        elif p is None:
+            changes.append(f"{key} satt til '{c}'")
+        else:
+            changes.append(f"{key}: '{p}' → '{c}'")
+    if not changes and not prev:
+        changes.append("Første publisering")
+    return changes
+
+
 def _safe_schema(source_path: str) -> list[dict] | None:
     try:
         dt = DeltaTable(source_path, storage_options=_STORAGE_OPTIONS)
@@ -218,6 +248,31 @@ def api_get_quality(product_id: str):
         raise HTTPException(status_code=502, detail=str(exc))
 
 
+@app.get("/api/products/{product_id}/versions", tags=["products"], summary="Versjonshistorikk med diff")
+def api_get_versions(product_id: str):
+    """
+    Returnerer alle publiserte versjoner av produktet, nyeste først.
+    Hvert innslag inkluderer hvilke felt som endret seg siden forrige versjon.
+    """
+    _resolve_product(product_id)
+    history = list_versions(product_id)
+    if not history:
+        return []
+
+    result = []
+    for i, entry in enumerate(history):
+        prev_manifest = history[i + 1]["manifest"] if i + 1 < len(history) else {}
+        curr_manifest = entry["manifest"]
+        changes = _diff_manifests(prev_manifest, curr_manifest)
+        result.append({
+            "version":       entry["version"],
+            "registered_at": entry["registered_at"],
+            "changes":       changes,
+            "manifest":      curr_manifest,
+        })
+    return result
+
+
 @app.get("/api/products/{product_id}", tags=["products"], summary="Hent ett produkt med historikk")
 def api_get_product(product_id: str):
     manifest = _resolve_product(product_id)
@@ -248,14 +303,21 @@ def page_product(request: Request, product_id: str):
         manifest = get(product_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Produkt '{product_id}' ikke funnet")
-    history  = list_versions(product_id)
+    raw_history = list_versions(product_id)
+    versioned_history = []
+    for i, entry in enumerate(raw_history):
+        prev = raw_history[i + 1]["manifest"] if i + 1 < len(raw_history) else {}
+        versioned_history.append({
+            **entry,
+            "changes": _diff_manifests(prev, entry["manifest"]),
+        })
     schema   = _safe_schema(manifest["source_path"])
     quality  = _safe_quality(product_id)
     pipeline = _safe_pipeline(manifest.get("dag_id"))
     return templates.TemplateResponse("product.html", {
         "request":  request,
         "manifest": manifest,
-        "history":  history,
+        "history":  versioned_history,
         "schema":   schema,
         "quality":  quality,
         "pipeline": pipeline,
