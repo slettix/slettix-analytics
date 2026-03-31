@@ -1,0 +1,137 @@
+{% extends "base.html" %}
+{% block title %}Datakatalog — Slettix Analytics{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center mb-3">
+  <div>
+    <h1 class="h3 mb-0">Dataproduktkatalog</h1>
+    <p class="text-muted mb-0">{{ products|length }} produkt{% if products|length != 1 %}er{% endif %} tilgjengelig</p>
+  </div>
+</div>
+
+{# ── søk og filter ── #}
+<div class="row g-2 mb-4">
+  <div class="col-md-6">
+    <div class="input-group">
+      <span class="input-group-text bg-white"><i class="bi bi-search"></i></span>
+      <input id="search" type="text" class="form-control" placeholder="Søk etter navn, beskrivelse eller tags…">
+    </div>
+  </div>
+  <div class="col-md-6 d-flex flex-wrap gap-2 align-items-center">
+    <button class="btn btn-sm btn-dark domain-filter active" data-domain="">Alle</button>
+    {% for domain in domains %}
+    <button class="btn btn-sm btn-outline-secondary domain-filter" data-domain="{{ domain }}">{{ domain }}</button>
+    {% endfor %}
+  </div>
+</div>
+
+{# ── produktkort ── #}
+<div class="row g-3" id="product-grid">
+  {% for p in products %}
+  {% set pipeline_status = p._pipeline.status if p._pipeline else "unknown" %}
+  {% set quality_score = p._quality.score_pct if p._quality else None %}
+  <div class="col-md-6 col-lg-4 product-card"
+       data-domain="{{ p.domain }}"
+       data-search="{{ p.name }} {{ p.description|default('') }} {{ p.tags|join(' ') }} {{ p.domain }} {{ p.owner }}">
+    <a href="/products/{{ p.id }}" class="text-decoration-none">
+      <div class="card h-100 p-3">
+        <div class="d-flex justify-content-between align-items-start mb-2">
+          <h5 class="mb-0 text-dark">{{ p.name }}</h5>
+          {# pipeline statusindikatorer #}
+          {% if pipeline_status == "success" %}
+            <span class="status-dot bg-success" title="Pipeline OK"></span>
+          {% elif pipeline_status == "failed" %}
+            <span class="status-dot bg-danger" title="Pipeline feilet"></span>
+          {% elif pipeline_status in ("running", "queued") %}
+            <span class="status-dot bg-primary" title="Pipeline kjører"></span>
+          {% else %}
+            <span class="status-dot bg-secondary" title="Ukjent status"></span>
+          {% endif %}
+        </div>
+
+        <div class="mb-2">
+          <span class="badge bg-secondary me-1">{{ p.domain }}</span>
+          <span class="text-muted small"><i class="bi bi-person me-1"></i>{{ p.owner }}</span>
+        </div>
+
+        {% if p.description %}
+        <p class="text-muted small mb-2" style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">
+          {{ p.description }}
+        </p>
+        {% endif %}
+
+        {% if p.tags %}
+        <div class="mb-2">
+          {% for tag in p.tags[:4] %}
+          <span class="badge rounded-pill bg-light text-dark border me-1">{{ tag }}</span>
+          {% endfor %}
+        </div>
+        {% endif %}
+
+        <div class="mt-auto pt-2 border-top d-flex justify-content-between align-items-center">
+          {# kvalitetsscore #}
+          {% if quality_score is not none %}
+            {% if quality_score == 100 %}
+              <span class="small text-success"><i class="bi bi-shield-check me-1"></i>{{ quality_score }}%</span>
+            {% elif quality_score >= 80 %}
+              <span class="small text-warning"><i class="bi bi-shield-exclamation me-1"></i>{{ quality_score }}%</span>
+            {% else %}
+              <span class="small text-danger"><i class="bi bi-shield-x me-1"></i>{{ quality_score }}%</span>
+            {% endif %}
+          {% else %}
+            <span class="small text-muted"><i class="bi bi-shield me-1"></i>Ingen data</span>
+          {% endif %}
+
+          <span class="badge bg-light text-dark border">{{ p.format }}</span>
+        </div>
+      </div>
+    </a>
+  </div>
+  {% else %}
+  <div class="col-12 text-center py-5 text-muted">
+    <i class="bi bi-inbox fs-1 d-block mb-2"></i>
+    Ingen dataprodukter er registrert ennå.
+  </div>
+  {% endfor %}
+</div>
+
+<div id="no-results" class="text-center py-5 text-muted d-none">
+  <i class="bi bi-search fs-1 d-block mb-2"></i>Ingen produkter matcher søket.
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const searchInput  = document.getElementById("search");
+  const filterBtns   = document.querySelectorAll(".domain-filter");
+  const cards        = document.querySelectorAll(".product-card");
+  const noResults    = document.getElementById("no-results");
+  let activeDomain   = "";
+
+  function applyFilters() {
+    const q = searchInput.value.toLowerCase().trim();
+    let visible = 0;
+    cards.forEach(card => {
+      const matchDomain  = !activeDomain || card.dataset.domain === activeDomain;
+      const matchSearch  = !q || card.dataset.search.toLowerCase().includes(q);
+      const show         = matchDomain && matchSearch;
+      card.classList.toggle("d-none", !show);
+      if (show) visible++;
+    });
+    noResults.classList.toggle("d-none", visible > 0);
+  }
+
+  searchInput.addEventListener("input", applyFilters);
+
+  filterBtns.forEach(btn => {
+    btn.addEventListener("click", () => {
+      filterBtns.forEach(b => b.classList.replace("btn-dark", "btn-outline-secondary"));
+      filterBtns.forEach(b => b.classList.remove("active"));
+      btn.classList.replace("btn-outline-secondary", "btn-dark");
+      btn.classList.add("active");
+      activeDomain = btn.dataset.domain;
+      applyFilters();
+    });
+  });
+</script>
+{% endblock %}

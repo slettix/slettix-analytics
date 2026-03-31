@@ -1,0 +1,269 @@
+{% extends "base.html" %}
+{% block title %}{{ manifest.name }} — Slettix Analytics{% endblock %}
+
+{% block content %}
+
+{# ── breadcrumb ── #}
+<nav aria-label="breadcrumb" class="mb-3">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="/">Katalog</a></li>
+    <li class="breadcrumb-item active">{{ manifest.name }}</li>
+  </ol>
+</nav>
+
+{# ── header ── #}
+<div class="d-flex flex-wrap align-items-start gap-2 mb-1">
+  <h1 class="h2 mb-0">{{ manifest.name }}</h1>
+  <span class="badge bg-secondary align-self-center">v{{ manifest.version }}</span>
+  {% if manifest.access == "public" %}
+    <span class="badge bg-success align-self-center"><i class="bi bi-globe me-1"></i>Offentlig</span>
+  {% else %}
+    <span class="badge bg-warning text-dark align-self-center"><i class="bi bi-lock me-1"></i>Begrenset</span>
+  {% endif %}
+</div>
+<p class="text-muted mb-2">{{ manifest.domain }} / {{ manifest.owner }}</p>
+
+{% if manifest.description %}
+<p class="lead mb-3">{{ manifest.description }}</p>
+{% endif %}
+
+{% if manifest.tags %}
+<div class="mb-4">
+  {% for tag in manifest.tags %}
+  <span class="badge rounded-pill bg-light text-dark border me-1">{{ tag }}</span>
+  {% endfor %}
+</div>
+{% endif %}
+
+<div class="row g-4">
+
+  {# ── kolonne venstre ── #}
+  <div class="col-lg-8">
+
+    {# schema #}
+    <div class="card mb-4">
+      <div class="card-header bg-white fw-semibold">
+        <i class="bi bi-table me-2"></i>Schema
+      </div>
+      <div class="card-body p-0">
+        {% if schema %}
+        <table class="table table-sm table-hover mb-0">
+          <thead class="table-light">
+            <tr><th>Kolonne</th><th>Type</th><th>Nullbar</th></tr>
+          </thead>
+          <tbody>
+            {% for field in schema %}
+            <tr>
+              <td class="font-monospace">{{ field.name }}</td>
+              <td class="text-muted">{{ field.type }}</td>
+              <td>{% if field.nullable %}<span class="text-muted">ja</span>{% else %}<span class="text-danger fw-semibold">nei</span>{% endif %}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+        {% else %}
+        <p class="text-muted p-3 mb-0"><i class="bi bi-exclamation-circle me-1"></i>Kunne ikke lese schema fra Delta-tabellen.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    {# datakvalitet #}
+    <div class="card mb-4">
+      <div class="card-header bg-white fw-semibold">
+        <i class="bi bi-shield-check me-2"></i>Datakvalitet
+      </div>
+      <div class="card-body">
+        {% if quality %}
+          <div class="row align-items-center mb-3">
+            <div class="col-auto">
+              <span class="display-6 fw-bold
+                {% if quality.score_pct == 100 %}text-success
+                {% elif quality.score_pct >= 80 %}text-warning
+                {% else %}text-danger{% endif %}">
+                {{ quality.score_pct }}%
+              </span>
+            </div>
+            <div class="col">
+              <div class="progress score-bar mb-1">
+                <div class="progress-bar
+                  {% if quality.score_pct == 100 %}bg-success
+                  {% elif quality.score_pct >= 80 %}bg-warning
+                  {% else %}bg-danger{% endif %}"
+                  style="width:{{ quality.score_pct }}%"></div>
+              </div>
+              <span class="small text-muted">
+                {{ quality.passed }}/{{ quality.total_expectations }} forventninger bestått
+                &nbsp;·&nbsp;
+                {{ quality.validated_at[:19].replace("T", " ") }} UTC
+              </span>
+            </div>
+          </div>
+          {% if quality.failures %}
+          <div class="alert alert-danger py-2 mb-0">
+            <strong>Brudd:</strong>
+            <ul class="mb-0 mt-1">
+              {% for f in quality.failures %}
+              <li class="small font-monospace">{{ f.expectation }}
+                {% if f.kwargs %}<span class="text-muted">{{ f.kwargs }}</span>{% endif %}
+              </li>
+              {% endfor %}
+            </ul>
+          </div>
+          {% else %}
+          <div class="alert alert-success py-2 mb-0">
+            <i class="bi bi-check-circle me-1"></i>Alle forventninger bestått — ingen brudd.
+          </div>
+          {% endif %}
+        {% else %}
+        <p class="text-muted mb-0"><i class="bi bi-clock-history me-1"></i>Ingen kvalitetsresultater ennå. Kjør pipeline for å generere data.</p>
+        {% endif %}
+      </div>
+    </div>
+
+    {# kodeeksempel #}
+    <div class="card mb-4">
+      <div class="card-header bg-white fw-semibold">
+        <i class="bi bi-code-slash me-2"></i>Kodeeksempel
+      </div>
+      <div class="card-body">
+        <ul class="nav nav-tabs mb-3" id="codeTabs">
+          <li class="nav-item">
+            <button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-deltalake">delta-rs / Python</button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-duckdb">DuckDB</button>
+          </li>
+        </ul>
+        <div class="tab-content">
+          <div class="tab-pane fade show active" id="tab-deltalake">
+<pre class="code-block">from deltalake import DeltaTable
+
+storage_options = {
+    "AWS_ENDPOINT_URL":       "http://localhost:9000",
+    "AWS_ACCESS_KEY_ID":      "admin",
+    "AWS_SECRET_ACCESS_KEY":  "changeme",
+    "AWS_ALLOW_HTTP":         "true",
+}
+
+dt = DeltaTable("{{ manifest.source_path }}", storage_options=storage_options)
+df = dt.to_pandas()
+print(df.head())</pre>
+          </div>
+          <div class="tab-pane fade" id="tab-duckdb">
+<pre class="code-block">import duckdb
+
+con = duckdb.connect()
+con.execute("INSTALL delta; LOAD delta;")
+con.execute("INSTALL httpfs; LOAD httpfs;")
+con.execute("""
+    SET s3_endpoint = 'localhost:9000';
+    SET s3_access_key_id = 'admin';
+    SET s3_secret_access_key = 'changeme';
+    SET s3_use_ssl = false;
+    SET s3_url_style = 'path';
+""")
+
+df = con.execute("""
+    SELECT * FROM delta_scan('{{ manifest.source_path }}')
+""").df()
+print(df.head())</pre>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>{# /col-lg-8 #}
+
+  {# ── kolonne høyre ── #}
+  <div class="col-lg-4">
+
+    {# metadata #}
+    <div class="card mb-4">
+      <div class="card-header bg-white fw-semibold">
+        <i class="bi bi-info-circle me-2"></i>Metadata
+      </div>
+      <ul class="list-group list-group-flush">
+        <li class="list-group-item d-flex justify-content-between">
+          <span class="text-muted">ID</span>
+          <code>{{ manifest.id }}</code>
+        </li>
+        <li class="list-group-item d-flex justify-content-between">
+          <span class="text-muted">Format</span>
+          <span class="badge bg-light text-dark border">{{ manifest.format }}</span>
+        </li>
+        <li class="list-group-item d-flex justify-content-between">
+          <span class="text-muted">Kildesti</span>
+          <code class="small">{{ manifest.source_path }}</code>
+        </li>
+        {% if manifest.primary_key %}
+        <li class="list-group-item d-flex justify-content-between">
+          <span class="text-muted">Primærnøkkel</span>
+          <code>{{ manifest.primary_key }}</code>
+        </li>
+        {% endif %}
+        {% if manifest.quality_sla %}
+        <li class="list-group-item">
+          <span class="text-muted d-block mb-1">SLA</span>
+          <small>
+            Maks null-rate: {{ manifest.quality_sla.max_null_rate * 100 }}%<br>
+            Ferskhet: {{ manifest.quality_sla.freshness_hours }}t
+          </small>
+        </li>
+        {% endif %}
+      </ul>
+    </div>
+
+    {# pipeline #}
+    <div class="card mb-4">
+      <div class="card-header bg-white fw-semibold">
+        <i class="bi bi-diagram-3 me-2"></i>Pipeline
+      </div>
+      <div class="card-body">
+        {% if pipeline.status == "success" %}
+          <span class="badge bg-success mb-2"><i class="bi bi-check-circle me-1"></i>Vellykket</span>
+        {% elif pipeline.status == "failed" %}
+          <span class="badge bg-danger mb-2"><i class="bi bi-x-circle me-1"></i>Feilet</span>
+        {% elif pipeline.status in ("running", "queued") %}
+          <span class="badge bg-primary mb-2"><i class="bi bi-arrow-clockwise me-1"></i>Kjører</span>
+        {% else %}
+          <span class="badge bg-secondary mb-2">Ukjent</span>
+        {% endif %}
+
+        {% if pipeline.dag_id %}
+        <p class="mb-1 small"><span class="text-muted">DAG:</span> <code>{{ pipeline.dag_id }}</code></p>
+        {% endif %}
+        {% if pipeline.start %}
+        <p class="mb-1 small"><span class="text-muted">Startet:</span> {{ pipeline.start[:19].replace("T", " ") }} UTC</p>
+        {% endif %}
+        {% if pipeline.duration %}
+        <p class="mb-2 small"><span class="text-muted">Varighet:</span> {{ pipeline.duration }}</p>
+        {% endif %}
+
+        {% if manifest.dag_id %}
+        <a href="{{ airflow_url }}/dags/{{ manifest.dag_id }}/grid" target="_blank" class="btn btn-sm btn-outline-secondary w-100">
+          <i class="bi bi-box-arrow-up-right me-1"></i>Åpne i Airflow
+        </a>
+        {% endif %}
+      </div>
+    </div>
+
+    {# versjonshistorikk #}
+    {% if history|length > 1 %}
+    <div class="card mb-4">
+      <div class="card-header bg-white fw-semibold">
+        <i class="bi bi-clock-history me-2"></i>Versjoner
+      </div>
+      <ul class="list-group list-group-flush">
+        {% for entry in history[:5] %}
+        <li class="list-group-item d-flex justify-content-between align-items-center">
+          <code>v{{ entry.version }}</code>
+          <small class="text-muted">{{ entry.registered_at[:10] }}</small>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
+  </div>{# /col-lg-4 #}
+</div>
+{% endblock %}
