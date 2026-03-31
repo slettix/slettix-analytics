@@ -115,12 +115,20 @@ services:
     container_name: jupyter
     ports:
       - "8888:8888"   # Jupyter Lab
+    environment:
+      PORTAL_URL:        http://dataportal:8090
+      MINIO_ENDPOINT:    http://minio:9000
+      MINIO_ACCESS_KEY:  ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY:  ${MINIO_ROOT_PASSWORD}
     volumes:
       - ./notebooks:/home/spark/notebooks
+      - ./jobs:/home/spark/jobs
       - ./spark/conf/spark-defaults.conf:/opt/spark/conf/spark-defaults.conf:ro
     depends_on:
       spark-master:
         condition: service_healthy
+      dataportal:
+        condition: service_started
 
   # ── Airflow metadata database ──────────────────────────────────────────────
   postgres:
@@ -177,13 +185,16 @@ services:
     ports:
       - "8090:8090"   # FastAPI / Swagger UI
     environment:
-      MINIO_ENDPOINT:    http://minio:9000
-      MINIO_ACCESS_KEY:  ${MINIO_ROOT_USER}
-      MINIO_SECRET_KEY:  ${MINIO_ROOT_PASSWORD}
-      AIRFLOW_URL:       http://airflow-webserver:8080
-      AIRFLOW_USER:      admin
-      AIRFLOW_PASS:      admin
-      REGISTRY_PATH:     s3://gold/data_products
+      MINIO_ENDPOINT:              http://minio:9000
+      MINIO_ACCESS_KEY:            ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY:            ${MINIO_ROOT_PASSWORD}
+      AIRFLOW_URL:                 http://airflow-webserver:8080
+      AIRFLOW_USER:                admin
+      AIRFLOW_PASS:                admin
+      REGISTRY_PATH:               s3://gold/data_products
+      AWS_DEFAULT_REGION:          us-east-1
+      AWS_EC2_METADATA_DISABLED:   true
+      PORTAL_API_KEY:              ${PORTAL_API_KEY:-dev-key-change-me}
     volumes:
       - ./dataportal:/opt/dataportal
       - ./jobs:/opt/dataportal/jobs

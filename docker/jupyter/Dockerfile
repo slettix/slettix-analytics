@@ -6,9 +6,12 @@ USER root
 RUN pip install --no-cache-dir \
       jupyterlab==4.* \
       delta-spark==3.2.0 \
+      deltalake==0.21.0 \
       duckdb>=1.1.0 \
       pandas \
-      numpy
+      numpy \
+      requests \
+      pyarrow==17.0.0
 
 # Download the same JARs as the Spark cluster image
 RUN curl -fsSL -o /opt/spark/jars/delta-spark_2.12-3.2.0.jar \

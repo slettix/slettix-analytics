@@ -25,9 +25,10 @@ import httpx
 from botocore.client import Config
 from botocore.exceptions import ClientError
 from deltalake import DeltaTable
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
+from fastapi.security import APIKeyHeader
 from fastapi.templating import Jinja2Templates
 
 sys.path.insert(0, "/opt/dataportal/jobs")
@@ -42,6 +43,9 @@ MINIO_SECRET_KEY = os.environ.get("MINIO_SECRET_KEY", "changeme")
 AIRFLOW_URL  = os.environ.get("AIRFLOW_URL",  "http://airflow-webserver:8080")
 AIRFLOW_USER = os.environ.get("AIRFLOW_USER", "admin")
 AIRFLOW_PASS = os.environ.get("AIRFLOW_PASS", "admin")
+
+PORTAL_API_KEY   = os.environ.get("PORTAL_API_KEY", "dev-key-change-me")
+_api_key_scheme  = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 _STORAGE_OPTIONS = {
     "AWS_ENDPOINT_URL":           MINIO_ENDPOINT,
@@ -85,6 +89,54 @@ def _resolve_product(product_id: str) -> dict:
         return get(product_id)
     except KeyError:
         raise HTTPException(status_code=404, detail=f"Dataprodukt '{product_id}' ikke funnet")
+
+
+def _require_access(manifest: dict, api_key: str | None) -> None:
+    if manifest.get("access") == "restricted" and api_key != PORTAL_API_KEY:
+        raise HTTPException(
+            status_code=403,
+            detail="Tilgang nektet. Oppgi gyldig API-nøkkel i X-API-Key header.",
+        )
+
+
+def _safe_sla(product_id: str) -> dict | None:
+    try:
+        obj = _s3_client().get_object(
+            Bucket="gold",
+            Key=f"sla_results/{product_id}/latest.json",
+        )
+        return json.loads(obj["Body"].read())
+    except Exception:
+        return None
+
+
+def _compute_sla_live(manifest: dict) -> dict:
+    """Beregn SLA på sparket fra Delta-tabellens historikk (fallback)."""
+    product_id      = manifest["id"]
+    freshness_hours = (manifest.get("quality_sla") or {}).get("freshness_hours")
+    now             = datetime.now(tz=timezone.utc)
+
+    if not freshness_hours:
+        return {"product_id": product_id, "compliant": None, "reason": "Ingen SLA definert"}
+
+    try:
+        dt      = DeltaTable(manifest["source_path"], storage_options=_STORAGE_OPTIONS)
+        history = dt.history(limit=1)
+        if not history:
+            return {"product_id": product_id, "compliant": False, "reason": "Ingen historikk"}
+        ts_ms        = history[0].get("timestamp")
+        last_updated = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
+        hours_since  = (now - last_updated).total_seconds() / 3600
+        return {
+            "product_id":         product_id,
+            "checked_at":         now.isoformat(),
+            "compliant":          hours_since <= freshness_hours,
+            "last_updated":       last_updated.isoformat(),
+            "hours_since_update": round(hours_since, 2),
+            "freshness_hours":    freshness_hours,
+        }
+    except Exception as exc:
+        return {"product_id": product_id, "compliant": False, "error": str(exc)}
 
 
 def _safe_quality(product_id: str) -> dict | None:
@@ -205,12 +257,17 @@ def _safe_schema(source_path: str) -> list[dict] | None:
 # ── API: dataprodukter ─────────────────────────────────────────────────────────
 
 @app.get("/api/products", tags=["products"], summary="Liste alle dataprodukter")
-def api_list_products():
-    return list_all()
+def api_list_products(api_key: str | None = Security(_api_key_scheme)):
+    products = list_all()
+    if api_key != PORTAL_API_KEY:
+        products = [p for p in products if p.get("access") != "restricted"]
+    return products
 
 
 @app.post("/api/products", status_code=201, tags=["products"], summary="Registrer et dataprodukt")
-def api_register_product(manifest: dict):
+def api_register_product(manifest: dict, api_key: str | None = Security(_api_key_scheme)):
+    if api_key != PORTAL_API_KEY:
+        raise HTTPException(status_code=403, detail="Registrering krever gyldig API-nøkkel.")
     required = {"id", "name", "domain", "owner", "version", "source_path", "format"}
     missing  = required - manifest.keys()
     if missing:
@@ -220,8 +277,9 @@ def api_register_product(manifest: dict):
 
 
 @app.get("/api/products/{product_id}/schema", tags=["products"], summary="Delta-tabellens schema")
-def api_get_schema(product_id: str):
+def api_get_schema(product_id: str, api_key: str | None = Security(_api_key_scheme)):
     manifest = _resolve_product(product_id)
+    _require_access(manifest, api_key)
     schema   = _safe_schema(manifest["source_path"])
     if schema is None:
         raise HTTPException(status_code=502, detail="Kunne ikke lese schema fra Delta-tabellen")
@@ -229,14 +287,16 @@ def api_get_schema(product_id: str):
 
 
 @app.get("/api/products/{product_id}/pipeline", tags=["products"], summary="Siste pipeline-kjøring")
-def api_get_pipeline(product_id: str):
+def api_get_pipeline(product_id: str, api_key: str | None = Security(_api_key_scheme)):
     manifest = _resolve_product(product_id)
+    _require_access(manifest, api_key)
     return _safe_pipeline(manifest.get("dag_id"))
 
 
 @app.get("/api/products/{product_id}/quality", tags=["products"], summary="Siste GE-valideringsresultat")
-def api_get_quality(product_id: str):
-    _resolve_product(product_id)
+def api_get_quality(product_id: str, api_key: str | None = Security(_api_key_scheme)):
+    manifest = _resolve_product(product_id)
+    _require_access(manifest, api_key)
     s3  = _s3_client()
     key = f"quality_results/{product_id}/latest.json"
     try:
@@ -246,6 +306,20 @@ def api_get_quality(product_id: str):
         if exc.response["Error"]["Code"] in ("NoSuchKey", "404"):
             raise HTTPException(status_code=404, detail="Ingen kvalitetsresultater funnet")
         raise HTTPException(status_code=502, detail=str(exc))
+
+
+@app.get("/api/products/{product_id}/sla", tags=["products"], summary="SLA-ferskhets-status")
+def api_get_sla(product_id: str, api_key: str | None = Security(_api_key_scheme)):
+    """
+    Returnerer SLA-status fra siste monitor-kjøring, eller beregner det live
+    fra Delta-tabellens historikk hvis ingen cached verdi finnes.
+    """
+    manifest = _resolve_product(product_id)
+    _require_access(manifest, api_key)
+    result = _safe_sla(product_id)
+    if result is None:
+        result = _compute_sla_live(manifest)
+    return result
 
 
 @app.get("/api/products/{product_id}/versions", tags=["products"], summary="Versjonshistorikk med diff")
@@ -283,11 +357,12 @@ def api_get_product(product_id: str):
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)
 def page_catalog(request: Request):
-    products = list_all()
+    products = [p for p in list_all() if p.get("access") != "restricted"]
     for p in products:
         p["_quality"]  = _safe_quality(p["id"])
         p["_pipeline"] = _safe_pipeline(p.get("dag_id"))
-    domains = sorted({p["domain"] for p in products})
+        p["_sla"]      = _safe_sla(p["id"])
+    domains  = sorted({p["domain"] for p in products})
     all_tags = sorted({tag for p in products for tag in p.get("tags", [])})
     return templates.TemplateResponse("catalog.html", {
         "request":  request,
@@ -314,6 +389,7 @@ def page_product(request: Request, product_id: str):
     schema   = _safe_schema(manifest["source_path"])
     quality  = _safe_quality(product_id)
     pipeline = _safe_pipeline(manifest.get("dag_id"))
+    sla      = _safe_sla(product_id) or _compute_sla_live(manifest)
     return templates.TemplateResponse("product.html", {
         "request":  request,
         "manifest": manifest,
@@ -321,6 +397,7 @@ def page_product(request: Request, product_id: str):
         "schema":   schema,
         "quality":  quality,
         "pipeline": pipeline,
+        "sla":      sla,
         "airflow_url": AIRFLOW_URL.replace("airflow-webserver", "localhost").replace(":8080", ":8081"),
     })
 

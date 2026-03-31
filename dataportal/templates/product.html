@@ -213,6 +213,36 @@ print(df.head())</pre>
       </ul>
     </div>
 
+    {# SLA #}
+    <div class="card mb-4">
+      <div class="card-header bg-white fw-semibold">
+        <i class="bi bi-clock-fill me-2"></i>SLA-ferskhet
+      </div>
+      <div class="card-body">
+        {% if sla and sla.compliant is not none %}
+          {% if sla.compliant %}
+            <span class="badge bg-success mb-2"><i class="bi bi-check-circle me-1"></i>Innenfor SLA</span>
+          {% else %}
+            <span class="badge bg-danger mb-2"><i class="bi bi-exclamation-triangle me-1"></i>SLA-brudd</span>
+          {% endif %}
+          {% if sla.hours_since_update is not none %}
+          <p class="mb-1 small"><span class="text-muted">Sist oppdatert:</span>
+            {{ sla.hours_since_update }}t siden
+          </p>
+          {% endif %}
+          {% if sla.freshness_hours %}
+          <p class="mb-0 small"><span class="text-muted">Krav:</span>
+            maks {{ sla.freshness_hours }}t siden oppdatering
+          </p>
+          {% endif %}
+        {% elif manifest.quality_sla %}
+          <p class="text-muted mb-0 small"><i class="bi bi-hourglass me-1"></i>SLA-sjekk ikke kjørt ennå.</p>
+        {% else %}
+          <p class="text-muted mb-0 small">Ingen SLA definert for dette produktet.</p>
+        {% endif %}
+      </div>
+    </div>
+
     {# pipeline #}
     <div class="card mb-4">
       <div class="card-header bg-white fw-semibold">
