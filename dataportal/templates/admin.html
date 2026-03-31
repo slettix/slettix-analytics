@@ -1,0 +1,190 @@
+{% extends "base.html" %}
+{% block title %}Admin — Slettix Analytics{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center mb-4">
+  <div>
+    <h1 class="h3 mb-0"><i class="bi bi-shield-lock me-2"></i>Adminpanel</h1>
+    <p class="text-muted mb-0">Brukeradministrasjon og tilgangsforespørsler</p>
+  </div>
+  {% if pending_count > 0 %}
+  <span class="badge bg-danger ms-3 fs-6">{{ pending_count }} ventende forespørsel{% if pending_count != 1 %}er{% endif %}</span>
+  {% endif %}
+</div>
+
+{# ── tilgangsforespørsler ── #}
+{% set pending = access_requests | selectattr("status", "equalto", "pending") | list %}
+{% if pending %}
+<div class="card mb-4">
+  <div class="card-header bg-white fw-semibold">
+    <i class="bi bi-key me-2"></i>Ventende tilgangsforespørsler
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm table-hover mb-0 align-middle">
+      <thead class="table-light">
+        <tr>
+          <th>Bruker</th>
+          <th>E-post</th>
+          <th>Produkt</th>
+          <th>Forespurt</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for req in pending %}
+        <tr>
+          <td>{{ req.username }}</td>
+          <td class="text-muted small">{{ req.email }}</td>
+          <td><code>{{ req.product_id }}</code></td>
+          <td class="text-muted small">{{ req.requested_at[:16].replace("T", " ") }}</td>
+          <td>
+            <form method="post" action="/admin/access-requests/{{ req.id }}" class="d-inline">
+              <input type="hidden" name="action" value="approve">
+              <button type="submit" class="btn btn-sm btn-success me-1">
+                <i class="bi bi-check-lg"></i> Godkjenn
+              </button>
+            </form>
+            <form method="post" action="/admin/access-requests/{{ req.id }}" class="d-inline">
+              <input type="hidden" name="action" value="reject">
+              <button type="submit" class="btn btn-sm btn-outline-danger">
+                <i class="bi bi-x-lg"></i> Avslå
+              </button>
+            </form>
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
+{# ── bruker-tabell ── #}
+<div class="card mb-4">
+  <div class="card-header bg-white fw-semibold d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-people me-2"></i>Brukere ({{ users | length }})</span>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm table-hover mb-0 align-middle">
+      <thead class="table-light">
+        <tr>
+          <th>Brukernavn</th>
+          <th>E-post</th>
+          <th>Rolle</th>
+          <th>Opprettet</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for u in users %}
+        <tr>
+          <td>
+            {{ u.username }}
+            {% if u.id == current_user.id %}
+            <span class="badge bg-secondary ms-1" style="font-size:.6rem;">deg</span>
+            {% endif %}
+          </td>
+          <td class="text-muted small">{{ u.email }}</td>
+          <td>
+            {% if u.role == "admin" %}
+            <span class="badge bg-dark">admin</span>
+            {% else %}
+            <span class="badge bg-light text-dark border">user</span>
+            {% endif %}
+          </td>
+          <td class="text-muted small">{{ u.created_at[:10] }}</td>
+          <td>
+            {% if u.id != current_user.id %}
+            <div class="d-flex gap-1">
+              <form method="post" action="/api/admin/users/{{ u.id }}/role" class="role-form"
+                    data-user-id="{{ u.id }}" data-current-role="{{ u.role }}">
+                <button type="button"
+                        class="btn btn-sm btn-outline-secondary toggle-role"
+                        data-user-id="{{ u.id }}"
+                        data-current-role="{{ u.role }}">
+                  {% if u.role == "admin" %}
+                  <i class="bi bi-arrow-down-circle me-1"></i>Gjør til user
+                  {% else %}
+                  <i class="bi bi-arrow-up-circle me-1"></i>Gjør til admin
+                  {% endif %}
+                </button>
+              </form>
+              <button type="button"
+                      class="btn btn-sm btn-outline-danger delete-user"
+                      data-user-id="{{ u.id }}"
+                      data-username="{{ u.username }}">
+                <i class="bi bi-trash"></i>
+              </button>
+            </div>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{# ── behandlede forespørsler ── #}
+{% set resolved = access_requests | rejectattr("status", "equalto", "pending") | list %}
+{% if resolved %}
+<div class="card mb-4">
+  <div class="card-header bg-white fw-semibold">
+    <i class="bi bi-clock-history me-2"></i>Behandlede forespørsler
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm mb-0 align-middle">
+      <thead class="table-light">
+        <tr><th>Bruker</th><th>Produkt</th><th>Status</th><th>Behandlet</th></tr>
+      </thead>
+      <tbody>
+        {% for req in resolved %}
+        <tr>
+          <td>{{ req.username }}</td>
+          <td><code>{{ req.product_id }}</code></td>
+          <td>
+            {% if req.status == "approved" %}
+            <span class="badge bg-success">Godkjent</span>
+            {% else %}
+            <span class="badge bg-danger">Avslått</span>
+            {% endif %}
+          </td>
+          <td class="text-muted small">{{ req.resolved_at[:16].replace("T", " ") if req.resolved_at else "—" }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Endre rolle
+  document.querySelectorAll(".toggle-role").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const userId      = btn.dataset.userId;
+      const currentRole = btn.dataset.currentRole;
+      const newRole     = currentRole === "admin" ? "user" : "admin";
+      const resp = await fetch(`/api/admin/users/${userId}/role`, {
+        method:  "PATCH",
+        headers: {"Content-Type": "application/json"},
+        body:    JSON.stringify({role: newRole}),
+      });
+      if (resp.ok) location.reload();
+      else alert("Kunne ikke oppdatere rollen.");
+    });
+  });
+
+  // Slett bruker
+  document.querySelectorAll(".delete-user").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      if (!confirm(`Slett brukeren «${btn.dataset.username}»?`)) return;
+      const resp = await fetch(`/api/admin/users/${btn.dataset.userId}`, {method: "DELETE"});
+      if (resp.ok) location.reload();
+      else alert("Kunne ikke slette brukeren.");
+    });
+  });
+</script>
+{% endblock %}

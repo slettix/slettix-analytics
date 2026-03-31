@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block title %}Logg inn — Slettix Analytics{% endblock %}
+
+{% block content %}
+<div class="row justify-content-center">
+  <div class="col-sm-8 col-md-5 col-lg-4">
+    <div class="card mt-4">
+      <div class="card-body p-4">
+        <h1 class="h4 mb-4 text-center"><i class="bi bi-person-lock me-2"></i>Logg inn</h1>
+
+        {% if error %}
+        <div class="alert alert-danger py-2">{{ error }}</div>
+        {% endif %}
+
+        <form method="post" action="/login">
+          <div class="mb-3">
+            <label class="form-label" for="username">Brukernavn</label>
+            <input id="username" name="username" type="text" class="form-control"
+                   autocomplete="username" required autofocus>
+          </div>
+          <div class="mb-3">
+            <label class="form-label" for="password">Passord</label>
+            <input id="password" name="password" type="password" class="form-control"
+                   autocomplete="current-password" required>
+          </div>
+          <button type="submit" class="btn btn-dark w-100">Logg inn</button>
+        </form>
+
+        <hr class="my-3">
+        <p class="text-center text-muted small mb-0">
+          Ingen konto?
+          <a href="/register">Registrer deg</a>
+        </p>
+      </div>
+    </div>
+  </div>
+</div>
+{% endblock %}

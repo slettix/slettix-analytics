@@ -11,6 +11,30 @@
   </ol>
 </nav>
 
+{# ── tilgangssperre for restricted produkter ── #}
+{% if is_restricted and not has_access %}
+<div class="alert alert-warning d-flex align-items-start gap-3 mb-4">
+  <i class="bi bi-lock-fill fs-4 flex-shrink-0 mt-1"></i>
+  <div>
+    <strong>Begrenset tilgang</strong> — dette dataproduktet krever godkjent tilgang.
+    {% if current_user %}
+      {% if pending_request %}
+      <p class="mb-0 mt-1">Din forespørsel er til behandling.</p>
+      {% else %}
+      <form method="post" action="/access-requests" class="mt-2 mb-0">
+        <input type="hidden" name="product_id" value="{{ manifest.id }}">
+        <button type="submit" class="btn btn-sm btn-warning">
+          <i class="bi bi-key me-1"></i>Be om tilgang
+        </button>
+      </form>
+      {% endif %}
+    {% else %}
+    <p class="mb-0 mt-1"><a href="/login">Logg inn</a> for å be om tilgang.</p>
+    {% endif %}
+  </div>
+</div>
+{% endif %}
+
 {# ── header ── #}
 <div class="d-flex flex-wrap align-items-start gap-2 mb-1">
   <h1 class="h2 mb-0">{{ manifest.name }}</h1>
