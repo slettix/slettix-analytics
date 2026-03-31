@@ -145,18 +145,58 @@ def validate_silver_employees(**context):
 
     result = val_def.run(batch_parameters={"dataframe": df})
 
-    # ── Logg resultat ──────────────────────────────────────────────────
-    passed  = sum(1 for r in result.results if r.success)
-    failed  = [r for r in result.results if not r.success]
+    # ── Logg og lagre resultat ─────────────────────────────────────────
+    import json
+    from datetime import datetime, timezone
+
+    import boto3
+    from botocore.client import Config
+
+    passed = sum(1 for r in result.results if r.success)
+    failed = [r for r in result.results if not r.success]
     log.info(f"GE-validering: {passed}/{len(result.results)} forventninger bestått.")
 
+    quality_result = {
+        "product_id":         "hr.employees",
+        "validated_at":       datetime.now(tz=timezone.utc).isoformat(),
+        "score_pct":          round(passed / len(result.results) * 100, 1),
+        "total_expectations": len(result.results),
+        "passed":             passed,
+        "failed":             len(failed),
+        "failures": [
+            {
+                "expectation": r.expectation_config.type,
+                "kwargs":      r.expectation_config.kwargs,
+            }
+            for r in failed
+        ],
+    }
+
+    try:
+        s3 = boto3.client(
+            "s3",
+            endpoint_url="http://minio:9000",
+            aws_access_key_id="admin",
+            aws_secret_access_key="changeme",
+            config=Config(signature_version="s3v4"),
+        )
+        s3.put_object(
+            Bucket="gold",
+            Key="quality_results/hr.employees/latest.json",
+            Body=json.dumps(quality_result, indent=2).encode(),
+            ContentType="application/json",
+        )
+        log.info("GE-resultat lagret til s3://gold/quality_results/hr.employees/latest.json")
+    except Exception as exc:
+        log.warning(f"Kunne ikke lagre GE-resultat til MinIO: {exc}")
+
     if not result.success:
-        failures = "\n".join(
+        failures_str = "\n".join(
             f"  - {r.expectation_config.type} ({r.expectation_config.kwargs})"
             for r in failed
         )
         raise AirflowException(
-            f"Silver-validering feilet — {len(failed)} brudd:\n{failures}"
+            f"Silver-validering feilet — {len(failed)} brudd:\n{failures_str}"
         )
 
     log.info("Silver-validering OK — alle forventninger bestått.")

@@ -168,6 +168,31 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
+  # ── Dataportal Backend ─────────────────────────────────────────────────────
+  dataportal:
+    build:
+      context: docker/dataportal
+    image: slettix-analytics/dataportal:1.0.0
+    container_name: dataportal
+    ports:
+      - "8090:8090"   # FastAPI / Swagger UI
+    environment:
+      MINIO_ENDPOINT:    http://minio:9000
+      MINIO_ACCESS_KEY:  ${MINIO_ROOT_USER}
+      MINIO_SECRET_KEY:  ${MINIO_ROOT_PASSWORD}
+      AIRFLOW_URL:       http://airflow-webserver:8080
+      AIRFLOW_USER:      admin
+      AIRFLOW_PASS:      admin
+      REGISTRY_PATH:     s3://gold/data_products
+    volumes:
+      - ./dataportal:/opt/dataportal
+      - ./jobs:/opt/dataportal/jobs
+    depends_on:
+      minio:
+        condition: service_healthy
+      airflow-webserver:
+        condition: service_healthy
+
 volumes:
   minio_data:
   postgres_data:
