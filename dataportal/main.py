@@ -290,7 +290,7 @@ def _safe_schema(source_path: str) -> list[dict] | None:
         return None
 
 
-_BROWSE_BUCKETS = ["gold", "analytics"]
+_BROWSE_BUCKETS = ["gold", "silver", "analytics"]
 
 
 def _browse_path(bucket: str, prefix: str) -> list[dict]:
