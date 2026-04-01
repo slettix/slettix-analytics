@@ -12,11 +12,11 @@
 </nav>
 
 <h1 class="h3 mb-1"><i class="bi bi-graph-up me-2"></i>Lag analytisk dataprodukt</h1>
-<p class="text-muted mb-4">Veiviser for å sette opp et nytt analytisk dataprodukt basert på eksisterende kildeprodukter.</p>
+<p class="text-muted mb-4">Veiviser for å sette opp et nytt analytisk dataprodukt basert på eksisterende dataprodukter.</p>
 
 {# ── Stegindikator ── #}
 <div class="d-flex align-items-center mb-4 gap-0" id="step-indicator">
-  {% for num, label in [("1","Kildeprodukter"), ("2","Metadata"), ("3","Oppdatering"), ("4","Oppsummering")] %}
+  {% for num, label in [("1","IDP-er"), ("2","Metadata"), ("3","Oppdatering"), ("4","Oppsummering")] %}
   <div class="step-item d-flex align-items-center" data-step="{{ num }}">
     <div class="step-circle rounded-circle d-flex align-items-center justify-content-center fw-bold"
          style="width:2rem;height:2rem;font-size:.85rem;
@@ -30,30 +30,56 @@
   {% endfor %}
 </div>
 
-{# ═══════════════ STEG 1: VELG KILDEPRODUKTER ════════════════ #}
+{# ═══════════════ STEG 1: VELG DATAPRODUKTER ════════════════ #}
 <div id="step-1" class="step-panel">
   <div class="card mb-3">
     <div class="card-header bg-white fw-semibold">
-      <i class="bi bi-box me-2"></i>Velg kildeprodukter
-      <span class="text-muted fw-normal small ms-2">— minst ett påkrevd</span>
+      <i class="bi bi-layers me-2"></i>Velg dataprodukter som IDP-er
+      <span class="text-muted fw-normal small ms-2">— valgfritt</span>
     </div>
     <div class="card-body">
-      <div class="input-group mb-3">
-        <span class="input-group-text bg-white"><i class="bi bi-search"></i></span>
-        <input id="source-search" type="text" class="form-control" placeholder="Filtrer produkter…">
+      <p class="text-muted small mb-3">
+        Velg 0, 1 eller flere publiserte dataprodukter som dette analytiske produktet bygger på.
+        Notebooken settes opp med tilkoblinger mot alle valgte produkter.
+      </p>
+      <div class="row g-2 mb-3">
+        <div class="col-md-6">
+          <div class="input-group">
+            <span class="input-group-text bg-white"><i class="bi bi-search"></i></span>
+            <input id="source-search" type="text" class="form-control" placeholder="Filtrer produkter…">
+          </div>
+        </div>
+        <div class="col-md-6 d-flex gap-2 align-items-center flex-wrap">
+          <button class="btn btn-sm btn-dark type-filter active" data-type="">Alle</button>
+          <button class="btn btn-sm btn-outline-secondary type-filter" data-type="source">
+            <i class="bi bi-box me-1"></i>Kilde
+          </button>
+          <button class="btn btn-sm btn-outline-secondary type-filter" data-type="analytical">
+            <i class="bi bi-graph-up me-1"></i>Analytisk
+          </button>
+        </div>
       </div>
       <div class="row g-2" id="source-product-list">
-        {% for p in source_products %}
+        {% for p in all_products %}
+        {% set ptype = p.get("product_type", "source") %}
         <div class="col-md-6 source-item"
-             data-name="{{ p.name|lower }} {{ p.domain }} {{ p.id }}">
-          <label class="card p-3 d-flex flex-row align-items-start gap-3 cursor-pointer source-card"
-                 style="cursor:pointer;">
+             data-name="{{ p.name|lower }} {{ p.domain }} {{ p.id }} {{ p.description|default('')|lower }}"
+             data-type="{{ ptype }}">
+          <label class="card p-3 d-flex flex-row align-items-start gap-3" style="cursor:pointer;">
             <input type="checkbox" class="form-check-input mt-1 flex-shrink-0 source-checkbox"
-                   value="{{ p.id }}" data-name="{{ p.name }}" data-domain="{{ p.domain }}">
-            <div>
-              <div class="fw-semibold">{{ p.name }}</div>
+                   value="{{ p.id }}" data-name="{{ p.name }}" data-domain="{{ p.domain }}"
+                   data-type="{{ ptype }}">
+            <div class="w-100">
+              <div class="d-flex align-items-center gap-2 mb-1">
+                <span class="fw-semibold">{{ p.name }}</span>
+                {% if ptype == "analytical" %}
+                <span class="badge bg-info text-dark" style="font-size:.6rem;">analytisk</span>
+                {% else %}
+                <span class="badge bg-secondary" style="font-size:.6rem;">kilde</span>
+                {% endif %}
+              </div>
               <div class="text-muted small">
-                <span class="badge bg-secondary me-1">{{ p.domain }}</span>
+                <span class="badge bg-light text-dark border me-1">{{ p.domain }}</span>
                 <code>{{ p.id }}</code>
               </div>
               {% if p.description %}
@@ -65,14 +91,14 @@
           </label>
         </div>
         {% else %}
-        <div class="col-12 text-muted text-center py-3">Ingen kildeprodukter registrert.</div>
+        <div class="col-12 text-muted text-center py-3">Ingen dataprodukter registrert i katalogen.</div>
         {% endfor %}
       </div>
     </div>
   </div>
   <div class="d-flex justify-content-between align-items-center">
     <span id="source-selected-text" class="text-muted small">Ingen valgt</span>
-    <button class="btn btn-dark" id="step1-next" disabled>
+    <button class="btn btn-dark" id="step1-next">
       Neste <i class="bi bi-chevron-right ms-1"></i>
     </button>
   </div>
@@ -268,21 +294,29 @@ function showStep(n) {
   });
 }
 
-// ── Steg 1: kildeprodukter ────────────────────────────────────────────────────
-const sourceSearch    = document.getElementById("source-search");
-const step1NextBtn    = document.getElementById("step1-next");
-const selectedTextEl  = document.getElementById("source-selected-text");
+// ── Steg 1: dataprodukter ─────────────────────────────────────────────────────
+const sourceSearch   = document.getElementById("source-search");
+const selectedTextEl = document.getElementById("source-selected-text");
+let activeTypeFilter = "";
+
+function applyStep1Filters() {
+  const q = sourceSearch.value.toLowerCase().trim();
+  document.querySelectorAll(".source-item").forEach(el => {
+    const matchSearch = !q || el.dataset.name.includes(q);
+    const matchType   = !activeTypeFilter || el.dataset.type === activeTypeFilter;
+    el.classList.toggle("d-none", !(matchSearch && matchType));
+  });
+}
 
 function updateStep1() {
   const checked = [...document.querySelectorAll(".source-checkbox:checked")];
   state.sourceIds   = checked.map(c => c.value);
   state.sourceNames = checked.map(c => c.dataset.name);
-  step1NextBtn.disabled = checked.length === 0;
   selectedTextEl.textContent = checked.length === 0
     ? "Ingen valgt"
     : `${checked.length} produkt${checked.length > 1 ? "er" : ""} valgt`;
 
-  // Auto-fyll DAG-ID og produkt-suffix om de er tomme
+  // Auto-fyll produkt-suffix fra valgte produkter (kun første gang)
   if (checked.length > 0 && !document.getElementById("f-product-suffix").value) {
     const slug = checked.map(c => c.value.split(".").pop()).join("_");
     document.getElementById("f-product-suffix").value = slug;
@@ -293,12 +327,21 @@ function updateStep1() {
 document.querySelectorAll(".source-checkbox").forEach(cb =>
   cb.addEventListener("change", updateStep1)
 );
-sourceSearch.addEventListener("input", () => {
-  const q = sourceSearch.value.toLowerCase();
-  document.querySelectorAll(".source-item").forEach(el =>
-    el.classList.toggle("d-none", q && !el.dataset.name.includes(q))
-  );
+sourceSearch.addEventListener("input", applyStep1Filters);
+
+document.querySelectorAll(".type-filter").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".type-filter").forEach(b => {
+      b.classList.replace("btn-dark", "btn-outline-secondary");
+      b.classList.remove("active");
+    });
+    btn.classList.replace("btn-outline-secondary", "btn-dark");
+    btn.classList.add("active");
+    activeTypeFilter = btn.dataset.type;
+    applyStep1Filters();
+  });
 });
+
 document.getElementById("step1-next").addEventListener("click", () => showStep(2));
 
 // ── Steg 2: metadata ──────────────────────────────────────────────────────────
@@ -369,9 +412,14 @@ document.getElementById("step3-next").addEventListener("click", () => {
 // ── Steg 4: oppsummering ──────────────────────────────────────────────────────
 function buildSummary() {
   const srcList = document.getElementById("summary-sources");
-  srcList.innerHTML = state.sourceIds.map((id, i) =>
-    `<li><i class="bi bi-box me-2 text-muted"></i>${state.sourceNames[i]} <code class="text-muted">${id}</code></li>`
-  ).join("");
+  srcList.innerHTML = state.sourceIds.length === 0
+    ? `<li class="text-muted"><i class="bi bi-dash me-2"></i>Ingen IDP-er valgt</li>`
+    : state.sourceIds.map((id, i) => {
+        const cb   = document.querySelector(`.source-checkbox[value="${id}"]`);
+        const type = cb ? cb.dataset.type : "source";
+        const icon = type === "analytical" ? "graph-up text-info" : "box text-muted";
+        return `<li><i class="bi bi-${icon} me-2"></i>${state.sourceNames[i]} <code class="text-muted">${id}</code></li>`;
+      }).join("");
 
   const details = document.getElementById("summary-details");
   const rows = [

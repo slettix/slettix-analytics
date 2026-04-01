@@ -1104,16 +1104,11 @@ async def page_create_access_request(request: Request):
 
 
 @app.get("/browse", response_class=HTMLResponse, include_in_schema=False)
-def page_create_analytical(request: Request):
+def page_browse_redirect(request: Request):
     user = auth.get_current_user(request)
     if not user:
-        return RedirectResponse("/login?next=/create-analytical", status_code=303)
-    source_products = [p for p in list_all() if p.get("product_type", "source") != "analytical"]
-    return templates.TemplateResponse("create_analytical.html", _template_ctx(
-        request,
-        source_products=source_products,
-        schedule_labels=_SCHEDULE_LABELS,
-    ))
+        return RedirectResponse("/login?next=/browse", status_code=303)
+    return templates.TemplateResponse("browse.html", _template_ctx(request))
 
 
 @app.post("/api/create-analytical", tags=["jupyter"], summary="Opprett analytisk dataprodukt")
@@ -1140,8 +1135,8 @@ async def api_create_analytical(request: Request):
     schedule        = body.get("schedule", "manual")
     dag_id          = body.get("dag_id", "").strip() or re.sub(r"[^a-z0-9_]", "_", product_id)
 
-    if not product_id or not name or not source_ids:
-        raise HTTPException(status_code=422, detail="product_id, name og source_ids er påkrevd")
+    if not product_id or not name:
+        raise HTTPException(status_code=422, detail="product_id og name er påkrevd")
 
     # Hent manifester for kildeprodukter
     manifests = []
@@ -1187,11 +1182,16 @@ async def api_create_analytical(request: Request):
 
 
 @app.get("/create-analytical", response_class=HTMLResponse, include_in_schema=False)
-def page_browse(request: Request):
+def page_create_analytical(request: Request):
     user = auth.get_current_user(request)
     if not user:
-        return RedirectResponse("/login?next=/browse", status_code=303)
-    return templates.TemplateResponse("browse.html", _template_ctx(request))
+        return RedirectResponse("/login?next=/create-analytical", status_code=303)
+    all_products = list_all()
+    return templates.TemplateResponse("create_analytical.html", _template_ctx(
+        request,
+        all_products=all_products,
+        schedule_labels=_SCHEDULE_LABELS,
+    ))
 
 
 @app.get("/publish", response_class=HTMLResponse, include_in_schema=False)
