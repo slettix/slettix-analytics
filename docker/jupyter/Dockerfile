@@ -11,7 +11,10 @@ RUN pip install --no-cache-dir \
       pandas \
       numpy \
       requests \
-      pyarrow==17.0.0
+      pyarrow==17.0.0 \
+      matplotlib \
+      seaborn \
+      scipy
 
 # Download the same JARs as the Spark cluster image
 RUN curl -fsSL -o /opt/spark/jars/delta-spark_2.12-3.2.0.jar \
