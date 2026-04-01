@@ -10,6 +10,7 @@ x-airflow-common:
     AIRFLOW__CORE__LOAD_EXAMPLES: "false"
     AIRFLOW__WEBSERVER__SECRET_KEY: slettix-analytics-dev-key
     AIRFLOW__CORE__FERNET_KEY: ""
+    AIRFLOW__API__AUTH_BACKENDS: "airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session"
     # Spark connection — host must include spark:// prefix so SparkSubmitOperator
     # builds the correct --master spark://spark-master:7077 argument
     AIRFLOW_CONN_SPARK_DEFAULT: '{"conn_type": "spark", "host": "spark://spark-master", "port": 7077}'
