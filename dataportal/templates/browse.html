@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block title %}Delta Lake-browser — Slettix Analytics{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center mb-4">
+  <div>
+    <h1 class="h3 mb-0"><i class="bi bi-folder2-open me-2"></i>Delta Lake-browser</h1>
+    <p class="text-muted mb-0">Naviger MinIO og publiser Delta-tabeller som dataprodukter</p>
+  </div>
+</div>
+
+{# ── søkefelt ── #}
+<div class="row g-2 mb-3">
+  <div class="col-md-5">
+    <div class="input-group">
+      <span class="input-group-text bg-white"><i class="bi bi-search"></i></span>
+      <input id="search" type="text" class="form-control" placeholder="Filtrer på navn…">
+    </div>
+  </div>
+</div>
+
+{# ── tre-container ── #}
+<div class="card">
+  <div class="card-body p-0">
+    <div id="tree" class="p-3">
+      <div class="text-muted text-center py-4">
+        <div class="spinner-border spinner-border-sm me-2"></div>Laster…
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ── legg til analytics-bucket om den ikke er i lista ── #}
+<p class="text-muted small mt-3">
+  <i class="bi bi-info-circle me-1"></i>
+  Viser <strong>gold</strong>- og <strong>analytics</strong>-buckets. Delta-tabeller vises med
+  <i class="bi bi-table text-primary"></i>-ikon.
+</p>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const searchInput = document.getElementById("search");
+
+// ── API-kall ──────────────────────────────────────────────────────────────────
+async function fetchPath(path) {
+  const resp = await fetch(`/api/browser?path=${encodeURIComponent(path)}`);
+  if (!resp.ok) throw new Error(await resp.text());
+  return resp.json();
+}
+
+// ── Bygg ett tre-innslag ──────────────────────────────────────────────────────
+function makeEntry(item, depth = 0) {
+  const li = document.createElement("li");
+  li.className = "list-unstyled mb-1";
+  li.dataset.name = item.name.toLowerCase();
+
+  const row = document.createElement("div");
+  row.className = "d-flex align-items-center gap-2 py-1 px-2 rounded tree-row";
+  row.style.paddingLeft = `${depth * 1.4 + 0.5}rem`;
+
+  if (item.type === "delta") {
+    // Delta-tabell: vis ikon, navn, kolonneantall og publish-knapp
+    row.innerHTML = `
+      <i class="bi bi-table text-primary flex-shrink-0"></i>
+      <span class="fw-semibold flex-grow-1">${item.name}</span>
+      ${item.col_count != null
+        ? `<span class="badge bg-light text-dark border">${item.col_count} kol.</span>`
+        : ""}
+      <a href="/publish?path=${encodeURIComponent(item.path)}"
+         class="btn btn-sm btn-outline-primary ms-2 flex-shrink-0">
+        <i class="bi bi-upload me-1"></i>Publiser
+      </a>`;
+  } else if (item.type === "bucket") {
+    row.innerHTML = `
+      <i class="bi bi-bucket flex-shrink-0 text-secondary"></i>
+      <span class="fw-bold flex-grow-1 text-uppercase text-muted small">${item.name}</span>`;
+  } else {
+    // Mappe: ekspanderbar
+    row.style.cursor = "pointer";
+    row.innerHTML = `
+      <i class="bi bi-chevron-right toggle-icon flex-shrink-0 text-muted" style="transition:transform .15s"></i>
+      <i class="bi bi-folder text-warning flex-shrink-0"></i>
+      <span class="flex-grow-1">${item.name}</span>`;
+  }
+
+  li.appendChild(row);
+
+  if (item.type === "folder") {
+    const children = document.createElement("ul");
+    children.className = "ps-0 d-none";
+    children.dataset.path    = item.bucket + "/" + item.prefix;
+    children.dataset.loaded  = "false";
+    li.appendChild(children);
+
+    row.addEventListener("click", async () => {
+      const icon = row.querySelector(".toggle-icon");
+      const open = !children.classList.contains("d-none");
+
+      if (open) {
+        children.classList.add("d-none");
+        icon.style.transform = "";
+      } else {
+        children.classList.remove("d-none");
+        icon.style.transform = "rotate(90deg)";
+        if (children.dataset.loaded === "false") {
+          children.dataset.loaded = "loading";
+          children.innerHTML = `<li class="text-muted small ps-4 py-1">
+            <span class="spinner-border spinner-border-sm me-1"></span>Laster…</li>`;
+          try {
+            const items = await fetchPath(children.dataset.path);
+            children.innerHTML = "";
+            if (items.length === 0) {
+              children.innerHTML = `<li class="text-muted small ps-4 py-1">Tom mappe</li>`;
+            } else {
+              items.forEach(child => children.appendChild(makeEntry(child, depth + 1)));
+            }
+            children.dataset.loaded = "true";
+          } catch (e) {
+            children.innerHTML = `<li class="text-danger small ps-4 py-1">Feil: ${e.message}</li>`;
+          }
+        }
+      }
+    });
+  }
+
+  if (item.type === "bucket" && item.children) {
+    const ul = document.createElement("ul");
+    ul.className = "ps-0";
+    item.children.forEach(child => ul.appendChild(makeEntry(child, depth + 1)));
+    li.appendChild(ul);
+  }
+
+  return li;
+}
+
+// ── Last rot ──────────────────────────────────────────────────────────────────
+async function loadRoot() {
+  const tree = document.getElementById("tree");
+  try {
+    const buckets = await fetchPath("");
+    tree.innerHTML = "";
+    const ul = document.createElement("ul");
+    ul.className = "list-unstyled mb-0";
+    buckets.forEach(b => ul.appendChild(makeEntry(b, 0)));
+    tree.appendChild(ul);
+  } catch (e) {
+    tree.innerHTML = `<p class="text-danger p-3">Kunne ikke laste filstrukturen: ${e.message}</p>`;
+  }
+}
+
+loadRoot();
+
+// ── Søkefilter ────────────────────────────────────────────────────────────────
+searchInput.addEventListener("input", () => {
+  const q = searchInput.value.toLowerCase().trim();
+  document.querySelectorAll("#tree li").forEach(li => {
+    if (!li.dataset.name) return;
+    li.classList.toggle("d-none", q !== "" && !li.dataset.name.includes(q));
+  });
+});
+</script>
+<style>
+  .tree-row:hover { background: #f8f9fa; }
+</style>
+{% endblock %}

@@ -10,6 +10,7 @@ API (JSON):
   GET  /api/products/{id}/quality      — siste GE-valideringsresultat
   GET  /api/products/{id}/sla          — SLA-ferskhets-status
   GET  /api/products/{id}/versions     — versjonshistorikk med diff
+  GET  /api/browser                    — naviger MinIO og detekter Delta-tabeller
 
 Auth API:
   POST /auth/login                     — logg inn, sett access/refresh cookies
@@ -21,10 +22,12 @@ UI (HTML):
   GET  /                               — produktkatalog
   GET  /products/{id}                  — detaljside per produkt
   GET  /pipelines                      — pipeline-status dashboard
+  GET  /browse                         — Delta Lake-filutforsker
+  GET  /publish                        — publiseringsformular
+  POST /publish                        — publiser dataprodukt
   GET  /login                          — innloggingsside
   GET  /register                       — registreringsside
   GET  /admin                          — brukeradministrasjon (kun admin)
-  GET  /admin/access-requests          — tilgangsforespørsler (kun admin)
   POST /admin/access-requests/{id}     — godkjenn/avslå forespørsel
   POST /access-requests                — be om tilgang til restricted produkt
 """
@@ -287,6 +290,68 @@ def _safe_schema(source_path: str) -> list[dict] | None:
         return None
 
 
+_BROWSE_BUCKETS = ["gold", "analytics"]
+
+
+def _browse_path(bucket: str, prefix: str) -> list[dict]:
+    """
+    List ett nivå under `prefix` i `bucket`.
+    Returnerer mapper og Delta-tabeller (detektert via _delta_log/).
+    """
+    s3     = _s3_client()
+    prefix = prefix.lstrip("/")
+    if prefix and not prefix.endswith("/"):
+        prefix += "/"
+
+    # Samle alle common prefixes i én gjennomgang
+    paginator      = s3.get_paginator("list_objects_v2")
+    all_prefixes   = []
+    delta_parents  = set()
+
+    for page in paginator.paginate(Bucket=bucket, Prefix=prefix, Delimiter="/"):
+        for cp in page.get("CommonPrefixes", []):
+            sub = cp["Prefix"]
+            all_prefixes.append(sub)
+            if sub.endswith("_delta_log/"):
+                delta_parents.add(sub[: -len("_delta_log/")])
+
+    entries = []
+    for sub in all_prefixes:
+        name = sub[len(prefix):].rstrip("/")
+        if name == "_delta_log":
+            continue
+        is_delta  = sub in delta_parents or _is_delta_table(bucket, sub)
+        full_path = f"s3://{bucket}/{sub.rstrip('/')}"
+        col_count = None
+        if is_delta:
+            schema    = _safe_schema(full_path)
+            col_count = len(schema) if schema else None
+        entries.append({
+            "name":      name,
+            "path":      full_path,
+            "prefix":    sub,
+            "bucket":    bucket,
+            "type":      "delta" if is_delta else "folder",
+            "col_count": col_count,
+        })
+
+    return sorted(entries, key=lambda e: (e["type"] == "folder", e["name"]))
+
+
+def _is_delta_table(bucket: str, prefix: str) -> bool:
+    """Sjekk om prefix inneholder _delta_log/."""
+    try:
+        s3   = _s3_client()
+        resp = s3.list_objects_v2(
+            Bucket=bucket,
+            Prefix=prefix + "_delta_log/",
+            MaxKeys=1,
+        )
+        return resp.get("KeyCount", 0) > 0
+    except Exception:
+        return False
+
+
 def _set_auth_cookies(response, access_token: str, refresh_token: str) -> None:
     response.set_cookie("access_token",  access_token,  httponly=True, samesite="lax", max_age=1800)
     response.set_cookie("refresh_token", refresh_token, httponly=True, samesite="lax", max_age=604800)
@@ -295,6 +360,41 @@ def _set_auth_cookies(response, access_token: str, refresh_token: str) -> None:
 def _clear_auth_cookies(response) -> None:
     response.delete_cookie("access_token")
     response.delete_cookie("refresh_token")
+
+
+# ── API: Delta Lake-browser ───────────────────────────────────────────────────
+
+@app.get("/api/browser", tags=["browser"], summary="Naviger MinIO og detekter Delta-tabeller")
+def api_browser(path: str = ""):
+    """
+    List mapper og Delta-tabeller på gitt sti.
+    path-format: «bucket/prefix» f.eks. «gold/hr» eller bare «gold».
+    Støtter gold- og analytics-buckets.
+    """
+    parts  = path.strip("/").split("/", 1) if path.strip("/") else []
+    bucket = parts[0] if parts else ""
+    prefix = parts[1] if len(parts) > 1 else ""
+
+    # Rot-nivå: vis tilgjengelige buckets
+    if not bucket:
+        result = []
+        for b in _BROWSE_BUCKETS:
+            try:
+                children = _browse_path(b, "")
+                result.append({"name": b, "path": f"s3://{b}", "bucket": b,
+                               "prefix": "", "type": "bucket", "col_count": None,
+                               "children": children})
+            except Exception:
+                pass
+        return result
+
+    if bucket not in _BROWSE_BUCKETS:
+        raise HTTPException(status_code=400, detail=f"Bucket '{bucket}' er ikke tilgjengelig for browsing")
+
+    try:
+        return _browse_path(bucket, prefix)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=str(exc))
 
 
 # ── auth: API ──────────────────────────────────────────────────────────────────
@@ -646,6 +746,120 @@ async def page_create_access_request(request: Request):
     product_id = form.get("product_id")
     if product_id:
         auth.create_access_request(user["id"], product_id)
+    return RedirectResponse(f"/products/{product_id}", status_code=303)
+
+
+@app.get("/browse", response_class=HTMLResponse, include_in_schema=False)
+def page_browse(request: Request):
+    user = auth.get_current_user(request)
+    if not user:
+        return RedirectResponse("/login?next=/browse", status_code=303)
+    return templates.TemplateResponse("browse.html", _template_ctx(request))
+
+
+@app.get("/publish", response_class=HTMLResponse, include_in_schema=False)
+def page_publish(request: Request, path: str = ""):
+    user = auth.get_current_user(request)
+    if not user:
+        return RedirectResponse("/login?next=/publish", status_code=303)
+    schema    = _safe_schema(path) if path else None
+    col_count = len(schema) if schema else 0
+    return templates.TemplateResponse("publish.html", _template_ctx(
+        request,
+        source_path=path,
+        schema=schema or [],
+        col_count=col_count,
+    ))
+
+
+@app.post("/publish", response_class=HTMLResponse, include_in_schema=False)
+async def page_publish_post(request: Request):
+    user = auth.get_current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+
+    form = await request.form()
+
+    def fv(key: str) -> str:
+        return (form.get(key) or "").strip()
+
+    product_id  = fv("id")
+    name        = fv("name")
+    domain      = fv("domain")
+    owner       = fv("owner")
+    description = fv("description")
+    source_path = fv("source_path")
+    version     = fv("version") or "1.0"
+    tags_raw    = fv("tags")
+    freshness   = fv("freshness_hours")
+    access      = fv("access") or "public"
+
+    errors: list[str] = []
+    if not product_id:
+        errors.append("Produkt-ID er påkrevd")
+    if not name:
+        errors.append("Navn er påkrevd")
+    if not domain:
+        errors.append("Domene er påkrevd")
+    if not owner:
+        errors.append("Eier er påkrevd")
+    if not source_path:
+        errors.append("Kildesti er påkrevd")
+
+    schema    = _safe_schema(source_path) if source_path else []
+    col_count = len(schema) if schema else 0
+
+    if errors:
+        return templates.TemplateResponse(
+            "publish.html",
+            _template_ctx(
+                request,
+                source_path=source_path,
+                schema=schema,
+                col_count=col_count,
+                errors=errors,
+                form_data=dict(form),
+            ),
+            status_code=422,
+        )
+
+    tags = [t.strip() for t in tags_raw.split(",") if t.strip()]
+
+    manifest: dict = {
+        "id":          product_id,
+        "name":        name,
+        "domain":      domain,
+        "owner":       owner,
+        "description": description,
+        "version":     version,
+        "source_path": source_path,
+        "format":      "delta",
+        "access":      access,
+        "tags":        tags,
+        "schema":      schema,
+    }
+    if freshness:
+        try:
+            manifest["quality_sla"] = {"freshness_hours": int(freshness)}
+        except ValueError:
+            pass
+
+    try:
+        register(manifest)
+    except Exception as exc:
+        return templates.TemplateResponse(
+            "publish.html",
+            _template_ctx(
+                request,
+                source_path=source_path,
+                schema=schema,
+                col_count=col_count,
+                errors=[f"Registrering feilet: {exc}"],
+                form_data=dict(form),
+            ),
+            status_code=500,
+        )
+
     return RedirectResponse(f"/products/{product_id}", status_code=303)
 
 

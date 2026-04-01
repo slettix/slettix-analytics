@@ -1,0 +1,172 @@
+{% extends "base.html" %}
+{% block title %}Publiser dataprodukt — Slettix Analytics{% endblock %}
+
+{% block content %}
+
+{# ── breadcrumb ── #}
+<nav aria-label="breadcrumb" class="mb-3">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="/browse"><i class="bi bi-folder2-open me-1"></i>Browser</a></li>
+    <li class="breadcrumb-item active">Publiser</li>
+  </ol>
+</nav>
+
+<div class="row">
+  <div class="col-lg-8">
+    <h1 class="h3 mb-1"><i class="bi bi-upload me-2"></i>Publiser dataprodukt</h1>
+    {% if source_path %}
+    <p class="text-muted mb-4">
+      <i class="bi bi-table me-1 text-primary"></i>
+      <code>{{ source_path }}</code>
+      {% if col_count %} — {{ col_count }} kolonner detektert{% endif %}
+    </p>
+    {% endif %}
+
+    {% if errors %}
+    <div class="alert alert-danger">
+      <strong>Rett følgende feil:</strong>
+      <ul class="mb-0 mt-1">
+        {% for e in errors %}<li>{{ e }}</li>{% endfor %}
+      </ul>
+    </div>
+    {% endif %}
+
+    <form method="post" action="/publish" novalidate>
+      <input type="hidden" name="source_path" value="{{ source_path }}">
+
+      {# ── obligatoriske felt ── #}
+      <div class="card mb-4">
+        <div class="card-header bg-white fw-semibold">
+          <i class="bi bi-asterisk me-2 text-danger" style="font-size:.7rem;"></i>Obligatorisk informasjon
+        </div>
+        <div class="card-body">
+
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label" for="f-id">Produkt-ID <span class="text-danger">*</span></label>
+              <input id="f-id" name="id" type="text" class="form-control font-monospace"
+                     placeholder="hr.employees" required
+                     value="{{ form_data.id if form_data else '' }}">
+              <div class="form-text">Unik ID — bruk domene.navn-format</div>
+            </div>
+            <div class="col-md-6">
+              <label class="form-label" for="f-name">Navn <span class="text-danger">*</span></label>
+              <input id="f-name" name="name" type="text" class="form-control"
+                     placeholder="HR-ansattregister" required
+                     value="{{ form_data.name if form_data else '' }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label" for="f-domain">Domene <span class="text-danger">*</span></label>
+              <input id="f-domain" name="domain" type="text" class="form-control"
+                     placeholder="hr" required
+                     value="{{ form_data.domain if form_data else '' }}">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label" for="f-owner">Eier <span class="text-danger">*</span></label>
+              <input id="f-owner" name="owner" type="text" class="form-control"
+                     placeholder="hr-teamet" required
+                     value="{{ form_data.owner if form_data else (current_user.username if current_user else '') }}">
+            </div>
+            <div class="col-12">
+              <label class="form-label" for="f-desc">Beskrivelse <span class="text-danger">*</span></label>
+              <textarea id="f-desc" name="description" class="form-control" rows="2"
+                        placeholder="Kort beskrivelse av hva produktet inneholder og hvem det er for…">{{ form_data.description if form_data else '' }}</textarea>
+            </div>
+          </div>
+
+        </div>
+      </div>
+
+      {# ── valgfrie felt ── #}
+      <div class="card mb-4">
+        <div class="card-header bg-white fw-semibold">
+          <i class="bi bi-sliders me-2"></i>Valgfri konfigurasjon
+        </div>
+        <div class="card-body">
+          <div class="row g-3">
+            <div class="col-md-4">
+              <label class="form-label" for="f-version">Versjon</label>
+              <input id="f-version" name="version" type="text" class="form-control"
+                     placeholder="1.0" value="{{ form_data.version if form_data else '1.0' }}">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label" for="f-access">Tilgang</label>
+              <select id="f-access" name="access" class="form-select">
+                <option value="public"     {% if not form_data or form_data.access == 'public'     %}selected{% endif %}>Offentlig</option>
+                <option value="restricted" {% if form_data and form_data.access == 'restricted' %}selected{% endif %}>Begrenset</option>
+              </select>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label" for="f-freshness">SLA — ferskhet (timer)</label>
+              <input id="f-freshness" name="freshness_hours" type="number" class="form-control"
+                     placeholder="24" min="1"
+                     value="{{ form_data.freshness_hours if form_data else '' }}">
+            </div>
+            <div class="col-12">
+              <label class="form-label" for="f-tags">Tags <span class="text-muted small">(kommaseparert)</span></label>
+              <input id="f-tags" name="tags" type="text" class="form-control"
+                     placeholder="ansatte, hr, lønn"
+                     value="{{ form_data.tags if form_data else '' }}">
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {# ── schema-forhåndsvisning ── #}
+      {% if schema %}
+      <div class="card mb-4">
+        <div class="card-header bg-white fw-semibold">
+          <i class="bi bi-table me-2"></i>Schema — {{ schema | length }} kolonner (auto-detektert)
+        </div>
+        <div class="card-body p-0">
+          <table class="table table-sm table-hover mb-0">
+            <thead class="table-light">
+              <tr><th>Kolonne</th><th>Type</th><th>Nullbar</th></tr>
+            </thead>
+            <tbody>
+              {% for col in schema %}
+              <tr>
+                <td class="font-monospace">{{ col.name }}</td>
+                <td class="text-muted">{{ col.type }}</td>
+                <td>{% if col.nullable %}<span class="text-muted">ja</span>{% else %}<span class="text-danger fw-semibold">nei</span>{% endif %}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {% elif source_path %}
+      <div class="alert alert-warning mb-4">
+        <i class="bi bi-exclamation-triangle me-2"></i>
+        Kunne ikke lese schema fra <code>{{ source_path }}</code>. Schema lagres ikke automatisk.
+      </div>
+      {% endif %}
+
+      <div class="d-flex gap-2">
+        <button type="submit" class="btn btn-dark">
+          <i class="bi bi-upload me-2"></i>Publiser dataprodukt
+        </button>
+        <a href="/browse" class="btn btn-outline-secondary">Avbryt</a>
+      </div>
+
+    </form>
+  </div>
+
+  {# ── høyre kolonne: forklaring ── #}
+  <div class="col-lg-4 mt-4 mt-lg-0">
+    <div class="card">
+      <div class="card-header bg-white fw-semibold">
+        <i class="bi bi-info-circle me-2"></i>Om publisering
+      </div>
+      <div class="card-body small text-muted">
+        <p>Publisering registrerer et dataprodukt i katalogen slik at andre kan oppdage og konsumere det.</p>
+        <p><strong>Kildesti</strong> er den faktiske Delta Lake-stien i MinIO — den endres ikke.</p>
+        <p><strong>SLA-ferskhet</strong> setter antall timer siden siste oppdatering før SLA-monitoren varsler brudd.</p>
+        <p class="mb-0"><strong>Tilgang</strong> bestemmer hvem som ser produktet:
+          <em>Offentlig</em> = alle, <em>Begrenset</em> = kun brukere som har fått tilgang.</p>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}
