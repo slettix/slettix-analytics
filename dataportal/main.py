@@ -867,6 +867,32 @@ def api_get_pipeline(product_id: str, request: Request, api_key: str | None = Se
     return _safe_pipeline(manifest.get("dag_id"))
 
 
+@app.patch("/api/products/{product_id}", tags=["products"], summary="Oppdater manifest-felter")
+async def api_patch_product(
+    product_id: str,
+    request: Request,
+    api_key: str | None = Security(_api_key_scheme),
+):
+    """
+    Oppdaterer enkeltfelter i et eksisterende produktmanifest.
+    Nyttig for å koble dag_id, oppdatere beskrivelse, tags osv.
+    Body: JSON-objekt med feltene som skal oppdateres (f.eks. {"dag_id": "01_slettix_pipeline"}).
+    Krever innlogging eller gyldig API-nøkkel.
+    """
+    user = auth.get_current_user(request)
+    if not user and not api_key:
+        raise HTTPException(status_code=401, detail="Krever innlogging eller API-nøkkel")
+
+    updates  = await request.json()
+    manifest = _resolve_product(product_id)
+
+    # Ikke tillat endring av id
+    updates.pop("id", None)
+    manifest.update(updates)
+    put(manifest)
+    return {"updated": list(updates.keys()), "product_id": product_id}
+
+
 @app.get("/api/products/{product_id}/quality", tags=["products"], summary="Siste GE-valideringsresultat")
 def api_get_quality(product_id: str, request: Request, api_key: str | None = Security(_api_key_scheme)):
     manifest = _resolve_product(product_id)
@@ -1391,20 +1417,47 @@ def page_product(request: Request, product_id: str):
     ))
 
 
+def _list_airflow_dags() -> list[str]:
+    """Hent alle DAG-IDer fra Airflow. Returnerer tom liste ved feil."""
+    try:
+        resp = httpx.get(
+            f"{AIRFLOW_URL}/api/v1/dags",
+            params={"limit": 100, "only_active": "true"},
+            auth=(AIRFLOW_USER, AIRFLOW_PASS),
+            timeout=5.0,
+        )
+        resp.raise_for_status()
+        return [d["dag_id"] for d in resp.json().get("dags", [])]
+    except Exception:
+        return []
+
+
 @app.get("/pipelines", response_class=HTMLResponse, include_in_schema=False)
 def page_pipelines(request: Request):
-    products    = list_all()
+    products = list_all()
+
+    # Bygg oppslag: dag_id → liste av produktnavn (fra manifester som har dag_id satt)
     dag_products: dict[str, list[str]] = {}
     for p in products:
-        dag_id = p.get("dag_id")
-        if dag_id:
-            dag_products.setdefault(dag_id, []).append(p["name"])
+        if p.get("dag_id"):
+            dag_products.setdefault(p["dag_id"], []).append(p["name"])
+
+    # Hent alle aktive DAGs fra Airflow — vis dem uansett om de er koblet til et produkt
+    airflow_dag_ids = _list_airflow_dags()
+
+    # Slå sammen: alle kjente DAG-IDer (fra Airflow + fra manifester)
+    all_dag_ids = list(dict.fromkeys(airflow_dag_ids + list(dag_products.keys())))
 
     dags = []
-    for dag_id, product_names in dag_products.items():
+    for dag_id in all_dag_ids:
         last_run = _safe_pipeline(dag_id)
         timeline = _get_dag_timeline(dag_id)
-        dags.append({"dag_id": dag_id, "products": product_names, "last_run": last_run, "timeline": timeline})
+        dags.append({
+            "dag_id":   dag_id,
+            "products": dag_products.get(dag_id, []),
+            "last_run": last_run,
+            "timeline": timeline,
+        })
 
     airflow_ui = AIRFLOW_URL.replace("airflow-webserver", "localhost").replace(":8080", ":8081")
     return templates.TemplateResponse("pipelines.html", _template_ctx(

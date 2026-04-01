@@ -202,6 +202,35 @@ def validate_silver_employees(**context):
     log.info("Silver-validering OK — alle forventninger bestått.")
 
 
+def register_dag_link(**context):
+    """
+    Patcher dag_id inn i produktmanifestene i portalen.
+    Sikrer at pipeline-dashbordet viser riktig kobling mellom
+    DAG og dataprodukter. Kjøres etter build_gold, er idempotent.
+    """
+    import os
+    import requests
+
+    portal_url = os.environ.get("PORTAL_URL", "http://dataportal:8090")
+    api_key    = os.environ.get("PORTAL_API_KEY", "dev-key-change-me")
+    dag_id     = context["dag"].dag_id
+    log        = context["task_instance"].log
+
+    products = ["hr.employees", "hr.department_stats"]
+    for product_id in products:
+        try:
+            resp = requests.patch(
+                f"{portal_url}/api/products/{product_id}",
+                json={"dag_id": dag_id},
+                headers={"X-API-Key": api_key},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            log.info(f"Registrert dag_id='{dag_id}' på produkt '{product_id}'")
+        except Exception as exc:
+            log.warning(f"Kunne ikke registrere dag_id på '{product_id}': {exc}")
+
+
 def log_pipeline_success(**context):
     """Avsluttende task som bekrefter at hele pipeline er fullført."""
     run_id   = context["run_id"]
@@ -285,9 +314,14 @@ with DAG(
         execution_timeout=timedelta(minutes=10),
     )
 
+    register_link = PythonOperator(
+        task_id="register_dag_link",
+        python_callable=register_dag_link,
+    )
+
     complete = PythonOperator(
         task_id="pipeline_complete",
         python_callable=log_pipeline_success,
     )
 
-    ingest >> bronze_to_silver >> validate_silver >> build_gold >> complete
+    ingest >> bronze_to_silver >> validate_silver >> build_gold >> register_link >> complete
