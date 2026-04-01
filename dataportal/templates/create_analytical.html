@@ -1,0 +1,457 @@
+{% extends "base.html" %}
+{% block title %}Lag analytisk dataprodukt — Slettix Analytics{% endblock %}
+
+{% block content %}
+
+{# ── Breadcrumb ── #}
+<nav aria-label="breadcrumb" class="mb-3">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="/">Katalog</a></li>
+    <li class="breadcrumb-item active">Lag analytisk dataprodukt</li>
+  </ol>
+</nav>
+
+<h1 class="h3 mb-1"><i class="bi bi-graph-up me-2"></i>Lag analytisk dataprodukt</h1>
+<p class="text-muted mb-4">Veiviser for å sette opp et nytt analytisk dataprodukt basert på eksisterende kildeprodukter.</p>
+
+{# ── Stegindikator ── #}
+<div class="d-flex align-items-center mb-4 gap-0" id="step-indicator">
+  {% for num, label in [("1","Kildeprodukter"), ("2","Metadata"), ("3","Oppdatering"), ("4","Oppsummering")] %}
+  <div class="step-item d-flex align-items-center" data-step="{{ num }}">
+    <div class="step-circle rounded-circle d-flex align-items-center justify-content-center fw-bold"
+         style="width:2rem;height:2rem;font-size:.85rem;
+                background:{% if loop.first %}#212529{% else %}#dee2e6{% endif %};
+                color:{% if loop.first %}#fff{% else %}#6c757d{% endif %};">
+      {{ num }}
+    </div>
+    <span class="ms-2 small {% if not loop.first %}text-muted{% endif %} step-label">{{ label }}</span>
+    {% if not loop.last %}<div class="mx-2" style="height:2px;width:3rem;background:#dee2e6;"></div>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+{# ═══════════════ STEG 1: VELG KILDEPRODUKTER ════════════════ #}
+<div id="step-1" class="step-panel">
+  <div class="card mb-3">
+    <div class="card-header bg-white fw-semibold">
+      <i class="bi bi-box me-2"></i>Velg kildeprodukter
+      <span class="text-muted fw-normal small ms-2">— minst ett påkrevd</span>
+    </div>
+    <div class="card-body">
+      <div class="input-group mb-3">
+        <span class="input-group-text bg-white"><i class="bi bi-search"></i></span>
+        <input id="source-search" type="text" class="form-control" placeholder="Filtrer produkter…">
+      </div>
+      <div class="row g-2" id="source-product-list">
+        {% for p in source_products %}
+        <div class="col-md-6 source-item"
+             data-name="{{ p.name|lower }} {{ p.domain }} {{ p.id }}">
+          <label class="card p-3 d-flex flex-row align-items-start gap-3 cursor-pointer source-card"
+                 style="cursor:pointer;">
+            <input type="checkbox" class="form-check-input mt-1 flex-shrink-0 source-checkbox"
+                   value="{{ p.id }}" data-name="{{ p.name }}" data-domain="{{ p.domain }}">
+            <div>
+              <div class="fw-semibold">{{ p.name }}</div>
+              <div class="text-muted small">
+                <span class="badge bg-secondary me-1">{{ p.domain }}</span>
+                <code>{{ p.id }}</code>
+              </div>
+              {% if p.description %}
+              <div class="text-muted small mt-1" style="display:-webkit-box;-webkit-line-clamp:1;-webkit-box-orient:vertical;overflow:hidden">
+                {{ p.description }}
+              </div>
+              {% endif %}
+            </div>
+          </label>
+        </div>
+        {% else %}
+        <div class="col-12 text-muted text-center py-3">Ingen kildeprodukter registrert.</div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+  <div class="d-flex justify-content-between align-items-center">
+    <span id="source-selected-text" class="text-muted small">Ingen valgt</span>
+    <button class="btn btn-dark" id="step1-next" disabled>
+      Neste <i class="bi bi-chevron-right ms-1"></i>
+    </button>
+  </div>
+</div>
+
+{# ═══════════════ STEG 2: METADATA ════════════════ #}
+<div id="step-2" class="step-panel d-none">
+  <div class="card mb-3">
+    <div class="card-header bg-white fw-semibold">
+      <i class="bi bi-card-text me-2"></i>Produktinformasjon
+    </div>
+    <div class="card-body">
+      <div class="row g-3">
+        <div class="col-md-6">
+          <label class="form-label">Produkt-ID <span class="text-danger">*</span></label>
+          <div class="input-group">
+            <span class="input-group-text text-muted">analytics.</span>
+            <input id="f-product-suffix" type="text" class="form-control font-monospace"
+                   placeholder="mitt_produkt" required>
+          </div>
+          <div class="form-text">Fullt ID blir <code id="f-id-preview">analytics.mitt_produkt</code></div>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Navn <span class="text-danger">*</span></label>
+          <input id="f-name" type="text" class="form-control" placeholder="Mitt analytiske produkt" required>
+        </div>
+        <div class="col-12">
+          <label class="form-label">Beskrivelse <span class="text-danger">*</span></label>
+          <textarea id="f-description" class="form-control" rows="2"
+                    placeholder="Hva inneholder produktet og hvem er det for?"></textarea>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Domene</label>
+          <input id="f-domain" type="text" class="form-control" value="analytics">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Eier</label>
+          <input id="f-owner" type="text" class="form-control"
+                 value="{{ current_user.username if current_user else '' }}">
+        </div>
+        <div class="col-md-4">
+          <label class="form-label">Tilgang</label>
+          <select id="f-access" class="form-select">
+            <option value="public">Offentlig</option>
+            <option value="restricted">Begrenset</option>
+          </select>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">Tags <span class="text-muted small">(kommaseparert)</span></label>
+          <input id="f-tags" type="text" class="form-control" placeholder="ansatte, hr, analyse">
+        </div>
+        <div class="col-md-6">
+          <label class="form-label">SLA — ferskhet (timer)</label>
+          <input id="f-freshness" type="number" class="form-control" placeholder="24" min="1">
+        </div>
+      </div>
+    </div>
+  </div>
+  <div class="d-flex justify-content-between">
+    <button class="btn btn-outline-secondary" id="step2-back">
+      <i class="bi bi-chevron-left me-1"></i>Tilbake
+    </button>
+    <button class="btn btn-dark" id="step2-next">
+      Neste <i class="bi bi-chevron-right ms-1"></i>
+    </button>
+  </div>
+</div>
+
+{# ═══════════════ STEG 3: OPPDATERING ════════════════ #}
+<div id="step-3" class="step-panel d-none">
+  <div class="card mb-3">
+    <div class="card-header bg-white fw-semibold">
+      <i class="bi bi-arrow-repeat me-2"></i>Automatisk oppdatering med Airflow
+      <span class="text-muted fw-normal small ms-2">— valgfritt</span>
+    </div>
+    <div class="card-body">
+      <p class="text-muted small mb-3">
+        En Airflow DAG kjører notebooken automatisk på valgt frekvens og publiserer oppdatert data til portalen.
+        Krever at notebooken er ferdig med <code>publish_analytical()</code>-kallet.
+      </p>
+      <div class="row g-3">
+        <div class="col-12">
+          <label class="form-label fw-semibold">Oppdateringsfrekvens</label>
+          <div class="d-flex flex-wrap gap-2">
+            {% for val, label in schedule_labels.items() %}
+            <div class="form-check form-check-inline">
+              <input class="form-check-input" type="radio" name="schedule-radio"
+                     id="sched-{{ loop.index }}" value="{{ val }}"
+                     {% if val == "manual" %}checked{% endif %}>
+              <label class="form-check-label" for="sched-{{ loop.index }}">{{ label }}</label>
+            </div>
+            {% endfor %}
+          </div>
+        </div>
+        <div id="dag-id-row" class="col-md-6 d-none">
+          <label class="form-label">DAG-ID</label>
+          <input id="f-dag-id" type="text" class="form-control font-monospace"
+                 placeholder="analytical_mitt_produkt">
+          <div class="form-text">Blir DAG-filnavn i <code>airflow/dags/</code></div>
+        </div>
+      </div>
+      <div id="schedule-info" class="alert alert-info py-2 mt-3 d-none">
+        <i class="bi bi-info-circle me-2"></i>
+        <span id="schedule-info-text"></span>
+      </div>
+    </div>
+  </div>
+  <div class="d-flex justify-content-between">
+    <button class="btn btn-outline-secondary" id="step3-back">
+      <i class="bi bi-chevron-left me-1"></i>Tilbake
+    </button>
+    <button class="btn btn-dark" id="step3-next">
+      Neste <i class="bi bi-chevron-right ms-1"></i>
+    </button>
+  </div>
+</div>
+
+{# ═══════════════ STEG 4: OPPSUMMERING ════════════════ #}
+<div id="step-4" class="step-panel d-none">
+  <div class="card mb-3">
+    <div class="card-header bg-white fw-semibold">
+      <i class="bi bi-check2-circle me-2"></i>Oppsummering
+    </div>
+    <div class="card-body">
+      <div class="row g-4">
+        <div class="col-md-6">
+          <h6 class="text-muted mb-2">Kildeprodukter</h6>
+          <ul id="summary-sources" class="list-unstyled mb-0"></ul>
+        </div>
+        <div class="col-md-6">
+          <h6 class="text-muted mb-2">Produktdetaljer</h6>
+          <dl class="row mb-0 small" id="summary-details"></dl>
+        </div>
+        <div class="col-12">
+          <h6 class="text-muted mb-2">Hva som genereres</h6>
+          <ul class="list-unstyled small mb-0" id="summary-artifacts">
+            <li><i class="bi bi-journal-code me-2 text-warning"></i>
+              Notebook: <code id="summary-nb-file"></code>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="create-error" class="alert alert-danger d-none mb-3"></div>
+
+  <div class="d-flex justify-content-between align-items-center">
+    <button class="btn btn-outline-secondary" id="step4-back">
+      <i class="bi bi-chevron-left me-1"></i>Tilbake
+    </button>
+    <button class="btn btn-warning btn-lg" id="create-btn">
+      <i class="bi bi-rocket-takeoff me-2"></i>Generer og åpne i Jupyter
+    </button>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+// ── State ─────────────────────────────────────────────────────────────────────
+const state = {
+  sourceIds:      [],
+  sourceNames:    [],
+  productId:      "",
+  name:           "",
+  description:    "",
+  domain:         "analytics",
+  owner:          "",
+  access:         "public",
+  tags:           [],
+  freshness:      null,
+  schedule:       "manual",
+  dagId:          "",
+};
+
+// ── Steg-navigasjon ───────────────────────────────────────────────────────────
+function showStep(n) {
+  document.querySelectorAll(".step-panel").forEach(p => p.classList.add("d-none"));
+  document.getElementById(`step-${n}`).classList.remove("d-none");
+
+  document.querySelectorAll(".step-item .step-circle").forEach((el, i) => {
+    const active = i + 1 === n;
+    const done   = i + 1 < n;
+    el.style.background = active ? "#212529" : done ? "#198754" : "#dee2e6";
+    el.style.color      = active || done ? "#fff" : "#6c757d";
+    el.innerHTML        = done ? '<i class="bi bi-check"></i>' : (i + 1);
+  });
+  document.querySelectorAll(".step-item .step-label").forEach((el, i) => {
+    el.classList.toggle("text-muted", i + 1 > n);
+    el.classList.toggle("fw-semibold", i + 1 === n);
+  });
+}
+
+// ── Steg 1: kildeprodukter ────────────────────────────────────────────────────
+const sourceSearch    = document.getElementById("source-search");
+const step1NextBtn    = document.getElementById("step1-next");
+const selectedTextEl  = document.getElementById("source-selected-text");
+
+function updateStep1() {
+  const checked = [...document.querySelectorAll(".source-checkbox:checked")];
+  state.sourceIds   = checked.map(c => c.value);
+  state.sourceNames = checked.map(c => c.dataset.name);
+  step1NextBtn.disabled = checked.length === 0;
+  selectedTextEl.textContent = checked.length === 0
+    ? "Ingen valgt"
+    : `${checked.length} produkt${checked.length > 1 ? "er" : ""} valgt`;
+
+  // Auto-fyll DAG-ID og produkt-suffix om de er tomme
+  if (checked.length > 0 && !document.getElementById("f-product-suffix").value) {
+    const slug = checked.map(c => c.value.split(".").pop()).join("_");
+    document.getElementById("f-product-suffix").value = slug;
+    updateProductId();
+  }
+}
+
+document.querySelectorAll(".source-checkbox").forEach(cb =>
+  cb.addEventListener("change", updateStep1)
+);
+sourceSearch.addEventListener("input", () => {
+  const q = sourceSearch.value.toLowerCase();
+  document.querySelectorAll(".source-item").forEach(el =>
+    el.classList.toggle("d-none", q && !el.dataset.name.includes(q))
+  );
+});
+document.getElementById("step1-next").addEventListener("click", () => showStep(2));
+
+// ── Steg 2: metadata ──────────────────────────────────────────────────────────
+function updateProductId() {
+  const suffix  = document.getElementById("f-product-suffix").value.trim()
+    .toLowerCase().replace(/[^a-z0-9_]/g, "_");
+  const domain  = document.getElementById("f-domain").value.trim() || "analytics";
+  state.productId = `${domain}.${suffix}`;
+  document.getElementById("f-id-preview").textContent = state.productId;
+  // Auto-fill DAG-ID
+  if (!document.getElementById("f-dag-id").value) {
+    document.getElementById("f-dag-id").value = `analytical_${suffix}`;
+  }
+}
+
+["f-product-suffix", "f-domain"].forEach(id =>
+  document.getElementById(id).addEventListener("input", updateProductId)
+);
+
+document.getElementById("step2-back").addEventListener("click", () => showStep(1));
+document.getElementById("step2-next").addEventListener("click", () => {
+  const suffix = document.getElementById("f-product-suffix").value.trim();
+  const name   = document.getElementById("f-name").value.trim();
+  const desc   = document.getElementById("f-description").value.trim();
+  if (!suffix || !name || !desc) {
+    alert("Fyll inn Produkt-ID, Navn og Beskrivelse.");
+    return;
+  }
+  state.name        = name;
+  state.description = desc;
+  state.domain      = document.getElementById("f-domain").value.trim() || "analytics";
+  state.owner       = document.getElementById("f-owner").value.trim();
+  state.access      = document.getElementById("f-access").value;
+  state.tags        = document.getElementById("f-tags").value.split(",").map(t => t.trim()).filter(Boolean);
+  state.freshness   = parseInt(document.getElementById("f-freshness").value) || null;
+  showStep(3);
+});
+
+// ── Steg 3: oppdatering ───────────────────────────────────────────────────────
+const scheduleLabels = {{ schedule_labels | tojson }};
+const dagIdRow       = document.getElementById("dag-id-row");
+const scheduleInfo   = document.getElementById("schedule-info");
+const scheduleInfoTx = document.getElementById("schedule-info-text");
+
+document.querySelectorAll("input[name='schedule-radio']").forEach(r => {
+  r.addEventListener("change", () => {
+    const val = r.value;
+    const isManual = val === "manual";
+    dagIdRow.classList.toggle("d-none", isManual);
+    scheduleInfo.classList.toggle("d-none", isManual);
+    if (!isManual) {
+      scheduleInfoTx.textContent =
+        `DAG-fil genereres i airflow/dags/. Airflow kjører notebooken ${scheduleLabels[val].toLowerCase()}.`;
+    }
+    state.schedule = val;
+  });
+});
+
+document.getElementById("step3-back").addEventListener("click", () => showStep(2));
+document.getElementById("step3-next").addEventListener("click", () => {
+  state.schedule = document.querySelector("input[name='schedule-radio']:checked")?.value || "manual";
+  state.dagId    = document.getElementById("f-dag-id").value.trim()
+    || `analytical_${state.productId.split(".").pop()}`;
+  buildSummary();
+  showStep(4);
+});
+
+// ── Steg 4: oppsummering ──────────────────────────────────────────────────────
+function buildSummary() {
+  const srcList = document.getElementById("summary-sources");
+  srcList.innerHTML = state.sourceIds.map((id, i) =>
+    `<li><i class="bi bi-box me-2 text-muted"></i>${state.sourceNames[i]} <code class="text-muted">${id}</code></li>`
+  ).join("");
+
+  const details = document.getElementById("summary-details");
+  const rows = [
+    ["ID",          `<code>${state.productId}</code>`],
+    ["Navn",        state.name],
+    ["Domene",      state.domain],
+    ["Eier",        state.owner],
+    ["Tilgang",     state.access],
+    ["SLA",         state.freshness ? `${state.freshness}t` : "—"],
+    ["Tags",        state.tags.length ? state.tags.join(", ") : "—"],
+  ];
+  details.innerHTML = rows.map(([k,v]) =>
+    `<dt class="col-5 text-muted">${k}</dt><dd class="col-7">${v}</dd>`
+  ).join("");
+
+  const safeName = state.productId.replace(/[^a-zA-Z0-9_-]/g, "_");
+  const nbFile   = `product_${safeName}.ipynb`;
+  document.getElementById("summary-nb-file").textContent = nbFile;
+
+  const artifacts = document.getElementById("summary-artifacts");
+  let html = `<li><i class="bi bi-journal-code me-2 text-warning"></i>Notebook: <code>${nbFile}</code></li>`;
+  if (state.schedule !== "manual") {
+    html += `<li class="mt-1"><i class="bi bi-diagram-3 me-2 text-primary"></i>Airflow DAG: <code>${state.dagId}.py</code>
+      <span class="badge bg-secondary ms-1">${scheduleLabels[state.schedule]}</span></li>`;
+  }
+  artifacts.innerHTML = html;
+}
+
+document.getElementById("step4-back").addEventListener("click", () => showStep(3));
+
+// ── Generer ───────────────────────────────────────────────────────────────────
+document.getElementById("create-btn").addEventListener("click", async () => {
+  const btn = document.getElementById("create-btn");
+  const err = document.getElementById("create-error");
+  btn.disabled  = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Genererer…';
+  err.classList.add("d-none");
+
+  try {
+    const resp = await fetch("/api/create-analytical", {
+      method:  "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        product_id:      state.productId,
+        name:            state.name,
+        description:     state.description,
+        domain:          state.domain,
+        owner:           state.owner,
+        source_ids:      state.sourceIds,
+        tags:            state.tags,
+        freshness_hours: state.freshness,
+        access:          state.access,
+        schedule:        state.schedule,
+        dag_id:          state.dagId,
+      }),
+    });
+
+    if (!resp.ok) {
+      const text = await resp.text();
+      throw new Error(text);
+    }
+
+    const data = await resp.json();
+    if (data.dag_warning) {
+      err.textContent = "⚠ " + data.dag_warning;
+      err.classList.replace("alert-danger", "alert-warning");
+      err.classList.remove("d-none");
+    }
+    window.open(data.notebook_url, "_blank");
+    // Redirect til katalog
+    setTimeout(() => { window.location.href = "/"; }, 800);
+
+  } catch (e) {
+    let msg = e.message;
+    try { msg = JSON.parse(msg).detail || msg; } catch {}
+    err.textContent = msg;
+    err.classList.remove("d-none");
+    btn.disabled  = false;
+    btn.innerHTML = '<i class="bi bi-rocket-takeoff me-2"></i>Generer og åpne i Jupyter';
+  }
+});
+</script>
+{% endblock %}

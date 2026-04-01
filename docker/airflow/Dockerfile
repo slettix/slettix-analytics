@@ -17,5 +17,8 @@ RUN pip install --no-cache-dir \
     pyspark==3.5.8 \
     delta-spark==3.2.0 \
     apache-airflow-providers-apache-spark==4.* \
+    apache-airflow-providers-papermill==1.* \
     great-expectations>=1.0.0 \
-    deltalake>=0.17.0
+    deltalake>=0.17.0 \
+    papermill>=2.6.0 \
+    requests>=2.31.0

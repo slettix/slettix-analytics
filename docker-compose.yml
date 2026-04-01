@@ -13,12 +13,17 @@ x-airflow-common:
     # Spark connection — host must include spark:// prefix so SparkSubmitOperator
     # builds the correct --master spark://spark-master:7077 argument
     AIRFLOW_CONN_SPARK_DEFAULT: '{"conn_type": "spark", "host": "spark://spark-master", "port": 7077}'
+    PORTAL_URL:        http://dataportal:8090
+    MINIO_ENDPOINT:    http://minio:9000
+    MINIO_ACCESS_KEY:  ${MINIO_ROOT_USER}
+    MINIO_SECRET_KEY:  ${MINIO_ROOT_PASSWORD}
   volumes:
     - ./airflow/dags:/opt/airflow/dags
     - ./airflow/logs:/opt/airflow/logs
     - ./jobs:/opt/airflow/spark_jobs
     - ./conf:/opt/airflow/spark_conf
     - ./spark/logs:/opt/spark/logs
+    - ./notebooks:/home/spark/notebooks
   depends_on:
     postgres:
       condition: service_healthy
@@ -197,10 +202,12 @@ services:
       AWS_EC2_METADATA_DISABLED:   true
       PORTAL_API_KEY:              ${PORTAL_API_KEY:-dev-key-change-me}
       JUPYTER_URL:                 ${JUPYTER_URL:-http://localhost:8888}
+      DAGS_DIR:                    /opt/airflow/dags
     volumes:
       - ./dataportal:/opt/dataportal
       - ./jobs:/opt/dataportal/jobs
       - ./notebooks:/opt/dataportal/notebooks
+      - ./airflow/dags:/opt/airflow/dags
     depends_on:
       minio:
         condition: service_healthy

@@ -72,6 +72,7 @@ AIRFLOW_PASS = os.environ.get("AIRFLOW_PASS", "admin")
 PORTAL_API_KEY  = os.environ.get("PORTAL_API_KEY", "dev-key-change-me")
 JUPYTER_URL     = os.environ.get("JUPYTER_URL",    "http://localhost:8888")
 NOTEBOOKS_DIR   = os.environ.get("NOTEBOOKS_DIR",  "/opt/dataportal/notebooks")
+DAGS_DIR        = os.environ.get("DAGS_DIR",       "/opt/airflow/dags")
 _api_key_scheme = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 _STORAGE_OPTIONS = {
@@ -511,6 +512,142 @@ def _safe_filename(product_id: str) -> str:
 
 def _jupyter_open_url(filename: str) -> str:
     return f"{JUPYTER_URL}/lab/tree/{filename}"
+
+
+# ── DAG-generering ─────────────────────────────────────────────────────────────
+
+_SCHEDULE_LABELS = {
+    "@hourly":   "Hver time",
+    "@daily":    "Daglig (kl. 00:00)",
+    "@weekly":   "Ukentlig (mandag)",
+    "@monthly":  "Månedlig (1. i måneden)",
+    "manual":    "Manuell (ingen automatisk kjøring)",
+}
+
+
+def _generate_analytical_notebook(
+    manifests: list[dict],
+    product_id: str,
+    name: str,
+    description: str,
+    domain: str,
+    owner: str,
+    source_ids: list[str],
+    tags: list[str],
+    freshness_hours: int | None,
+    access: str,
+) -> dict:
+    """Genererer en analytisk notebook med loading, transformasjon og publish_analytical."""
+    var_names = []
+    load_cells = []
+    for m in manifests:
+        var = re.sub(r"[^a-z0-9]", "_", m["id"].lower())
+        var_names.append(var)
+        load_cells.append(_nb_cell("code", [
+            f'# Last {m["name"]}\n',
+            f'df_{var} = get_product("{m["id"]}")\n',
+            f'print(f"{{len(df_{var})}} rader, {{len(df_{var}.columns)}} kolonner")\n',
+            f"df_{var}.head()",
+        ]))
+
+    join_example = ""
+    if len(var_names) >= 2:
+        join_example = (
+            f"# Eksempel: slå sammen {var_names[0]} og {var_names[1]}\n"
+            f"# result = df_{var_names[0]}.merge(df_{var_names[1]}, on='<nøkkel>')\n"
+        )
+
+    cells = [
+        _nb_cell("markdown", [
+            f"# {name}\n\n",
+            f"{description}\n\n",
+            f"**Domene:** {domain} | **Eier:** {owner}\n\n",
+            f"**Kildeprodukter:** {', '.join(f'`{s}`' for s in source_ids)}\n",
+        ]),
+        _nb_cell("code", [
+            "import sys\n",
+            "# Støtter både Jupyter- og Airflow-kontekst\n",
+            'for _p in ["/home/spark/jobs", "/opt/airflow/spark_jobs"]:\n',
+            "    if _p not in sys.path:\n",
+            "        sys.path.insert(0, _p)\n",
+            "\n",
+            "from slettix_client import get_product, publish_analytical\n",
+            "import pandas as pd\n",
+        ]),
+        _nb_cell("markdown", ["## 1. Last kildeprodukter\n"]),
+        *load_cells,
+        _nb_cell("markdown", ["## 2. Transformasjon\n\nLegg til din analyse her."]),
+        _nb_cell("code", [
+            join_example or "# Legg til din transformasjon her\n",
+            "\n",
+            "# result = ...  ← bytt ut med din DataFrame\n",
+            f"result = df_{var_names[0]}  # TODO: erstatt med faktisk logikk\n",
+        ]),
+        _nb_cell("markdown", ["## 3. Publiser analytisk dataprodukt\n"]),
+        _nb_cell("code", [
+            "publish_analytical(\n",
+            "    df=result,\n",
+            f'    product_id="{product_id}",\n',
+            f'    name="{name}",\n',
+            f'    description="{description}",\n',
+            f'    domain="{domain}",\n',
+            f'    owner="{owner}",\n',
+            f"    source_products={json.dumps(source_ids)},\n",
+            f'    access="{access}",\n',
+            f"    tags={json.dumps(tags)},\n",
+            ")\n",
+        ]),
+    ]
+
+    return {
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {
+            "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+            "language_info": {"name": "python", "version": "3.11.0"},
+        },
+        "cells": cells,
+    }
+
+
+def _generate_airflow_dag(
+    dag_id: str,
+    product_id: str,
+    product_name: str,
+    notebook_filename: str,
+    schedule: str,
+    domain: str,
+    owner: str,
+) -> str:
+    """Genererer en Airflow DAG som kjører notebooken via PapermillOperator."""
+    safe_id = re.sub(r"[^a-zA-Z0-9_]", "_", product_id)
+    return f'''"""
+Airflow DAG — Analytisk dataprodukt: {product_name}
+Produkt-ID : {product_id}
+Auto-generert av Slettix Analytics Portal
+"""
+from datetime import datetime
+from airflow import DAG
+from airflow.providers.papermill.operators.papermill import PapermillOperator
+
+with DAG(
+    dag_id="{dag_id}",
+    schedule_interval={repr(schedule) if schedule != "manual" else "None"},
+    start_date=datetime(2024, 1, 1),
+    catchup=False,
+    tags=["analytical", "{domain}"],
+    doc_md="""
+    Kjører analytisk notebook for **{product_name}** og publiserer resultatet
+    som dataprodukt `{product_id}` i Slettix Data Portal.
+    """,
+) as dag:
+    run_notebook = PapermillOperator(
+        task_id="run_notebook",
+        input_nb="/home/spark/notebooks/{notebook_filename}",
+        output_nb="/home/spark/notebooks/output/{safe_id}_{{{{ ds }}}}.ipynb",
+        parameters={{"run_date": "{{{{ ds }}}}"}},
+    )
+'''
 
 
 # ── API: Delta Lake-browser ───────────────────────────────────────────────────
@@ -967,6 +1104,89 @@ async def page_create_access_request(request: Request):
 
 
 @app.get("/browse", response_class=HTMLResponse, include_in_schema=False)
+def page_create_analytical(request: Request):
+    user = auth.get_current_user(request)
+    if not user:
+        return RedirectResponse("/login?next=/create-analytical", status_code=303)
+    source_products = [p for p in list_all() if p.get("product_type", "source") != "analytical"]
+    return templates.TemplateResponse("create_analytical.html", _template_ctx(
+        request,
+        source_products=source_products,
+        schedule_labels=_SCHEDULE_LABELS,
+    ))
+
+
+@app.post("/api/create-analytical", tags=["jupyter"], summary="Opprett analytisk dataprodukt")
+async def api_create_analytical(request: Request):
+    """
+    Genererer notebook og (valgfritt) Airflow DAG for et nytt analytisk dataprodukt.
+    Body: {product_id, name, description, domain, owner, source_ids, tags,
+           freshness_hours, access, schedule, dag_id}
+    """
+    user = auth.get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Logg inn for å opprette analytiske produkter")
+
+    body            = await request.json()
+    product_id      = body.get("product_id", "").strip()
+    name            = body.get("name", "").strip()
+    description     = body.get("description", "").strip()
+    domain          = body.get("domain", "analytics").strip()
+    owner           = body.get("owner", user["username"]).strip()
+    source_ids      = body.get("source_ids", [])
+    tags            = body.get("tags", [])
+    freshness_hours = body.get("freshness_hours")
+    access          = body.get("access", "public")
+    schedule        = body.get("schedule", "manual")
+    dag_id          = body.get("dag_id", "").strip() or re.sub(r"[^a-z0-9_]", "_", product_id)
+
+    if not product_id or not name or not source_ids:
+        raise HTTPException(status_code=422, detail="product_id, name og source_ids er påkrevd")
+
+    # Hent manifester for kildeprodukter
+    manifests = []
+    for sid in source_ids:
+        try:
+            manifests.append(get(sid))
+        except KeyError:
+            raise HTTPException(status_code=404, detail=f"Kildeprodukt '{sid}' ikke funnet")
+
+    # Generer notebook
+    nb           = _generate_analytical_notebook(
+        manifests, product_id, name, description, domain, owner,
+        source_ids, tags, freshness_hours, access,
+    )
+    nb_filename  = _safe_filename(product_id)
+    nb_path      = _notebook_path(nb_filename)
+    pathlib.Path(NOTEBOOKS_DIR).mkdir(parents=True, exist_ok=True)
+    # Opprett output/-mappe for Papermill
+    pathlib.Path(NOTEBOOKS_DIR, "output").mkdir(parents=True, exist_ok=True)
+    nb_path.write_text(json.dumps(nb, ensure_ascii=False, indent=1))
+
+    result = {
+        "notebook_filename": nb_filename,
+        "notebook_url":      _jupyter_open_url(nb_filename),
+        "dag_created":       False,
+    }
+
+    # Generer Airflow DAG om schedule er valgt
+    if schedule != "manual":
+        dag_content  = _generate_airflow_dag(dag_id, product_id, name, nb_filename, schedule, domain, owner)
+        dag_filename = f"{dag_id}.py"
+        dag_path     = pathlib.Path(DAGS_DIR) / dag_filename
+        try:
+            dag_path.write_text(dag_content)
+            result["dag_created"]  = True
+            result["dag_id"]       = dag_id
+            result["dag_filename"] = dag_filename
+            result["schedule"]     = schedule
+        except Exception as exc:
+            result["dag_warning"] = f"Notebook OK, men DAG-fil kunne ikke skrives: {exc}"
+
+    return result
+
+
+@app.get("/create-analytical", response_class=HTMLResponse, include_in_schema=False)
 def page_browse(request: Request):
     user = auth.get_current_user(request)
     if not user:
