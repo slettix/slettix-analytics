@@ -53,6 +53,11 @@
           </a>
         </li>
         <li class="nav-item">
+          <a id="jupyter-nav-link" class="nav-link" href="http://localhost:8888/lab/tree/notebooks" target="_blank">
+            <i class="bi bi-journal-code me-1"></i>Jupyter
+          </a>
+        </li>
+        <li class="nav-item">
           <a class="nav-link" href="/docs" target="_blank">
             <i class="bi bi-code-slash me-1"></i>API
           </a>
@@ -94,6 +99,29 @@
 </footer>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+  // Oppdater Jupyter-lenken til å peke på produktets notebook om den finnes
+  (function () {
+    const link = document.getElementById("jupyter-nav-link");
+    if (!link) return;
+    const m = window.location.pathname.match(/^\/products\/(.+)$/);
+    if (!m) return;
+    const productId = m[1];
+    fetch(`/api/products/${productId}/notebook`, {method: "HEAD"})
+      .catch(() => {});
+    // Sjekk om notebook-filen eksisterer via produktets notebook-endepunkt (ingen generering)
+    fetch(`/api/products/${productId}`)
+      .then(r => r.json())
+      .then(data => {
+        const pid      = data.manifest && data.manifest.id;
+        const filename = pid ? "product_" + pid.replace(/[^a-zA-Z0-9_-]/g, "_") + ".ipynb" : null;
+        if (filename) {
+          link.href = `http://localhost:8888/lab/tree/notebooks/${filename}`;
+        }
+      })
+      .catch(() => {});
+  })();
+</script>
 {% block scripts %}{% endblock %}
 </body>
 </html>

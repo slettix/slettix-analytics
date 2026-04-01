@@ -34,6 +34,8 @@ UI (HTML):
 
 import json
 import os
+import pathlib
+import re
 import sys
 from datetime import date, datetime, timedelta, timezone
 
@@ -68,6 +70,8 @@ AIRFLOW_USER = os.environ.get("AIRFLOW_USER", "admin")
 AIRFLOW_PASS = os.environ.get("AIRFLOW_PASS", "admin")
 
 PORTAL_API_KEY  = os.environ.get("PORTAL_API_KEY", "dev-key-change-me")
+JUPYTER_URL     = os.environ.get("JUPYTER_URL",    "http://localhost:8888")
+NOTEBOOKS_DIR   = os.environ.get("NOTEBOOKS_DIR",  "/opt/dataportal/notebooks")
 _api_key_scheme = APIKeyHeader(name="X-API-Key", auto_error=False)
 
 _STORAGE_OPTIONS = {
@@ -362,6 +366,137 @@ def _clear_auth_cookies(response) -> None:
     response.delete_cookie("refresh_token")
 
 
+# ── Notebook-generering ────────────────────────────────────────────────────────
+
+def _nb_cell(cell_type: str, source: str | list[str], **extra) -> dict:
+    if isinstance(source, str):
+        source = source.splitlines(keepends=True)
+    base = {"cell_type": cell_type, "metadata": {}, "source": source}
+    if cell_type == "code":
+        base.update({"execution_count": None, "outputs": []})
+    return {**base, **extra}
+
+
+def _generate_product_notebook(manifest: dict, quality: dict | None, schema: list | None) -> dict:
+    """Generer en komplett analyseklar .ipynb for ett dataprodukt."""
+    pid  = manifest["id"]
+    name = manifest["name"]
+    cols = ", ".join(f"`{c['name']}`" for c in (schema or [])[:8])
+    col_extra = f" … (+{len(schema)-8} til)" if schema and len(schema) > 8 else ""
+
+    q_score = quality.get("score_pct") if quality else None
+    q_line  = f"**Kvalitetsscore:** {q_score}%" if q_score is not None else "_Ingen kvalitetsresultater ennå._"
+
+    cells = [
+        _nb_cell("markdown", [
+            f"# {name}\n\n",
+            f"| Felt | Verdi |\n|------|-------|\n",
+            f"| **ID** | `{pid}` |\n",
+            f"| **Domene** | {manifest.get('domain','')} |\n",
+            f"| **Eier** | {manifest.get('owner','')} |\n",
+            f"| **Format** | {manifest.get('format','delta')} |\n",
+            f"| **Tilgang** | {manifest.get('access','public')} |\n\n",
+            f"{manifest.get('description','')}\n\n",
+            f"**Kolonner:** {cols}{col_extra}\n\n",
+            f"{q_line}\n",
+        ]),
+        _nb_cell("code", [
+            "import sys\n",
+            'sys.path.insert(0, "/home/spark/jobs")\n',
+            "\n",
+            "from slettix_client import get_product, get_manifest, get_quality, get_sla\n",
+            "\n",
+            f'PRODUCT_ID = "{pid}"\n',
+        ]),
+        _nb_cell("code", [
+            "df = get_product(PRODUCT_ID)\n",
+            "print(f'Lastet {len(df)} rader, {len(df.columns)} kolonner')\n",
+            "df.head()",
+        ]),
+        _nb_cell("code", [
+            "# Datakvalitet og SLA\n",
+            "quality = get_quality(PRODUCT_ID)\n",
+            "sla     = get_sla(PRODUCT_ID)\n",
+            "print(f\"Kvalitet : {quality.get('score_pct')}% ({quality.get('passed')}/{quality.get('total_expectations')} forventninger)\")\n",
+            "print(f\"SLA      : {'OK' if sla.get('compliant') else 'BRUDD'} — {sla.get('hours_since_update')}t siden oppdatering\")",
+        ]),
+        _nb_cell("code", [
+            "# Grunnleggende statistikk\n",
+            "df.describe(include='all')",
+        ]),
+        _nb_cell("markdown", ["## Analyse\n\nLegg til din analyse her."]),
+        _nb_cell("code", ["# Din analyse her\n"]),
+    ]
+
+    return {
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {
+            "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+            "language_info": {"name": "python", "version": "3.11.0"},
+        },
+        "cells": cells,
+    }
+
+
+def _generate_multi_notebook(manifests: list[dict]) -> dict:
+    """Generer en sammenstillings-notebook for flere produkter."""
+    names = ", ".join(m["name"] for m in manifests)
+    cells = [
+        _nb_cell("markdown", [
+            f"# Analytisk notebook — {names}\n\n",
+            f"Generert: {datetime.now(tz=timezone.utc).strftime('%Y-%m-%d %H:%M')} UTC\n",
+        ]),
+        _nb_cell("code", [
+            "import sys\n",
+            'sys.path.insert(0, "/home/spark/jobs")\n',
+            "from slettix_client import get_product\n",
+            "import pandas as pd\n",
+        ]),
+    ]
+
+    var_names = []
+    for m in manifests:
+        var = re.sub(r"[^a-z0-9]", "_", m["id"].lower())
+        var_names.append((var, m))
+        cells.append(_nb_cell("markdown", [f"## {m['name']}\n"]))
+        cells.append(_nb_cell("code", [
+            f'df_{var} = get_product("{m["id"]}")\n',
+            f'print(f"{{len(df_{var})}} rader, {{len(df_{var}.columns)}} kolonner")\n',
+            f"df_{var}.head()",
+        ]))
+
+    # Sammenstillingscelle
+    join_comment = "# Eksempel: slå sammen på felles nøkkel\n# result = df_{}.merge(df_{}, on='id')\n".format(
+        var_names[0][0], var_names[1][0]
+    ) if len(var_names) >= 2 else "# Legg til sammenstilling her\n"
+
+    cells.append(_nb_cell("markdown", ["## Sammenstilling\n"]))
+    cells.append(_nb_cell("code", [join_comment]))
+
+    return {
+        "nbformat": 4,
+        "nbformat_minor": 5,
+        "metadata": {
+            "kernelspec": {"display_name": "Python 3", "language": "python", "name": "python3"},
+            "language_info": {"name": "python", "version": "3.11.0"},
+        },
+        "cells": cells,
+    }
+
+
+def _notebook_path(filename: str) -> pathlib.Path:
+    return pathlib.Path(NOTEBOOKS_DIR) / filename
+
+
+def _safe_filename(product_id: str) -> str:
+    return "product_" + re.sub(r"[^a-zA-Z0-9_-]", "_", product_id) + ".ipynb"
+
+
+def _jupyter_open_url(filename: str) -> str:
+    return f"{JUPYTER_URL}/lab/tree/notebooks/{filename}"
+
+
 # ── API: Delta Lake-browser ───────────────────────────────────────────────────
 
 @app.get("/api/browser", tags=["browser"], summary="Naviger MinIO og detekter Delta-tabeller")
@@ -395,6 +530,72 @@ def api_browser(path: str = ""):
         return _browse_path(bucket, prefix)
     except Exception as exc:
         raise HTTPException(status_code=502, detail=str(exc))
+
+
+# ── API: Jupyter-notebook-generering ──────────────────────────────────────────
+
+@app.post("/api/products/{product_id}/notebook", tags=["jupyter"],
+          summary="Generer notebook for ett produkt")
+def api_generate_notebook(product_id: str, request: Request, force: bool = False):
+    """
+    Genererer en .ipynb for produktet og lagrer til notebooks/-mappen.
+    Returnerer Jupyter Lab-URL som åpner filen direkte.
+    Eksisterende notebook gjenbrukes med mindre ?force=true.
+    """
+    manifest = _resolve_product(product_id)
+    user     = auth.get_current_user(request)
+    _require_access(manifest, user, None)
+
+    filename = _safe_filename(product_id)
+    nb_path  = _notebook_path(filename)
+
+    if nb_path.exists() and not force:
+        return {"filename": filename, "url": _jupyter_open_url(filename), "created": False}
+
+    schema  = _safe_schema(manifest["source_path"])
+    quality = _safe_quality(product_id)
+    nb      = _generate_product_notebook(manifest, quality, schema)
+
+    pathlib.Path(NOTEBOOKS_DIR).mkdir(parents=True, exist_ok=True)
+    nb_path.write_text(json.dumps(nb, ensure_ascii=False, indent=1))
+
+    return {"filename": filename, "url": _jupyter_open_url(filename), "created": True}
+
+
+@app.post("/api/notebooks/multi", tags=["jupyter"],
+          summary="Generer sammenstillings-notebook for flere produkter")
+async def api_generate_multi_notebook(request: Request):
+    """
+    Body: {"product_ids": ["id1", "id2"], "name": "valgfritt-navn"}
+    Genererer analytics_<timestamp>.ipynb (eller <name>.ipynb) og lagrer til notebooks/.
+    """
+    body        = await request.json()
+    product_ids = body.get("product_ids", [])
+    custom_name = (body.get("name") or "").strip()
+
+    if not product_ids:
+        raise HTTPException(status_code=422, detail="product_ids er påkrevd")
+
+    manifests = []
+    for pid in product_ids:
+        try:
+            manifests.append(get(pid))
+        except KeyError:
+            raise HTTPException(status_code=404, detail=f"Produkt '{pid}' ikke funnet")
+
+    if custom_name:
+        safe = re.sub(r"[^a-zA-Z0-9_-]", "_", custom_name)
+        filename = safe if safe.endswith(".ipynb") else safe + ".ipynb"
+    else:
+        ts       = datetime.now(tz=timezone.utc).strftime("%Y%m%d_%H%M%S")
+        filename = f"analytics_{ts}.ipynb"
+
+    nb      = _generate_multi_notebook(manifests)
+    nb_path = _notebook_path(filename)
+    pathlib.Path(NOTEBOOKS_DIR).mkdir(parents=True, exist_ok=True)
+    nb_path.write_text(json.dumps(nb, ensure_ascii=False, indent=1))
+
+    return {"filename": filename, "url": _jupyter_open_url(filename)}
 
 
 # ── auth: API ──────────────────────────────────────────────────────────────────
@@ -881,6 +1082,7 @@ def page_catalog(request: Request):
         products=products,
         domains=domains,
         all_tags=all_tags,
+        jupyter_url=JUPYTER_URL,
     ))
 
 
@@ -921,6 +1123,11 @@ def page_product(request: Request, product_id: str):
             for r in existing
         )
 
+    # Sjekk om notebook allerede finnes
+    nb_filename     = _safe_filename(product_id)
+    nb_exists       = _notebook_path(nb_filename).exists()
+    jupyter_nb_url  = _jupyter_open_url(nb_filename) if nb_exists else None
+
     return templates.TemplateResponse("product.html", _template_ctx(
         request,
         manifest=manifest,
@@ -933,6 +1140,9 @@ def page_product(request: Request, product_id: str):
         has_access=has_access,
         is_restricted=is_restricted,
         pending_request=pending_request,
+        nb_filename=nb_filename,
+        jupyter_nb_url=jupyter_nb_url,
+        jupyter_url=JUPYTER_URL,
     ))
 
 

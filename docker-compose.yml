@@ -195,9 +195,11 @@ services:
       AWS_DEFAULT_REGION:          us-east-1
       AWS_EC2_METADATA_DISABLED:   true
       PORTAL_API_KEY:              ${PORTAL_API_KEY:-dev-key-change-me}
+      JUPYTER_URL:                 ${JUPYTER_URL:-http://localhost:8888}
     volumes:
       - ./dataportal:/opt/dataportal
       - ./jobs:/opt/dataportal/jobs
+      - ./notebooks:/opt/dataportal/notebooks
     depends_on:
       minio:
         condition: service_healthy

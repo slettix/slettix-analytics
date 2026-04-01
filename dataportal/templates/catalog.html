@@ -7,7 +7,39 @@
     <h1 class="h3 mb-0">Dataproduktkatalog</h1>
     <p class="text-muted mb-0">{{ products|length }} produkt{% if products|length != 1 %}er{% endif %} tilgjengelig</p>
   </div>
+  {% if current_user %}
+  <div class="ms-auto">
+    <button id="new-notebook-btn" class="btn btn-warning btn-sm d-none">
+      <i class="bi bi-journal-plus me-1"></i>Ny notebook med valgte
+      <span id="selected-count" class="badge bg-dark ms-1">0</span>
+    </button>
+  </div>
+  {% endif %}
 </div>
+
+{# ── Modal: gi notebooken et navn ── #}
+{% if current_user %}
+<div class="modal fade" id="notebookModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-journal-plus me-2"></i>Ny notebook</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <label class="form-label" for="nb-name">Navn på notebook <span class="text-muted small">(valgfritt)</span></label>
+        <input id="nb-name" type="text" class="form-control" placeholder="analytics_mitt_prosjekt">
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Avbryt</button>
+        <button id="create-notebook-btn" type="button" class="btn btn-warning">
+          <i class="bi bi-upload me-1"></i>Generer og åpne
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
 
 {# ── søk og filter ── #}
 <div class="row g-2 mb-4">
@@ -30,9 +62,15 @@
   {% for p in products %}
   {% set pipeline_status = p._pipeline.status if p._pipeline else "unknown" %}
   {% set quality_score = p._quality.score_pct if p._quality else None %}
-  <div class="col-md-6 col-lg-4 product-card"
+  <div class="col-md-6 col-lg-4 product-card position-relative"
        data-domain="{{ p.domain }}"
        data-search="{{ p.name }} {{ p.description|default('') }} {{ p.tags|join(' ') }} {{ p.domain }} {{ p.owner }}">
+    {% if current_user %}
+    <div class="position-absolute" style="top:.75rem;right:.75rem;z-index:10;">
+      <input type="checkbox" class="form-check-input product-checkbox shadow-sm"
+             data-product-id="{{ p.id }}" title="Velg for notebook">
+    </div>
+    {% endif %}
     <a href="/products/{{ p.id }}" class="text-decoration-none">
       <div class="card h-100 p-3">
         <div class="d-flex justify-content-between align-items-start mb-2">
@@ -141,5 +179,54 @@
       applyFilters();
     });
   });
+
+  // ── Avkryssingsbokser og multi-notebook ──────────────────────────────────────
+  const newNotebookBtn   = document.getElementById("new-notebook-btn");
+  const selectedCountEl  = document.getElementById("selected-count");
+  const createNotebookBtn = document.getElementById("create-notebook-btn");
+  const notebookModal    = document.getElementById("notebookModal")
+    ? new bootstrap.Modal(document.getElementById("notebookModal")) : null;
+
+  function updateSelection() {
+    if (!newNotebookBtn) return;
+    const checked = document.querySelectorAll(".product-checkbox:checked");
+    const n       = checked.length;
+    selectedCountEl.textContent = n;
+    newNotebookBtn.classList.toggle("d-none", n === 0);
+  }
+
+  document.querySelectorAll(".product-checkbox").forEach(cb => {
+    cb.addEventListener("change", updateSelection);
+  });
+
+  if (newNotebookBtn) {
+    newNotebookBtn.addEventListener("click", () => notebookModal && notebookModal.show());
+  }
+
+  if (createNotebookBtn) {
+    createNotebookBtn.addEventListener("click", async () => {
+      const ids  = [...document.querySelectorAll(".product-checkbox:checked")]
+                     .map(cb => cb.dataset.productId);
+      const name = document.getElementById("nb-name").value.trim();
+      createNotebookBtn.disabled  = true;
+      createNotebookBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Genererer…';
+      try {
+        const resp = await fetch("/api/notebooks/multi", {
+          method:  "POST",
+          headers: {"Content-Type": "application/json"},
+          body:    JSON.stringify({product_ids: ids, name}),
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+        const data = await resp.json();
+        notebookModal.hide();
+        window.open(data.url, "_blank");
+      } catch (e) {
+        alert("Kunne ikke generere notebook: " + e.message);
+      } finally {
+        createNotebookBtn.disabled  = false;
+        createNotebookBtn.innerHTML = '<i class="bi bi-upload me-1"></i>Generer og åpne';
+      }
+    });
+  }
 </script>
 {% endblock %}

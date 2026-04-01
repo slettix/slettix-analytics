@@ -44,6 +44,19 @@
   {% else %}
     <span class="badge bg-warning text-dark align-self-center"><i class="bi bi-lock me-1"></i>Begrenset</span>
   {% endif %}
+  {% if has_access %}
+  <div class="ms-auto d-flex gap-2 align-self-center">
+    {% if jupyter_nb_url %}
+    <a href="{{ jupyter_nb_url }}" target="_blank" class="btn btn-sm btn-warning">
+      <i class="bi bi-journal-code me-1"></i>Åpne notebook
+    </a>
+    {% endif %}
+    <button id="open-jupyter-btn" class="btn btn-sm {% if jupyter_nb_url %}btn-outline-warning{% else %}btn-warning{% endif %}"
+            data-product-id="{{ manifest.id }}">
+      <i class="bi bi-journal-plus me-1"></i>{% if jupyter_nb_url %}Ny notebook{% else %}Åpne i Jupyter{% endif %}
+    </button>
+  </div>
+  {% endif %}
 </div>
 <p class="text-muted mb-2">{{ manifest.domain }} / {{ manifest.owner }}</p>
 
@@ -341,4 +354,30 @@ print(df.head())</pre>
 
   </div>{# /col-lg-4 #}
 </div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+  const btn = document.getElementById("open-jupyter-btn");
+  if (btn) {
+    btn.addEventListener("click", async () => {
+      const productId = btn.dataset.productId;
+      const force     = btn.textContent.trim().startsWith("Ny");
+      btn.disabled    = true;
+      btn.innerHTML   = '<span class="spinner-border spinner-border-sm me-1"></span>Genererer…';
+      try {
+        const resp = await fetch(`/api/products/${productId}/notebook?force=${force}`, {method: "POST"});
+        if (!resp.ok) throw new Error(await resp.text());
+        const data = await resp.json();
+        window.open(data.url, "_blank");
+        // Oppdater sideknapper etter generering
+        location.reload();
+      } catch (e) {
+        alert("Kunne ikke generere notebook: " + e.message);
+        btn.disabled  = false;
+        btn.innerHTML = '<i class="bi bi-journal-plus me-1"></i>Åpne i Jupyter';
+      }
+    });
+  }
+</script>
 {% endblock %}
