@@ -494,7 +494,7 @@ def _safe_filename(product_id: str) -> str:
 
 
 def _jupyter_open_url(filename: str) -> str:
-    return f"{JUPYTER_URL}/lab/tree/notebooks/{filename}"
+    return f"{JUPYTER_URL}/lab/tree/{filename}"
 
 
 # ── API: Delta Lake-browser ───────────────────────────────────────────────────

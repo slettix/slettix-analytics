@@ -53,7 +53,7 @@
           </a>
         </li>
         <li class="nav-item">
-          <a id="jupyter-nav-link" class="nav-link" href="http://localhost:8888/lab/tree/notebooks" target="_blank">
+          <a id="jupyter-nav-link" class="nav-link" href="http://localhost:8888/lab/tree" target="_blank">
             <i class="bi bi-journal-code me-1"></i>Jupyter
           </a>
         </li>
@@ -116,7 +116,7 @@
         const pid      = data.manifest && data.manifest.id;
         const filename = pid ? "product_" + pid.replace(/[^a-zA-Z0-9_-]/g, "_") + ".ipynb" : null;
         if (filename) {
-          link.href = `http://localhost:8888/lab/tree/notebooks/${filename}`;
+          link.href = `http://localhost:8888/lab/tree/${filename}`;
         }
       })
       .catch(() => {});
