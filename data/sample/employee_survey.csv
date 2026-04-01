@@ -1,0 +1,9 @@
+employee_id,survey_date,satisfaction_score,challenging_tasks_score,stay_2_years,trust_leadership,comments
+1,2024-11-01,7.5,8.5,1,1,Gode kolleger og interessante prosjekter. Ønsker mer fleksibel hjemmekontor-ordning.
+2,2024-11-01,6.0,6.0,1,1,Trives godt men savner tydeligere karrierevei og mer faglig utvikling.
+3,2024-11-01,8.5,9.0,1,1,Utfordrende og meningsfull jobb. Ledelsen er tydelig og støttende.
+4,2024-11-01,5.0,5.5,0,0,Usikker på fremtiden her. Mangler karrierevei og opplever lite anerkjennelse.
+5,2024-11-01,9.0,9.5,1,1,Elsker jobben — fantastisk team og svært utfordrende oppgaver. Ikke aktuelt å bytte.
+6,2024-11-01,4.0,4.5,0,0,Høyt press kombinert med lav lønn sammenlignet med bransjen. Vurderer aktivt andre tilbud.
+7,2024-11-01,8.0,10.0,1,1,Svært kompetente kolleger og spennende teknologi. Ledelsen leverer på sine løfter.
+8,2024-11-01,3.5,3.0,0,0,Vanskelig å se karriereveien. Oppgavene er lite utfordrende og lønn er under markedet.
