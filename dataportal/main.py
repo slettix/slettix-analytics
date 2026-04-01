@@ -889,7 +889,7 @@ async def api_patch_product(
     # Ikke tillat endring av id
     updates.pop("id", None)
     manifest.update(updates)
-    put(manifest)
+    register(manifest)
     return {"updated": list(updates.keys()), "product_id": product_id}
 
 
