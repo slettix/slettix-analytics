@@ -20,6 +20,7 @@ import requests
 from deltalake import DeltaTable
 
 PORTAL_URL       = os.environ.get("PORTAL_URL",        "http://dataportal:8090")
+PORTAL_API_KEY   = os.environ.get("PORTAL_API_KEY",    None)
 MINIO_ENDPOINT   = os.environ.get("MINIO_ENDPOINT",    "http://minio:9000")
 MINIO_ACCESS_KEY = os.environ.get("MINIO_ACCESS_KEY",  "admin")
 MINIO_SECRET_KEY = os.environ.get("MINIO_SECRET_KEY",  "changeme")
@@ -34,7 +35,8 @@ _STORAGE_OPTIONS = {
 
 
 def _headers(api_key: str | None) -> dict:
-    return {"X-API-Key": api_key} if api_key else {}
+    key = api_key or PORTAL_API_KEY
+    return {"X-API-Key": key} if key else {}
 
 
 def list_products(api_key: str | None = None) -> list[dict]:

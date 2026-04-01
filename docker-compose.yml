@@ -123,6 +123,7 @@ services:
       - "8888:8888"   # Jupyter Lab
     environment:
       PORTAL_URL:        http://dataportal:8090
+      PORTAL_API_KEY:    ${PORTAL_API_KEY:-dev-key-change-me}
       MINIO_ENDPOINT:    http://minio:9000
       MINIO_ACCESS_KEY:  ${MINIO_ROOT_USER}
       MINIO_SECRET_KEY:  ${MINIO_ROOT_PASSWORD}
