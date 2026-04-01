@@ -153,3 +153,113 @@ def get_quality(product_id: str, api_key: str | None = None) -> dict:
         raise PermissionError(f"Ingen tilgang til '{product_id}'.")
     resp.raise_for_status()
     return resp.json()
+
+
+def publish_analytical(
+    df: pd.DataFrame,
+    product_id: str,
+    name: str,
+    description: str,
+    domain: str,
+    owner: str,
+    source_products: list[str] | None = None,
+    access: str = "public",
+    tags: list[str] | None = None,
+    api_key: str | None = None,
+) -> dict:
+    """
+    Publiser en pandas DataFrame som et analytisk dataprodukt.
+
+    Skriver DataFrame til s3://analytics/<domain>/<product_name>/ som Delta-tabell
+    og registrerer produktet i portalen.
+
+    Args:
+        df:              DataFrame som skal publiseres.
+        product_id:      Unik ID på formen <domain>.<produkt> (f.eks. 'analytics.hr_combined').
+        name:            Lesbart navn på produktet.
+        description:     Hva produktet inneholder og hvem det er for.
+        domain:          Domenet produktet tilhører (f.eks. 'analytics').
+        owner:           Team eller person som eier produktet.
+        source_products: Liste av produkt-IDer dette produktet er bygget på.
+        access:          'public' eller 'restricted'.
+        tags:            Valgfrie søke-tags.
+        api_key:         API-nøkkel for portalen.
+
+    Returns:
+        Manifest-dict for det publiserte produktet.
+
+    Example:
+        >>> publish_analytical(
+        ...     df_result,
+        ...     product_id="analytics.hr_combined",
+        ...     name="HR kombinert",
+        ...     description="Ansatte med avdelingsinfo",
+        ...     domain="analytics",
+        ...     owner="analytiker-teamet",
+        ...     source_products=["hr.employees", "hr.department_stats"],
+        ... )
+    """
+    from deltalake.writer import write_deltalake
+
+    # Utled produktnavn fra ID (del etter punktum)
+    product_name = product_id.split(".")[-1] if "." in product_id else product_id
+    source_path  = f"s3://analytics/{domain}/{product_name}"
+
+    print(f"→ Skriver DataFrame ({len(df)} rader, {len(df.columns)} kolonner) til {source_path} ...")
+    write_deltalake(
+        source_path,
+        df,
+        mode="overwrite",
+        storage_options=_STORAGE_OPTIONS,
+    )
+    print("  ✓ Delta-tabell skrevet")
+
+    # Utled schema fra DataFrame-kolonner
+    _type_map = {
+        "int64": "long", "int32": "integer", "float64": "double", "float32": "float",
+        "bool": "boolean", "object": "string", "datetime64[ns]": "timestamp",
+    }
+    schema = [
+        {
+            "name":     col,
+            "type":     _type_map.get(str(df[col].dtype), str(df[col].dtype)),
+            "nullable": bool(df[col].isna().any()),
+        }
+        for col in df.columns
+    ]
+
+    manifest: dict = {
+        "id":              product_id,
+        "name":            name,
+        "description":     description,
+        "domain":          domain,
+        "owner":           owner,
+        "version":         "1.0.0",
+        "source_path":     source_path,
+        "format":          "delta",
+        "product_type":    "analytical",
+        "access":          access,
+        "schema":          schema,
+    }
+    if source_products:
+        manifest["source_products"] = source_products
+    if tags:
+        manifest["tags"] = tags
+
+    print(f"→ Registrerer '{product_id}' i portalen ...")
+    resp = requests.post(
+        f"{PORTAL_URL}/api/products",
+        json=manifest,
+        headers=_headers(api_key),
+        timeout=15,
+    )
+    if resp.status_code == 403:
+        raise PermissionError("Registrering krever innlogging eller gyldig API-nøkkel.")
+    resp.raise_for_status()
+
+    portal_url = f"{PORTAL_URL.replace('dataportal:8090', 'localhost:8090')}/products/{product_id}"
+    print(f"\n✓ Analytisk dataprodukt publisert!")
+    print(f"  Produkt-ID : {product_id}")
+    print(f"  Sti        : {source_path}")
+    print(f"  Portal     : {portal_url}")
+    return manifest

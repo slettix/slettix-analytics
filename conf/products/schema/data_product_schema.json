@@ -4,7 +4,16 @@
   "title": "DataProductManifest",
   "description": "Schema for a Slettix Analytics data product manifest",
   "type": "object",
-  "required": ["id", "name", "domain", "owner", "version", "description", "source_path", "format"],
+  "required": [
+    "id",
+    "name",
+    "domain",
+    "owner",
+    "version",
+    "description",
+    "source_path",
+    "format"
+  ],
   "additionalProperties": false,
   "properties": {
     "id": {
@@ -40,7 +49,11 @@
     },
     "format": {
       "type": "string",
-      "enum": ["delta", "parquet", "csv"],
+      "enum": [
+        "delta",
+        "parquet",
+        "csv"
+      ],
       "description": "Storage format of the data product"
     },
     "primary_key": {
@@ -71,13 +84,34 @@
     },
     "access": {
       "type": "string",
-      "enum": ["public", "restricted"],
+      "enum": [
+        "public",
+        "restricted"
+      ],
       "default": "public",
       "description": "Visibility: public = anyone, restricted = requires API key"
     },
+    "product_type": {
+      "type": "string",
+      "enum": [
+        "source",
+        "analytical"
+      ],
+      "default": "source",
+      "description": "source = platform pipeline product, analytical = consumer-created composition"
+    },
+    "source_products": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "description": "Product IDs this analytical product is built on (e.g. [\"hr.employees\"])"
+    },
     "tags": {
       "type": "array",
-      "items": { "type": "string" },
+      "items": {
+        "type": "string"
+      },
       "description": "Free-form tags for search and filtering"
     },
     "schema": {
@@ -86,12 +120,23 @@
       "items": {
         "type": "object",
         "properties": {
-          "name":        { "type": "string" },
-          "type":        { "type": "string" },
-          "nullable":    { "type": "boolean" },
-          "description": { "type": "string" }
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "nullable": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": "string"
+          }
         },
-        "required": ["name", "type"],
+        "required": [
+          "name",
+          "type"
+        ],
         "additionalProperties": false
       }
     }

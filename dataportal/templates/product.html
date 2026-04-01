@@ -39,6 +39,11 @@
 <div class="d-flex flex-wrap align-items-start gap-2 mb-1">
   <h1 class="h2 mb-0">{{ manifest.name }}</h1>
   <span class="badge bg-secondary align-self-center">v{{ manifest.version }}</span>
+  {% if manifest.product_type == "analytical" %}
+    <span class="badge bg-info text-dark align-self-center"><i class="bi bi-graph-up me-1"></i>Analytisk</span>
+  {% else %}
+    <span class="badge bg-dark align-self-center"><i class="bi bi-box me-1"></i>Kilde</span>
+  {% endif %}
   {% if manifest.access == "public" %}
     <span class="badge bg-success align-self-center"><i class="bi bi-globe me-1"></i>Offentlig</span>
   {% else %}
@@ -313,6 +318,25 @@ print(df.head())</pre>
         {% endif %}
       </div>
     </div>
+
+    {# basert på (analytiske produkter) #}
+    {% if source_product_manifests %}
+    <div class="card mb-4">
+      <div class="card-header bg-white fw-semibold">
+        <i class="bi bi-diagram-2 me-2"></i>Basert på
+      </div>
+      <ul class="list-group list-group-flush">
+        {% for sp in source_product_manifests %}
+        <li class="list-group-item">
+          <a href="/products/{{ sp.id }}" class="text-decoration-none">
+            <i class="bi bi-box me-2 text-muted"></i>{{ sp.name }}
+          </a>
+          <code class="text-muted small ms-2">{{ sp.id }}</code>
+        </li>
+        {% endfor %}
+      </ul>
+    </div>
+    {% endif %}
 
     {# versjonshistorikk som tidslinje #}
     {% if history %}

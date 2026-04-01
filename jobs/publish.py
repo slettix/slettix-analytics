@@ -155,6 +155,11 @@ def main() -> None:
         "--dry-run", action="store_true",
         help="Valider og vis hva som ville blitt publisert, uten å skrive til registeret",
     )
+    parser.add_argument(
+        "--type", choices=["source", "analytical"], default=None,
+        dest="product_type",
+        help="Produkttype: source (standard) eller analytical (konsument-skapt sammenstilling)",
+    )
     args = parser.parse_args()
 
     manifest_path = Path(args.manifest)
@@ -171,7 +176,13 @@ def main() -> None:
 
     print(f"→ Leser manifest: {manifest_path}")
     print(f"  Produkt : {manifest.get('id', '?')}")
+    print(f"  Type    : {manifest.get('product_type', 'source')}")
     print(f"  Versjon : {manifest.get('version', '?')} (i manifest)")
+
+    # Sett product_type fra CLI hvis oppgitt (CLI overstyrer manifest)
+    if args.product_type:
+        manifest["product_type"] = args.product_type
+    manifest.setdefault("product_type", "source")
 
     # 2. Valider mot JSON-skjema (uten schema-felt som vi legger til etterpå)
     manifest_for_validation = {k: v for k, v in manifest.items() if k != "schema"}

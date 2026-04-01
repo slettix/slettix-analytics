@@ -474,6 +474,22 @@ def _generate_multi_notebook(manifests: list[dict]) -> dict:
     cells.append(_nb_cell("markdown", ["## Sammenstilling\n"]))
     cells.append(_nb_cell("code", [join_comment]))
 
+    source_ids = [m["id"] for m in manifests]
+    cells.append(_nb_cell("markdown", ["## Publiser som analytisk dataprodukt\n"]))
+    cells.append(_nb_cell("code", [
+        "from slettix_client import publish_analytical\n",
+        "\n",
+        "# publish_analytical(\n",
+        "#     df=result,                          # DataFrame som skal publiseres\n",
+        f'#     product_id="analytics.mitt_produkt",\n',
+        '#     name="Mitt analytiske produkt",\n',
+        '#     description="Beskrivelse av produktet",\n',
+        '#     domain="analytics",\n',
+        '#     owner="mitt-team",\n',
+        f'#     source_products={json.dumps(source_ids)},\n',
+        "# )\n",
+    ]))
+
     return {
         "nbformat": 4,
         "nbformat_minor": 5,
@@ -1123,6 +1139,14 @@ def page_product(request: Request, product_id: str):
             for r in existing
         )
 
+    # Løs opp source_products til manifester for "Basert på"-seksjon
+    source_product_manifests = []
+    for spid in manifest.get("source_products", []):
+        try:
+            source_product_manifests.append(get(spid))
+        except KeyError:
+            source_product_manifests.append({"id": spid, "name": spid})
+
     # Sjekk om notebook allerede finnes
     nb_filename     = _safe_filename(product_id)
     nb_exists       = _notebook_path(nb_filename).exists()
@@ -1143,6 +1167,7 @@ def page_product(request: Request, product_id: str):
         nb_filename=nb_filename,
         jupyter_nb_url=jupyter_nb_url,
         jupyter_url=JUPYTER_URL,
+        source_product_manifests=source_product_manifests,
     ))
 
 

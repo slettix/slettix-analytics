@@ -2,6 +2,8 @@
 {% block title %}Datakatalog — Slettix Analytics{% endblock %}
 
 {% block content %}
+
+{# ── Header med notebook-knapp ── #}
 <div class="d-flex align-items-center mb-3">
   <div>
     <h1 class="h3 mb-0">Dataproduktkatalog</h1>
@@ -41,163 +43,284 @@
 </div>
 {% endif %}
 
-{# ── søk og filter ── #}
-<div class="row g-2 mb-4">
-  <div class="col-md-6">
-    <div class="input-group">
-      <span class="input-group-text bg-white"><i class="bi bi-search"></i></span>
-      <input id="search" type="text" class="form-control" placeholder="Søk etter navn, beskrivelse eller tags…">
-    </div>
-  </div>
-  <div class="col-md-6 d-flex flex-wrap gap-2 align-items-center">
-    <button class="btn btn-sm btn-dark domain-filter active" data-domain="">Alle</button>
-    {% for domain in domains %}
-    <button class="btn btn-sm btn-outline-secondary domain-filter" data-domain="{{ domain }}">{{ domain }}</button>
-    {% endfor %}
-  </div>
-</div>
+{# ── Faner: Kilde / Analytisk ── #}
+{% set source_products    = products | selectattr("product_type", "ne", "analytical") | list %}
+{% set analytical_products = products | selectattr("product_type", "equalto", "analytical") | list %}
 
-{# ── produktkort ── #}
-<div class="row g-3" id="product-grid">
-  {% for p in products %}
-  {% set pipeline_status = p._pipeline.status if p._pipeline else "unknown" %}
-  {% set quality_score = p._quality.score_pct if p._quality else None %}
-  <div class="col-md-6 col-lg-4 product-card position-relative"
-       data-domain="{{ p.domain }}"
-       data-search="{{ p.name }} {{ p.description|default('') }} {{ p.tags|join(' ') }} {{ p.domain }} {{ p.owner }}">
-    {% if current_user %}
-    <div class="position-absolute" style="top:.75rem;right:.75rem;z-index:10;">
-      <input type="checkbox" class="form-check-input product-checkbox shadow-sm"
-             data-product-id="{{ p.id }}" title="Velg for notebook">
-    </div>
-    {% endif %}
-    <a href="/products/{{ p.id }}" class="text-decoration-none">
-      <div class="card h-100 p-3">
-        <div class="d-flex justify-content-between align-items-start mb-2">
-          <h5 class="mb-0 text-dark">{{ p.name }}</h5>
-          {# pipeline statusindikatorer #}
-          {% if pipeline_status == "success" %}
-            <span class="status-dot bg-success" title="Pipeline OK"></span>
-          {% elif pipeline_status == "failed" %}
-            <span class="status-dot bg-danger" title="Pipeline feilet"></span>
-          {% elif pipeline_status in ("running", "queued") %}
-            <span class="status-dot bg-primary" title="Pipeline kjører"></span>
-          {% else %}
-            <span class="status-dot bg-secondary" title="Ukjent status"></span>
-          {% endif %}
-        </div>
+<ul class="nav nav-tabs mb-0" id="catalogTabs" role="tablist">
+  <li class="nav-item">
+    <button class="nav-link active" id="tab-source-btn" data-bs-toggle="tab"
+            data-bs-target="#tab-source" type="button">
+      <i class="bi bi-box me-1"></i>Kildeprodukter
+      <span class="badge bg-secondary ms-1">{{ source_products|length }}</span>
+    </button>
+  </li>
+  <li class="nav-item">
+    <button class="nav-link" id="tab-analytical-btn" data-bs-toggle="tab"
+            data-bs-target="#tab-analytical" type="button">
+      <i class="bi bi-graph-up me-1"></i>Analytiske produkter
+      <span class="badge bg-info text-dark ms-1">{{ analytical_products|length }}</span>
+    </button>
+  </li>
+</ul>
 
-        <div class="mb-2">
-          <span class="badge bg-secondary me-1">{{ p.domain }}</span>
-          <span class="text-muted small"><i class="bi bi-person me-1"></i>{{ p.owner }}</span>
-        </div>
+<div class="tab-content border border-top-0 rounded-bottom p-3 bg-white mb-4">
 
-        {% if p.description %}
-        <p class="text-muted small mb-2" style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">
-          {{ p.description }}
-        </p>
-        {% endif %}
+  {# ══ FANE 1: KILDEPRODUKTER ══ #}
+  <div class="tab-pane fade show active" id="tab-source">
 
-        {% if p.tags %}
-        <div class="mb-2">
-          {% for tag in p.tags[:4] %}
-          <span class="badge rounded-pill bg-light text-dark border me-1">{{ tag }}</span>
-          {% endfor %}
-        </div>
-        {% endif %}
-
-        <div class="mt-auto pt-2 border-top d-flex justify-content-between align-items-center">
-          {# kvalitetsscore #}
-          {% if quality_score is not none %}
-            {% if quality_score == 100 %}
-              <span class="small text-success"><i class="bi bi-shield-check me-1"></i>{{ quality_score }}%</span>
-            {% elif quality_score >= 80 %}
-              <span class="small text-warning"><i class="bi bi-shield-exclamation me-1"></i>{{ quality_score }}%</span>
-            {% else %}
-              <span class="small text-danger"><i class="bi bi-shield-x me-1"></i>{{ quality_score }}%</span>
-            {% endif %}
-          {% else %}
-            <span class="small text-muted"><i class="bi bi-shield me-1"></i>Ingen data</span>
-          {% endif %}
-
-          <div class="d-flex align-items-center gap-2">
-            {# SLA-indikator #}
-            {% if p._sla and p._sla.compliant is not none %}
-              {% if not p._sla.compliant %}
-                <span class="badge bg-danger" style="font-size:.6rem;" title="SLA-brudd: {{ p._sla.hours_since_update }}t siden oppdatering">SLA ✕</span>
-              {% endif %}
-            {% endif %}
-            <span class="badge bg-light text-dark border">{{ p.format }}</span>
-          </div>
+    {# søk og filter #}
+    <div class="row g-2 mb-3 mt-1">
+      <div class="col-md-6">
+        <div class="input-group">
+          <span class="input-group-text bg-white"><i class="bi bi-search"></i></span>
+          <input id="search-source" type="text" class="form-control tab-search"
+                 data-tab="source" placeholder="Søk etter navn, beskrivelse eller tags…">
         </div>
       </div>
-    </a>
-  </div>
-  {% else %}
-  <div class="col-12 text-center py-5 text-muted">
-    <i class="bi bi-inbox fs-1 d-block mb-2"></i>
-    Ingen dataprodukter er registrert ennå.
-  </div>
-  {% endfor %}
-</div>
+      <div class="col-md-6 d-flex flex-wrap gap-2 align-items-center">
+        <button class="btn btn-sm btn-dark domain-filter-source active" data-domain="">Alle</button>
+        {% for domain in domains %}
+        <button class="btn btn-sm btn-outline-secondary domain-filter-source"
+                data-domain="{{ domain }}">{{ domain }}</button>
+        {% endfor %}
+      </div>
+    </div>
 
-<div id="no-results" class="text-center py-5 text-muted d-none">
-  <i class="bi bi-search fs-1 d-block mb-2"></i>Ingen produkter matcher søket.
-</div>
+    <div class="row g-3" id="source-grid">
+      {% for p in source_products %}
+      {% set pipeline_status = p._pipeline.status if p._pipeline else "unknown" %}
+      {% set quality_score   = p._quality.score_pct if p._quality else None %}
+      <div class="col-md-6 col-lg-4 product-card source-card position-relative"
+           data-domain="{{ p.domain }}"
+           data-search="{{ p.name }} {{ p.description|default('') }} {{ p.tags|join(' ') }} {{ p.domain }} {{ p.owner }}">
+        {% if current_user %}
+        <div class="position-absolute" style="top:.75rem;right:.75rem;z-index:10;">
+          <input type="checkbox" class="form-check-input product-checkbox shadow-sm"
+                 data-product-id="{{ p.id }}" title="Velg for notebook">
+        </div>
+        {% endif %}
+        <a href="/products/{{ p.id }}" class="text-decoration-none">
+          <div class="card h-100 p-3">
+            <div class="d-flex justify-content-between align-items-start mb-2">
+              <h5 class="mb-0 text-dark">{{ p.name }}</h5>
+              {% if pipeline_status == "success" %}
+                <span class="status-dot bg-success" title="Pipeline OK"></span>
+              {% elif pipeline_status == "failed" %}
+                <span class="status-dot bg-danger" title="Pipeline feilet"></span>
+              {% elif pipeline_status in ("running", "queued") %}
+                <span class="status-dot bg-primary" title="Pipeline kjører"></span>
+              {% else %}
+                <span class="status-dot bg-secondary" title="Ukjent status"></span>
+              {% endif %}
+            </div>
+            <div class="mb-2">
+              <span class="badge bg-secondary me-1">{{ p.domain }}</span>
+              <span class="text-muted small"><i class="bi bi-person me-1"></i>{{ p.owner }}</span>
+            </div>
+            {% if p.description %}
+            <p class="text-muted small mb-2" style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">
+              {{ p.description }}
+            </p>
+            {% endif %}
+            {% if p.tags %}
+            <div class="mb-2">
+              {% for tag in p.tags[:4] %}
+              <span class="badge rounded-pill bg-light text-dark border me-1">{{ tag }}</span>
+              {% endfor %}
+            </div>
+            {% endif %}
+            <div class="mt-auto pt-2 border-top d-flex justify-content-between align-items-center">
+              {% if quality_score is not none %}
+                {% if quality_score == 100 %}
+                  <span class="small text-success"><i class="bi bi-shield-check me-1"></i>{{ quality_score }}%</span>
+                {% elif quality_score >= 80 %}
+                  <span class="small text-warning"><i class="bi bi-shield-exclamation me-1"></i>{{ quality_score }}%</span>
+                {% else %}
+                  <span class="small text-danger"><i class="bi bi-shield-x me-1"></i>{{ quality_score }}%</span>
+                {% endif %}
+              {% else %}
+                <span class="small text-muted"><i class="bi bi-shield me-1"></i>Ingen data</span>
+              {% endif %}
+              <div class="d-flex align-items-center gap-2">
+                {% if p._sla and p._sla.compliant is not none %}
+                  {% if not p._sla.compliant %}
+                    <span class="badge bg-danger" style="font-size:.6rem;"
+                          title="SLA-brudd: {{ p._sla.hours_since_update }}t siden oppdatering">SLA ✕</span>
+                  {% endif %}
+                {% endif %}
+                <span class="badge bg-light text-dark border">{{ p.format }}</span>
+              </div>
+            </div>
+          </div>
+        </a>
+      </div>
+      {% else %}
+      <div class="col-12 text-center py-5 text-muted">
+        <i class="bi bi-inbox fs-1 d-block mb-2"></i>Ingen kildeprodukter er registrert ennå.
+      </div>
+      {% endfor %}
+    </div>
+    <div id="no-results-source" class="text-center py-5 text-muted d-none">
+      <i class="bi bi-search fs-1 d-block mb-2"></i>Ingen produkter matcher søket.
+    </div>
+  </div>{# /tab-source #}
+
+  {# ══ FANE 2: ANALYTISKE PRODUKTER ══ #}
+  <div class="tab-pane fade" id="tab-analytical">
+
+    {# søk og filter #}
+    <div class="row g-2 mb-3 mt-1">
+      <div class="col-md-6">
+        <div class="input-group">
+          <span class="input-group-text bg-white"><i class="bi bi-search"></i></span>
+          <input id="search-analytical" type="text" class="form-control tab-search"
+                 data-tab="analytical" placeholder="Søk etter navn, beskrivelse eller tags…">
+        </div>
+      </div>
+      <div class="col-md-6 d-flex flex-wrap gap-2 align-items-center">
+        <button class="btn btn-sm btn-dark domain-filter-analytical active" data-domain="">Alle</button>
+        {% set analytical_domains = analytical_products | map(attribute='domain') | unique | sort | list %}
+        {% for domain in analytical_domains %}
+        <button class="btn btn-sm btn-outline-secondary domain-filter-analytical"
+                data-domain="{{ domain }}">{{ domain }}</button>
+        {% endfor %}
+      </div>
+    </div>
+
+    <div class="row g-3" id="analytical-grid">
+      {% for p in analytical_products %}
+      {% set quality_score = p._quality.score_pct if p._quality else None %}
+      <div class="col-md-6 col-lg-4 product-card analytical-card position-relative"
+           data-domain="{{ p.domain }}"
+           data-search="{{ p.name }} {{ p.description|default('') }} {{ p.tags|join(' ') }} {{ p.domain }} {{ p.owner }}">
+        {% if current_user %}
+        <div class="position-absolute" style="top:.75rem;right:.75rem;z-index:10;">
+          <input type="checkbox" class="form-check-input product-checkbox shadow-sm"
+                 data-product-id="{{ p.id }}" title="Velg for notebook">
+        </div>
+        {% endif %}
+        <a href="/products/{{ p.id }}" class="text-decoration-none">
+          <div class="card h-100 p-3">
+            <div class="d-flex justify-content-between align-items-start mb-2">
+              <h5 class="mb-0 text-dark">{{ p.name }}</h5>
+              <span class="badge bg-info text-dark" style="font-size:.65rem;">
+                <i class="bi bi-graph-up me-1"></i>analytisk
+              </span>
+            </div>
+            <div class="mb-2">
+              <span class="badge bg-secondary me-1">{{ p.domain }}</span>
+              <span class="text-muted small"><i class="bi bi-person me-1"></i>{{ p.owner }}</span>
+            </div>
+            {% if p.description %}
+            <p class="text-muted small mb-2" style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">
+              {{ p.description }}
+            </p>
+            {% endif %}
+            {% if p.source_products %}
+            <div class="mb-2">
+              <span class="text-muted small"><i class="bi bi-diagram-2 me-1"></i>Basert på:</span>
+              {% for sp in p.source_products[:3] %}
+              <span class="badge rounded-pill bg-light text-dark border me-1" style="font-size:.65rem;">{{ sp }}</span>
+              {% endfor %}
+            </div>
+            {% endif %}
+            {% if p.tags %}
+            <div class="mb-2">
+              {% for tag in p.tags[:3] %}
+              <span class="badge rounded-pill bg-light text-dark border me-1">{{ tag }}</span>
+              {% endfor %}
+            </div>
+            {% endif %}
+            <div class="mt-auto pt-2 border-top d-flex justify-content-between align-items-center">
+              {% if quality_score is not none %}
+                {% if quality_score == 100 %}
+                  <span class="small text-success"><i class="bi bi-shield-check me-1"></i>{{ quality_score }}%</span>
+                {% elif quality_score >= 80 %}
+                  <span class="small text-warning"><i class="bi bi-shield-exclamation me-1"></i>{{ quality_score }}%</span>
+                {% else %}
+                  <span class="small text-danger"><i class="bi bi-shield-x me-1"></i>{{ quality_score }}%</span>
+                {% endif %}
+              {% else %}
+                <span class="small text-muted"><i class="bi bi-shield me-1"></i>Ingen data</span>
+              {% endif %}
+              <span class="badge bg-light text-dark border">{{ p.format }}</span>
+            </div>
+          </div>
+        </a>
+      </div>
+      {% else %}
+      <div class="col-12 text-center py-5 text-muted">
+        <i class="bi bi-graph-up fs-1 d-block mb-2"></i>
+        Ingen analytiske produkter ennå.
+        {% if current_user %}
+        <p class="mt-2 small">Bruk <code>publish_analytical()</code> fra Jupyter for å publisere ditt første analytiske produkt.</p>
+        {% endif %}
+      </div>
+      {% endfor %}
+    </div>
+    <div id="no-results-analytical" class="text-center py-5 text-muted d-none">
+      <i class="bi bi-search fs-1 d-block mb-2"></i>Ingen produkter matcher søket.
+    </div>
+  </div>{# /tab-analytical #}
+
+</div>{# /tab-content #}
+
 {% endblock %}
 
 {% block scripts %}
 <script>
-  const searchInput  = document.getElementById("search");
-  const filterBtns   = document.querySelectorAll(".domain-filter");
-  const cards        = document.querySelectorAll(".product-card");
-  const noResults    = document.getElementById("no-results");
-  let activeDomain   = "";
+  // ── Filterfunksjon per fane ───────────────────────────────────────────────────
+  function makeFilter(searchId, filterClass, gridId, noResultsId) {
+    const searchEl   = document.getElementById(searchId);
+    const filterBtns = document.querySelectorAll(`.${filterClass}`);
+    const noResults  = document.getElementById(noResultsId);
+    let activeDomain = "";
 
-  function applyFilters() {
-    const q = searchInput.value.toLowerCase().trim();
-    let visible = 0;
-    cards.forEach(card => {
-      const matchDomain  = !activeDomain || card.dataset.domain === activeDomain;
-      const matchSearch  = !q || card.dataset.search.toLowerCase().includes(q);
-      const show         = matchDomain && matchSearch;
-      card.classList.toggle("d-none", !show);
-      if (show) visible++;
+    function applyFilters() {
+      const q      = searchEl.value.toLowerCase().trim();
+      const cards  = document.querySelectorAll(`#${gridId} .product-card`);
+      let visible  = 0;
+      cards.forEach(card => {
+        const matchDomain = !activeDomain || card.dataset.domain === activeDomain;
+        const matchSearch = !q || card.dataset.search.toLowerCase().includes(q);
+        const show        = matchDomain && matchSearch;
+        card.classList.toggle("d-none", !show);
+        if (show) visible++;
+      });
+      if (noResults) noResults.classList.toggle("d-none", visible > 0);
+    }
+
+    searchEl.addEventListener("input", applyFilters);
+    filterBtns.forEach(btn => {
+      btn.addEventListener("click", () => {
+        filterBtns.forEach(b => { b.classList.replace("btn-dark","btn-outline-secondary"); b.classList.remove("active"); });
+        btn.classList.replace("btn-outline-secondary","btn-dark");
+        btn.classList.add("active");
+        activeDomain = btn.dataset.domain;
+        applyFilters();
+      });
     });
-    noResults.classList.toggle("d-none", visible > 0);
   }
 
-  searchInput.addEventListener("input", applyFilters);
-
-  filterBtns.forEach(btn => {
-    btn.addEventListener("click", () => {
-      filterBtns.forEach(b => b.classList.replace("btn-dark", "btn-outline-secondary"));
-      filterBtns.forEach(b => b.classList.remove("active"));
-      btn.classList.replace("btn-outline-secondary", "btn-dark");
-      btn.classList.add("active");
-      activeDomain = btn.dataset.domain;
-      applyFilters();
-    });
-  });
+  makeFilter("search-source",     "domain-filter-source",     "source-grid",     "no-results-source");
+  makeFilter("search-analytical", "domain-filter-analytical", "analytical-grid", "no-results-analytical");
 
   // ── Avkryssingsbokser og multi-notebook ──────────────────────────────────────
-  const newNotebookBtn   = document.getElementById("new-notebook-btn");
-  const selectedCountEl  = document.getElementById("selected-count");
+  const newNotebookBtn    = document.getElementById("new-notebook-btn");
+  const selectedCountEl   = document.getElementById("selected-count");
   const createNotebookBtn = document.getElementById("create-notebook-btn");
-  const notebookModal    = document.getElementById("notebookModal")
+  const notebookModal     = document.getElementById("notebookModal")
     ? new bootstrap.Modal(document.getElementById("notebookModal")) : null;
 
   function updateSelection() {
     if (!newNotebookBtn) return;
-    const checked = document.querySelectorAll(".product-checkbox:checked");
-    const n       = checked.length;
+    const n = document.querySelectorAll(".product-checkbox:checked").length;
     selectedCountEl.textContent = n;
     newNotebookBtn.classList.toggle("d-none", n === 0);
   }
 
-  document.querySelectorAll(".product-checkbox").forEach(cb => {
-    cb.addEventListener("change", updateSelection);
-  });
+  document.querySelectorAll(".product-checkbox").forEach(cb => cb.addEventListener("change", updateSelection));
 
   if (newNotebookBtn) {
     newNotebookBtn.addEventListener("click", () => notebookModal && notebookModal.show());
@@ -205,8 +328,7 @@
 
   if (createNotebookBtn) {
     createNotebookBtn.addEventListener("click", async () => {
-      const ids  = [...document.querySelectorAll(".product-checkbox:checked")]
-                     .map(cb => cb.dataset.productId);
+      const ids  = [...document.querySelectorAll(".product-checkbox:checked")].map(cb => cb.dataset.productId);
       const name = document.getElementById("nb-name").value.trim();
       createNotebookBtn.disabled  = true;
       createNotebookBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Genererer…';
