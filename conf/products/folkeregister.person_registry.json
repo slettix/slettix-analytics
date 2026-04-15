@@ -1,0 +1,53 @@
+{
+  "id":           "folkeregister.person_registry",
+  "name":         "Folkeregister — Personregister (SCD2)",
+  "domain":       "folkeregister",
+  "owner":        "folkeregister-team",
+  "version":      "1.0.0",
+  "description":  "Autoritativt personregister med fullstendig historikk via SCD Type 2. Bevarer alle tilstandsendringer for navn, adresse, sivilstatus og vitalstatus. Én gjeldende rad per person (is_current=true) pluss historiske rader. Primærnøkkel nedstrøms: person_id.",
+  "source_path":  "s3://silver/folkeregister/person_registry",
+  "format":       "delta",
+  "primary_key":  "person_id",
+  "dag_id":       "folkeregister_silver",
+  "product_type": "derived",
+  "access":       "restricted",
+  "quality_sla": {
+    "max_null_rate":   0.01,
+    "freshness_hours": 25
+  },
+  "tags": ["folkeregister", "pii", "silver", "scd2", "personregister"],
+  "contract": {
+    "slo": {
+      "freshness_hours":    25,
+      "completeness_pct":   99
+    },
+    "schema_compatibility": "BACKWARD",
+    "guaranteed_columns": [
+      "person_id", "fnr_hash", "first_name", "last_name",
+      "birth_date", "gender", "civil_status", "is_alive",
+      "municipality_code", "municipality_name", "county",
+      "valid_from", "valid_to", "is_current"
+    ]
+  },
+  "schema": [
+    { "name": "person_id",          "type": "string",    "nullable": false, "description": "Intern UUID — nøkkel på tvers av alle folkeregister-produkter", "pii": false },
+    { "name": "fnr_hash",           "type": "string",    "nullable": true,  "description": "SHA-256 hash av fødselsnummer", "pii": false, "sensitivity": "medium" },
+    { "name": "first_name",         "type": "string",    "nullable": true,  "description": "Fornavn", "pii": true, "sensitivity": "high" },
+    { "name": "last_name",          "type": "string",    "nullable": true,  "description": "Etternavn", "pii": true, "sensitivity": "high" },
+    { "name": "birth_date",         "type": "date",      "nullable": true,  "description": "Fødselsdato", "pii": true, "sensitivity": "high" },
+    { "name": "gender",             "type": "string",    "nullable": true,  "description": "Kjønn (M/F/X)", "pii": false, "sensitivity": "low" },
+    { "name": "mother_id",          "type": "string",    "nullable": true,  "description": "person_id for mor", "pii": false },
+    { "name": "father_id",          "type": "string",    "nullable": true,  "description": "person_id for far", "pii": false },
+    { "name": "municipality_code",  "type": "string",    "nullable": true,  "description": "Bostedskommunenummer (SSB 4 siffer)", "pii": false },
+    { "name": "municipality_name",  "type": "string",    "nullable": true,  "description": "Bostedskommunenavn", "pii": false },
+    { "name": "county",             "type": "string",    "nullable": true,  "description": "Bostedsfylke", "pii": false },
+    { "name": "civil_status",       "type": "string",    "nullable": false, "description": "Sivilstatus: UGIFT | GIFT | SKILT | ENKE_ENKEMANN", "pii": false },
+    { "name": "is_alive",           "type": "boolean",   "nullable": false, "description": "True hvis personen er i live", "pii": false },
+    { "name": "death_date",         "type": "date",      "nullable": true,  "description": "Dødsdato (null hvis i live)", "pii": false, "sensitivity": "medium" },
+    { "name": "change_event_type",  "type": "string",    "nullable": false, "description": "Hendelsestype som utløste denne SCD2-raden", "pii": false },
+    { "name": "valid_from",         "type": "timestamp", "nullable": false, "description": "Tidspunkt denne raden ble gyldig", "pii": false },
+    { "name": "valid_to",           "type": "timestamp", "nullable": true,  "description": "Tidspunkt raden ble ugyldig (null = gjeldende)", "pii": false },
+    { "name": "is_current",         "type": "boolean",   "nullable": false, "description": "True = gjeldende tilstand for personen", "pii": false },
+    { "name": "_updated_at",        "type": "timestamp", "nullable": false, "description": "Sist oppdatert av Silver-jobben", "pii": false }
+  ]
+}

@@ -1,0 +1,218 @@
+{% extends "base.html" %}
+{% block title %}Observerbarhet — Slettix Analytics{% endblock %}
+
+{% block content %}
+
+{# ── Header ── #}
+<div class="d-flex align-items-center mb-4">
+  <div>
+    <h1 class="h3 mb-0"><i class="bi bi-eye me-2"></i>Observerbarhet</h1>
+    <p class="text-muted mb-0">Datakvalitetsstatus for alle produkter</p>
+  </div>
+</div>
+
+{# ── Plattformhelse ── #}
+<div class="row g-4 mb-4">
+  <div class="col-md-4">
+    <div class="card h-100">
+      <div class="card-body text-center py-4">
+        <div class="text-muted small mb-1">Plattformhelse</div>
+        {% if platform_health is not none %}
+        <div class="display-4 fw-bold
+          {% if platform_health >= 90 %}text-success
+          {% elif platform_health >= 70 %}text-warning
+          {% else %}text-danger{% endif %}">
+          {{ platform_health }}%
+        </div>
+        <div class="progress score-bar mt-2 mx-auto" style="max-width:200px;">
+          <div class="progress-bar
+            {% if platform_health >= 90 %}bg-success
+            {% elif platform_health >= 70 %}bg-warning
+            {% else %}bg-danger{% endif %}"
+            style="width:{{ platform_health }}%"></div>
+        </div>
+        <div class="text-muted small mt-2">Gjennomsnittlig kvalitetsscore</div>
+        {% else %}
+        <div class="display-4 fw-bold text-muted">–</div>
+        <div class="text-muted small mt-2">Ingen kvalitetsdata ennå</div>
+        {% endif %}
+      </div>
+    </div>
+  </div>
+
+  {# ── Summerkort ── #}
+  {% set total_products    = product_data | length %}
+  {% set products_anomaly  = product_data | selectattr("anomaly") | selectattr("anomaly.has_anomaly") | list | length %}
+  {% set total_incidents   = product_data | sum(attribute="open_incidents") %}
+  {% set never_validated   = product_data | rejectattr("quality") | list | length %}
+
+  <div class="col-md-2">
+    <div class="card h-100">
+      <div class="card-body text-center py-4">
+        <div class="text-muted small mb-1">Produkter</div>
+        <div class="display-5 fw-bold text-dark">{{ total_products }}</div>
+        <div class="text-muted small">totalt</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-2">
+    <div class="card h-100">
+      <div class="card-body text-center py-4">
+        <div class="text-muted small mb-1">Anomalier</div>
+        <div class="display-5 fw-bold {% if products_anomaly > 0 %}text-warning{% else %}text-success{% endif %}">
+          {{ products_anomaly }}
+        </div>
+        <div class="text-muted small">produkter berørt</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-2">
+    <div class="card h-100">
+      <div class="card-body text-center py-4">
+        <div class="text-muted small mb-1">Åpne incidents</div>
+        <div class="display-5 fw-bold {% if total_incidents > 0 %}text-danger{% else %}text-success{% endif %}">
+          {{ total_incidents }}
+        </div>
+        <div class="text-muted small">på tvers av produkter</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-2">
+    <div class="card h-100">
+      <div class="card-body text-center py-4">
+        <div class="text-muted small mb-1">Ikke validert</div>
+        <div class="display-5 fw-bold {% if never_validated > 0 %}text-secondary{% else %}text-success{% endif %}">
+          {{ never_validated }}
+        </div>
+        <div class="text-muted small">produkter uten data</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ── Domenefilter ── #}
+<div class="d-flex flex-wrap gap-2 mb-3">
+  <button class="btn btn-sm btn-dark domain-filter active" data-domain="">Alle</button>
+  {% for domain in all_domains %}
+  <button class="btn btn-sm btn-outline-secondary domain-filter" data-domain="{{ domain }}">{{ domain }}</button>
+  {% endfor %}
+</div>
+
+{# ── Produkttabell ── #}
+<div class="card">
+  <div class="card-body p-0">
+    {% if product_data %}
+    <div class="table-responsive">
+      <table class="table table-hover mb-0" id="obs-table">
+        <thead class="table-light">
+          <tr>
+            <th>Produkt</th>
+            <th>Domene</th>
+            <th>Siste kvalitet</th>
+            <th>Anomalier</th>
+            <th>Åpne incidents</th>
+            <th>Sist validert</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for p in product_data %}
+          <tr class="product-row" data-domain="{{ p.domain }}">
+            <td>
+              <a href="/products/{{ p.id }}" class="text-decoration-none fw-semibold text-dark">
+                {{ p.name }}
+              </a>
+              <div class="text-muted" style="font-size:.75rem;"><code>{{ p.id }}</code></div>
+            </td>
+            <td>
+              <span class="badge bg-secondary">{{ p.domain or "–" }}</span>
+            </td>
+            <td>
+              {% if p.quality and p.quality.score_pct is not none %}
+              {% set score = p.quality.score_pct %}
+              <div class="d-flex align-items-center gap-2">
+                <span class="badge
+                  {% if score >= 90 %}bg-success
+                  {% elif score >= 70 %}bg-warning text-dark
+                  {% else %}bg-danger{% endif %}"
+                  style="min-width:3rem;text-align:center;">
+                  {{ score }}%
+                </span>
+                <div class="progress score-bar flex-grow-1" style="max-width:80px;">
+                  <div class="progress-bar
+                    {% if score >= 90 %}bg-success
+                    {% elif score >= 70 %}bg-warning
+                    {% else %}bg-danger{% endif %}"
+                    style="width:{{ score }}%"></div>
+                </div>
+              </div>
+              {% else %}
+              <span class="text-muted small"><i class="bi bi-dash-circle me-1"></i>Ingen data</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if p.anomaly and p.anomaly.has_anomaly %}
+              <span class="text-warning" title="{{ p.anomaly.anomalies | length }} anomali(er)">
+                <i class="bi bi-exclamation-triangle-fill"></i>
+                <span class="small">{{ p.anomaly.anomalies | length }}</span>
+              </span>
+              {% else %}
+              <span class="text-success small"><i class="bi bi-check-circle me-1"></i>OK</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if p.open_incidents > 0 %}
+              <span class="badge bg-danger">{{ p.open_incidents }}</span>
+              {% else %}
+              <span class="text-muted small">–</span>
+              {% endif %}
+            </td>
+            <td>
+              {% if p.quality and p.quality.validated_at %}
+              <span class="small text-muted">{{ p.quality.validated_at[:10] }}</span>
+              {% else %}
+              <span class="small text-muted">Aldri</span>
+              {% endif %}
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% else %}
+    <div class="text-center py-5 text-muted">
+      <i class="bi bi-inbox fs-1 d-block mb-2"></i>
+      Ingen produkter er registrert ennå.
+    </div>
+    {% endif %}
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // ── Domenefilter ──────────────────────────────────────────────────────────────
+  const filterBtns = document.querySelectorAll(".domain-filter");
+  let activeDomain = "";
+
+  function applyFilter() {
+    document.querySelectorAll(".product-row").forEach(row => {
+      const match = !activeDomain || row.dataset.domain === activeDomain;
+      row.classList.toggle("d-none", !match);
+    });
+  }
+
+  filterBtns.forEach(btn => {
+    btn.addEventListener("click", () => {
+      filterBtns.forEach(b => {
+        b.classList.replace("btn-dark", "btn-outline-secondary");
+        b.classList.remove("active");
+      });
+      btn.classList.replace("btn-outline-secondary", "btn-dark");
+      btn.classList.add("active");
+      activeDomain = btn.dataset.domain;
+      applyFilter();
+    });
+  });
+</script>
+{% endblock %}

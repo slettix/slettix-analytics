@@ -1,0 +1,58 @@
+# Smoke-test for Spark Kubernetes Operator.
+# Kjører det innebygde Pi-eksempelet fra Spark-imaget.
+#
+# Kjør:
+#   kubectl apply -f k8s/spark/test-pi.yaml
+#
+# Følg med:
+#   kubectl get sparkapplication spark-pi-test -n slettix-analytics -w
+#   kubectl logs -l spark-role=driver -n slettix-analytics
+#
+# Forventet utfall i driver-loggene:
+#   Pi is roughly 3.14...
+#
+# Rydd opp:
+#   kubectl delete sparkapplication spark-pi-test -n slettix-analytics
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: SparkApplication
+metadata:
+  name: spark-pi-test
+  namespace: slettix-analytics
+  labels:
+    app.kubernetes.io/part-of: slettix-analytics
+    app.kubernetes.io/component: spark-test
+spec:
+  type: Python
+  pythonVersion: "3"
+  mode: cluster
+  image: slettix-analytics/spark:3.5.8
+  imagePullPolicy: IfNotPresent
+
+  # Innebygd Pi-eksempel finnes i alle standard Spark-images
+  mainApplicationFile: local:///opt/spark/examples/src/main/python/pi.py
+  arguments:
+    - "100"   # antall Monte Carlo-iterasjoner
+
+  sparkVersion: "3.5.8"
+
+  sparkConf:
+    "spark.sql.extensions": "io.delta.sql.DeltaSparkSessionExtension"
+    "spark.sql.catalog.spark_catalog": "org.apache.spark.sql.delta.catalog.DeltaCatalog"
+
+  restartPolicy:
+    type: Never
+
+  driver:
+    cores: 1
+    coreLimit: "1200m"
+    memory: "512m"
+    serviceAccount: spark
+    labels:
+      version: "3.5.8"
+
+  executor:
+    cores: 1
+    instances: 1
+    memory: "512m"
+    labels:
+      version: "3.5.8"

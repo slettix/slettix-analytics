@@ -1,0 +1,42 @@
+{
+  "id":           "folkeregister.residence_history",
+  "name":         "Folkeregister — Bostedshistorikk",
+  "domain":       "folkeregister",
+  "owner":        "folkeregister-team",
+  "version":      "1.0.0",
+  "description":  "Kronologisk bostedshistorikk per person. Én rad per kommuneopphold — fra innflyttingsdato til utflyttingsdato. Gjeldende bosted har moved_out_date=null og is_current=true. Egnet for migrasjonsanalyse, pendlerstatistikk og befolkningsutvikling per kommune.",
+  "source_path":  "s3://silver/folkeregister/residence_history",
+  "format":       "delta",
+  "primary_key":  "person_id",
+  "dag_id":       "folkeregister_silver",
+  "product_type": "derived",
+  "access":       "restricted",
+  "quality_sla": {
+    "max_null_rate":   0.01,
+    "freshness_hours": 25
+  },
+  "tags": ["folkeregister", "pii", "silver", "bosted", "migrasjon", "geografi"],
+  "contract": {
+    "slo": {
+      "freshness_hours":    25,
+      "completeness_pct":   99
+    },
+    "schema_compatibility": "BACKWARD",
+    "guaranteed_columns": [
+      "person_id", "municipality_code", "municipality_name", "county",
+      "moved_in_date", "is_current"
+    ]
+  },
+  "schema": [
+    { "name": "person_id",          "type": "string",  "nullable": false, "description": "Intern UUID — kobler til person_registry", "pii": false },
+    { "name": "municipality_code",  "type": "string",  "nullable": false, "description": "Kommunenummer (SSB 4 siffer)", "pii": false },
+    { "name": "municipality_name",  "type": "string",  "nullable": true,  "description": "Kommunenavn", "pii": false },
+    { "name": "county",             "type": "string",  "nullable": true,  "description": "Fylkesnavn", "pii": false },
+    { "name": "moved_in_date",      "type": "date",    "nullable": false, "description": "Dato personen flyttet til kommunen", "pii": false },
+    { "name": "moved_out_date",     "type": "date",    "nullable": true,  "description": "Dato personen flyttet ut (null = gjeldende bosted)", "pii": false },
+    { "name": "is_current",         "type": "boolean", "nullable": false, "description": "True = gjeldende bosted", "pii": false },
+    { "name": "duration_days",      "type": "integer", "nullable": true,  "description": "Antall dager i kommunen (null for gjeldende bosted)", "pii": false },
+    { "name": "change_event_type",  "type": "string",  "nullable": false, "description": "Kildehendelse: PersonRegistrert | PersonFødt | PersonFlyttet", "pii": false },
+    { "name": "_updated_at",        "type": "timestamp","nullable": false, "description": "Sist oppdatert av Silver-jobben", "pii": false }
+  ]
+}

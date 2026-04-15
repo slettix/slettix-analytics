@@ -1,0 +1,106 @@
+# ConfigMap med Superset-konfigurasjonsfiler.
+# Innholdet speiler docker/superset/ og brukes av init-jobben og hoved-poden.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: superset-config
+  namespace: slettix-analytics
+  labels:
+    app: superset
+    app.kubernetes.io/part-of: slettix-analytics
+    app.kubernetes.io/component: superset
+data:
+  superset_config.py: |
+    """
+    Superset-konfigurasjon for Slettix Analytics (Kubernetes).
+    """
+    import os
+    from sqlalchemy import event
+    from sqlalchemy.pool import Pool
+
+    SECRET_KEY = os.environ.get("SUPERSET_SECRET_KEY", "slettix-superset-dev-key")
+    SQLALCHEMY_DATABASE_URI = "sqlite:////var/lib/superset/superset.db"
+
+    WTF_CSRF_ENABLED = False
+    FEATURE_FLAGS = {
+        "ENABLE_TEMPLATE_PROCESSING": True,
+    }
+
+    _minio_host = (
+        os.environ.get("MINIO_ENDPOINT", "http://minio.slettix-analytics.svc.cluster.local:9000")
+        .replace("https://", "")
+        .replace("http://", "")
+    )
+    _access_key = os.environ.get("MINIO_ACCESS_KEY", "admin")
+    _secret_key = os.environ.get("MINIO_SECRET_KEY", "changeme")
+
+    _DUCKDB_INIT_SQL = [
+        "INSTALL httpfs; LOAD httpfs;",
+        "INSTALL delta; LOAD delta;",
+        f"""
+        CREATE OR REPLACE SECRET slettix_minio (
+            TYPE S3,
+            KEY_ID '{_access_key}',
+            SECRET '{_secret_key}',
+            REGION 'us-east-1',
+            ENDPOINT '{_minio_host}',
+            URL_STYLE 'path',
+            USE_SSL false
+        );
+        """,
+    ]
+
+    @event.listens_for(Pool, "connect")
+    def _on_duckdb_connect(dbapi_conn, connection_record):
+        if "duckdb" not in getattr(type(dbapi_conn), "__module__", ""):
+            return
+        for sql in _DUCKDB_INIT_SQL:
+            try:
+                dbapi_conn.execute(sql)
+            except Exception:
+                pass
+
+  setup_duckdb.py: |
+    """Registrer DuckDB-tilkobling mot Slettix Delta Lake i Superset."""
+    try:
+        from superset.app import create_app
+        flask_app = create_app()
+        with flask_app.app_context():
+            from superset.extensions import db
+            from superset.models.core import Database
+            existing = db.session.query(Database).filter_by(
+                database_name="Slettix Delta Lake"
+            ).first()
+            if existing:
+                print("DuckDB-tilkobling finnes allerede — hopper over.")
+            else:
+                conn = Database(
+                    database_name="Slettix Delta Lake",
+                    sqlalchemy_uri="duckdb:///:memory:",
+                    expose_in_sqllab=True,
+                    allow_run_async=False,
+                    allow_ctas=False,
+                    allow_cvas=False,
+                    allow_dml=False,
+                )
+                db.session.add(conn)
+                db.session.commit()
+                print("✓ DuckDB-tilkobling 'Slettix Delta Lake' registrert.")
+    except Exception as e:
+        print(f"[ADVARSEL] Kunne ikke auto-registrere DuckDB: {e}")
+
+  superset-init.sh: |
+    #!/bin/bash
+    set -e
+    echo "==> [1/4] Kjører database-migrering..."
+    superset db upgrade
+    echo "==> [2/4] Oppretter admin-bruker..."
+    superset fab create-admin \
+        --username admin --firstname Admin --lastname User \
+        --email admin@slettix.local --password admin 2>/dev/null \
+        || echo "     (Admin-bruker finnes allerede)"
+    echo "==> [3/4] Initialiserer roller og tillatelser..."
+    superset init
+    echo "==> [4/4] Registrerer DuckDB-tilkobling..."
+    python3 /app/pythonpath/setup_duckdb.py
+    echo "✓ Superset-initialisering fullført."

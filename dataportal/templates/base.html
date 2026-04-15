@@ -7,117 +7,615 @@
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
   <link href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css" rel="stylesheet">
   <style>
-    body { background: #f8f9fa; }
-    .navbar-brand { font-weight: 700; letter-spacing: -.5px; }
-    .card { border: none; box-shadow: 0 1px 4px rgba(0,0,0,.08); transition: box-shadow .15s; }
+    /* ── Globale komponenter ───────────────────────────────── */
+    body {
+      background: #f5f6fa;
+      display: flex;
+      min-height: 100vh;
+      margin: 0;
+    }
+    .card {
+      border: none;
+      box-shadow: 0 1px 4px rgba(0,0,0,.08);
+      transition: box-shadow .15s;
+    }
     .card:hover { box-shadow: 0 4px 12px rgba(0,0,0,.12); }
     .status-dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
-    .timeline-cell { width: 28px; height: 28px; border-radius: 4px; display: inline-flex;
-                     align-items: center; justify-content: center; font-size: .65rem;
-                     font-weight: 600; color: #fff; }
-    .timeline-none { background: #dee2e6; color: #6c757d; }
+    .timeline-cell {
+      width: 28px; height: 28px; border-radius: 4px;
+      display: inline-flex; align-items: center; justify-content: center;
+      font-size: .65rem; font-weight: 600; color: #fff;
+    }
+    .timeline-none    { background: #dee2e6; color: #6c757d; }
     .timeline-success { background: #198754; }
-    .timeline-failed { background: #dc3545; }
+    .timeline-failed  { background: #dc3545; }
     .timeline-running { background: #0d6efd; }
-    .timeline-queued { background: #ffc107; color: #212529; }
-    pre.code-block { background: #212529; color: #f8f9fa; border-radius: 8px;
-                     padding: 1rem 1.25rem; font-size: .82rem; overflow-x: auto; }
+    .timeline-queued  { background: #ffc107; color: #212529; }
+    pre.code-block {
+      background: #212529; color: #f8f9fa;
+      border-radius: 8px; padding: 1rem 1.25rem;
+      font-size: .82rem; overflow-x: auto;
+    }
     .score-bar { height: 6px; border-radius: 3px; }
+
+    /* ── Sidemeny ──────────────────────────────────────────── */
+    #sidebar {
+      position: fixed;
+      top: 0; left: 0;
+      width: 230px;
+      height: 100vh;
+      background: #fff;
+      border-right: 1px solid #e9ecef;
+      display: flex;
+      flex-direction: column;
+      z-index: 1040;
+      overflow-y: auto;
+      overflow-x: hidden;
+    }
+
+    /* Logo-felt */
+    .sidebar-logo {
+      display: flex;
+      align-items: center;
+      gap: .5rem;
+      padding: 1.1rem 1.25rem .9rem;
+      font-weight: 700;
+      font-size: 1rem;
+      color: #212529;
+      text-decoration: none;
+      border-bottom: 1px solid #e9ecef;
+      letter-spacing: -.3px;
+      flex-shrink: 0;
+    }
+    .sidebar-logo .logo-icon {
+      width: 30px; height: 30px;
+      background: #0d6efd;
+      border-radius: 7px;
+      display: flex; align-items: center; justify-content: center;
+      color: #fff;
+      font-size: 1rem;
+      flex-shrink: 0;
+    }
+    .sidebar-logo:hover { color: #0d6efd; }
+
+    /* Søk */
+    .sidebar-search {
+      padding: .75rem 1rem;
+      border-bottom: 1px solid #e9ecef;
+      flex-shrink: 0;
+    }
+    .sidebar-search .input-group-text {
+      background: #f5f6fa;
+      border-color: #dee2e6;
+      border-right: none;
+      color: #6c757d;
+      padding: .35rem .6rem;
+    }
+    .sidebar-search .form-control {
+      background: #f5f6fa;
+      border-color: #dee2e6;
+      border-left: none;
+      font-size: .83rem;
+      padding: .35rem .5rem;
+    }
+    .sidebar-search .form-control:focus {
+      background: #fff;
+      box-shadow: none;
+      border-color: #86b7fe;
+    }
+    .sidebar-search .form-control:focus + .input-group-text,
+    .sidebar-search .input-group:focus-within .input-group-text {
+      background: #fff;
+      border-color: #86b7fe;
+    }
+
+    /* Navigasjon */
+    .sidebar-nav {
+      flex: 1;
+      padding: .5rem 0;
+      overflow-y: auto;
+    }
+    .sidebar-section-label {
+      font-size: .65rem;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+      color: #adb5bd;
+      padding: .9rem 1.25rem .3rem;
+    }
+    .sidebar-link {
+      display: flex;
+      align-items: center;
+      gap: .65rem;
+      padding: .48rem 1.25rem;
+      color: #495057;
+      text-decoration: none;
+      font-size: .875rem;
+      border-radius: 0;
+      transition: background .1s, color .1s;
+      position: relative;
+    }
+    .sidebar-link:hover {
+      background: #f5f6fa;
+      color: #212529;
+    }
+    .sidebar-link.active {
+      background: #e8f0fe;
+      color: #1a56db;
+      font-weight: 600;
+    }
+    .sidebar-link.active::before {
+      content: '';
+      position: absolute;
+      left: 0; top: 0; bottom: 0;
+      width: 3px;
+      background: #1a56db;
+      border-radius: 0 2px 2px 0;
+    }
+    .sidebar-link .link-icon {
+      font-size: .95rem;
+      width: 18px;
+      text-align: center;
+      flex-shrink: 0;
+    }
+    /* Sub-lenker (innrykk) */
+    .sidebar-sub {
+      margin: .1rem 0;
+    }
+    .sidebar-sub .sidebar-link {
+      padding: .36rem 1.25rem .36rem 2.9rem;
+      font-size: .82rem;
+      color: #6c757d;
+    }
+    .sidebar-sub .sidebar-link:hover { color: #212529; }
+    .sidebar-sub .sidebar-link.active {
+      background: #e8f0fe;
+      color: #1a56db;
+      font-weight: 600;
+    }
+
+    /* Hjelp-tooltip på nav-lenker */
+    .sidebar-link .link-help {
+      margin-left: auto;
+      font-size: .75rem;
+      color: #adb5bd;
+      flex-shrink: 0;
+      display: none;
+    }
+    .sidebar-link:hover .link-help { display: inline; }
+
+    /* Separator */
+    .sidebar-sep {
+      height: 1px;
+      background: #e9ecef;
+      margin: .4rem 1rem;
+    }
+
+    /* Ekstern-lenke-ikon */
+    .ext-icon {
+      font-size: .65rem;
+      color: #adb5bd;
+      margin-left: auto;
+    }
+
+    /* Bruker-felt nederst */
+    .sidebar-user {
+      border-top: 1px solid #e9ecef;
+      padding: .75rem 1rem;
+      flex-shrink: 0;
+    }
+    .sidebar-user .user-btn {
+      display: flex;
+      align-items: center;
+      gap: .6rem;
+      width: 100%;
+      background: none;
+      border: 1px solid #e9ecef;
+      border-radius: 8px;
+      padding: .5rem .75rem;
+      font-size: .82rem;
+      color: #495057;
+      text-align: left;
+      cursor: pointer;
+      transition: background .1s;
+    }
+    .sidebar-user .user-btn:hover { background: #f5f6fa; }
+    .sidebar-user .user-avatar {
+      width: 28px; height: 28px;
+      background: #dee2e6;
+      border-radius: 50%;
+      display: flex; align-items: center; justify-content: center;
+      font-size: .75rem;
+      color: #495057;
+      flex-shrink: 0;
+    }
+    .sidebar-user .user-name { font-weight: 600; line-height: 1.2; }
+    .sidebar-user .user-role { font-size: .7rem; color: #adb5bd; line-height: 1.2; }
+
+    /* ── Mobilstripe (vises kun på smal skjerm) ─────────── */
+    #mobile-bar {
+      display: none;
+      position: fixed;
+      top: 0; left: 0; right: 0;
+      height: 52px;
+      background: #fff;
+      border-bottom: 1px solid #e9ecef;
+      align-items: center;
+      padding: 0 1rem;
+      gap: .75rem;
+      z-index: 1045;
+    }
+
+    /* ── Innholdsområde ────────────────────────────────────── */
+    #main-wrapper {
+      margin-left: 230px;
+      flex: 1;
+      min-width: 0;
+      display: flex;
+      flex-direction: column;
+    }
+    main {
+      flex: 1;
+      padding: 1.75rem 2rem;
+      max-width: 1400px;
+      width: 100%;
+    }
+    footer {
+      padding: .75rem 2rem;
+      font-size: .78rem;
+      color: #adb5bd;
+      border-top: 1px solid #e9ecef;
+    }
+
+    /* ── Søkeforhåndsvisning ───────────────────────────────── */
+    #search-preview {
+      position: fixed;
+      z-index: 1060;
+      background: #fff;
+      border: 1px solid #dee2e6;
+      border-radius: 8px;
+      box-shadow: 0 4px 16px rgba(0,0,0,.14);
+      overflow: hidden;
+    }
+    #search-preview a {
+      display: flex;
+      flex-direction: column;
+      padding: .6rem .9rem;
+      text-decoration: none;
+      color: inherit;
+      border-bottom: 1px solid #f0f0f0;
+      font-size: .82rem;
+      transition: background .08s;
+    }
+    #search-preview a:last-child { border-bottom: none; }
+    #search-preview a:hover { background: #f5f6fa; }
+
+    /* ── Responsivt – skjul sidebar, vis mobilstripe ──────── */
+    @media (max-width: 768px) {
+      #sidebar        { transform: translateX(-100%); transition: transform .22s; }
+      #sidebar.open   { transform: translateX(0); }
+      #mobile-bar     { display: flex; }
+      #main-wrapper   { margin-left: 0; margin-top: 52px; }
+      main            { padding: 1rem; }
+      .sidebar-overlay {
+        display: none;
+        position: fixed; inset: 0;
+        background: rgba(0,0,0,.3);
+        z-index: 1039;
+      }
+      .sidebar-overlay.open { display: block; }
+    }
   </style>
 </head>
 <body>
 
-<nav class="navbar navbar-expand-lg navbar-dark bg-dark mb-4">
-  <div class="container">
-    <a class="navbar-brand" href="/">
-      <i class="bi bi-layers-half me-1"></i>Slettix Analytics
+{# ── Utled aktiv seksjon og underside fra URL ── #}
+{% set path = request.url.path %}
+{% if path == '/' or path.startswith('/products') or path == '/browse' %}
+  {% set section = 'katalog' %}
+{% elif path == '/create-analytical' %}
+  {% set section = 'bygg' %}
+{% elif path.startswith('/pipeline') %}
+  {% set section = 'bygg' %}
+{% elif path == '/observability' or path == '/platform' %}
+  {% set section = 'overvak' %}
+{% elif path.startswith('/governance') or path.startswith('/domain') %}
+  {% set section = 'styr' %}
+{% elif path.startswith('/admin') %}
+  {% set section = 'admin' %}
+{% else %}
+  {% set section = '' %}
+{% endif %}
+
+{# ── Mobilstripe (hamburger + logo) ── #}
+<div id="mobile-bar">
+  <button id="sidebar-toggle" class="btn btn-sm btn-outline-secondary border-0 p-1" style="line-height:1;">
+    <i class="bi bi-list fs-5"></i>
+  </button>
+  <a href="/" class="text-decoration-none fw-bold text-dark" style="font-size:.95rem; letter-spacing:-.3px;">
+    <span style="color:#0d6efd;"><i class="bi bi-layers-half me-1"></i></span>Slettix Analytics
+  </a>
+</div>
+<div class="sidebar-overlay" id="sidebar-overlay"></div>
+
+{# ════════════════════════════════════════════════
+   SIDEMENY
+   ════════════════════════════════════════════════ #}
+<nav id="sidebar">
+
+  {# Logo #}
+  <a class="sidebar-logo" href="/">
+    <div class="logo-icon"><i class="bi bi-layers-half"></i></div>
+    <span>Slettix Analytics</span>
+  </a>
+
+  {# Søk #}
+  <div class="sidebar-search">
+    <form id="global-search-form">
+      <div class="input-group input-group-sm">
+        <span class="input-group-text"><i class="bi bi-search"></i></span>
+        <input type="text" id="global-search-input"
+               class="form-control"
+               placeholder="Søk i katalogen…"
+               autocomplete="off">
+      </div>
+    </form>
+  </div>
+
+  {# Navigasjonslenker #}
+  <div class="sidebar-nav">
+
+    {# ─ Katalog ─ #}
+    <div class="sidebar-section-label">Oppdag</div>
+
+    <a href="/" class="sidebar-link {% if section == 'katalog' and path == '/' %}active{% endif %}">
+      <i class="bi bi-grid link-icon"></i>
+      Datakatalog
     </a>
-    <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#nav">
-      <span class="navbar-toggler-icon"></span>
-    </button>
-    <div class="collapse navbar-collapse" id="nav">
-      <ul class="navbar-nav ms-auto">
-        <li class="nav-item">
-          <a class="nav-link {% if request.url.path == '/' %}active{% endif %}" href="/">
-            <i class="bi bi-grid me-1"></i>Katalog
-          </a>
-        </li>
-        <li class="nav-item">
-          <a class="nav-link {% if request.url.path == '/pipelines' %}active{% endif %}" href="/pipelines">
-            <i class="bi bi-diagram-3 me-1"></i>Pipelines
-          </a>
-        </li>
-        <li class="nav-item">
-          <a class="nav-link {% if request.url.path == '/browse' %}active{% endif %}" href="/browse">
-            <i class="bi bi-folder2-open me-1"></i>Browser
-          </a>
-        </li>
-        <li class="nav-item">
-          <a id="jupyter-nav-link" class="nav-link" href="http://localhost:8888/lab" target="_blank">
-            <i class="bi bi-journal-code me-1"></i>Jupyter
-          </a>
-        </li>
-        <li class="nav-item">
-          <a class="nav-link" href="/docs" target="_blank">
-            <i class="bi bi-code-slash me-1"></i>API
-          </a>
-        </li>
-        {% if current_user %}
-          {% if current_user.role == "admin" %}
-          <li class="nav-item">
-            <a class="nav-link {% if request.url.path.startswith('/admin') %}active{% endif %}" href="/admin">
-              <i class="bi bi-shield-lock me-1"></i>Admin
-            </a>
-          </li>
-          {% endif %}
-          <li class="nav-item dropdown">
-            <a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown">
-              <i class="bi bi-person-circle me-1"></i>{{ current_user.username }}
-            </a>
-            <ul class="dropdown-menu dropdown-menu-end">
-              <li><span class="dropdown-item-text text-muted small">{{ current_user.role }}</span></li>
-              <li><hr class="dropdown-divider"></li>
-              <li><a class="dropdown-item" href="/logout"><i class="bi bi-box-arrow-right me-2"></i>Logg ut</a></li>
-            </ul>
-          </li>
-        {% else %}
-          <li class="nav-item">
-            <a class="nav-link" href="/login"><i class="bi bi-person me-1"></i>Logg inn</a>
-          </li>
-        {% endif %}
+    {% if section == 'katalog' %}
+    <div class="sidebar-sub">
+      <a href="/" class="sidebar-link {% if path == '/' and not request.query_params.get('tab') %}active{% endif %}">
+        <i class="bi bi-box link-icon"></i>Kildeprodukter
+      </a>
+      <a href="/?tab=analytical" class="sidebar-link {% if request.query_params.get('tab') == 'analytical' %}active{% endif %}">
+        <i class="bi bi-graph-up link-icon"></i>Analytiske produkter
+      </a>
+      <a href="/browse" class="sidebar-link {% if path == '/browse' %}active{% endif %}">
+        <i class="bi bi-folder2-open link-icon"></i>Delta Browser
+      </a>
+    </div>
+    {% endif %}
+
+    {# ─ Bygg ─ #}
+    <a href="/pipeline-builder" class="sidebar-link {% if section == 'bygg' and path == '/pipeline-builder' %}active{% endif %}">
+      <i class="bi bi-wrench-adjustable link-icon"></i>
+      Bygg pipeline
+    </a>
+    {% if section == 'bygg' %}
+    <div class="sidebar-sub">
+      <a href="/pipeline-builder" class="sidebar-link {% if path == '/pipeline-builder' %}active{% endif %}">
+        <i class="bi bi-plus-circle link-icon"></i>Pipeline Builder
+      </a>
+      <a href="/pipelines" class="sidebar-link {% if path == '/pipelines' %}active{% endif %}">
+        <i class="bi bi-diagram-3 link-icon"></i>Mine pipelines
+      </a>
+      <a href="/create-analytical" class="sidebar-link {% if path == '/create-analytical' %}active{% endif %}">
+        <i class="bi bi-journal-plus link-icon"></i>Lag analytisk produkt
+        <span class="link-help" data-bs-toggle="tooltip" title="Lag et nytt analytisk dataprodukt basert på eksisterende Silver- eller Gold-data, og sett opp automatisk kjøreplan i Airflow.">
+          <i class="bi bi-question-circle"></i>
+        </span>
+      </a>
+    </div>
+    {% endif %}
+
+    {# ─ Overvåk ─ #}
+    <a href="/observability" class="sidebar-link {% if section == 'overvak' and path == '/observability' %}active{% endif %}">
+      <i class="bi bi-activity link-icon"></i>
+      Overvåk
+    </a>
+    {% if section == 'overvak' %}
+    <div class="sidebar-sub">
+      <a href="/observability" class="sidebar-link {% if path == '/observability' %}active{% endif %}">
+        <i class="bi bi-pulse link-icon"></i>Observerbarhet
+      </a>
+      <a href="/platform" class="sidebar-link {% if path == '/platform' %}active{% endif %}">
+        <i class="bi bi-hdd-network link-icon"></i>Plattformstatus
+      </a>
+    </div>
+    {% endif %}
+
+    {# ─ Styr (kun innloggede) ─ #}
+    {% if current_user %}
+    <div class="sidebar-sep"></div>
+    <div class="sidebar-section-label">Administrasjon</div>
+
+    <a href="/governance" class="sidebar-link {% if section == 'styr' %}active{% endif %}">
+      <i class="bi bi-shield-shaded link-icon"></i>
+      Datakvalitet & GDPR
+    </a>
+    {% if section == 'styr' %}
+    <div class="sidebar-sub">
+      <a href="/governance" class="sidebar-link {% if path == '/governance' %}active{% endif %}">
+        <i class="bi bi-map link-icon"></i>GDPR-datakart
+      </a>
+    </div>
+    {% endif %}
+    {% endif %}
+
+    {# ─ Admin ─ #}
+    {% if current_user and current_user.role == "admin" %}
+    <a href="/admin" class="sidebar-link {% if section == 'admin' %}active{% endif %}">
+      <i class="bi bi-shield-lock link-icon"></i>
+      Admin
+    </a>
+    {% if section == 'admin' %}
+    <div class="sidebar-sub">
+      <a href="/admin" class="sidebar-link {% if path == '/admin' %}active{% endif %}">
+        <i class="bi bi-people link-icon"></i>Brukere og tilgang
+      </a>
+    </div>
+    {% endif %}
+    {% endif %}
+
+    {# ─ Eksterne verktøy ─ #}
+    <div class="sidebar-sep"></div>
+    <div class="sidebar-section-label">Verktøy</div>
+
+    <a id="jupyter-nav-link" href="{{ jupyter_url }}/lab" target="_blank" class="sidebar-link">
+      <i class="bi bi-journal-code link-icon" style="color:#f59e0b;"></i>
+      Jupyter Lab
+      <i class="bi bi-box-arrow-up-right ext-icon"></i>
+    </a>
+    <a href="{{ superset_url }}" target="_blank" class="sidebar-link">
+      <i class="bi bi-bar-chart-line link-icon" style="color:#06b6d4;"></i>
+      Apache Superset
+      <i class="bi bi-box-arrow-up-right ext-icon"></i>
+    </a>
+    <a href="{{ airflow_url }}" target="_blank" class="sidebar-link">
+      <i class="bi bi-diagram-3 link-icon" style="color:#3b82f6;"></i>
+      Apache Airflow
+      <i class="bi bi-box-arrow-up-right ext-icon"></i>
+    </a>
+    <a href="{{ minio_url }}" target="_blank" class="sidebar-link">
+      <i class="bi bi-bucket-fill link-icon" style="color:#ef4444;"></i>
+      MinIO Console
+      <i class="bi bi-box-arrow-up-right ext-icon"></i>
+    </a>
+    <a href="/docs" target="_blank" class="sidebar-link">
+      <i class="bi bi-code-slash link-icon" style="color:#8b5cf6;"></i>
+      API-dokumentasjon
+      <i class="bi bi-box-arrow-up-right ext-icon"></i>
+    </a>
+
+  </div>{# /sidebar-nav #}
+
+  {# Bruker-felt #}
+  <div class="sidebar-user">
+    {% if current_user %}
+    <div class="dropdown">
+      <button class="user-btn dropdown-toggle" data-bs-toggle="dropdown" aria-expanded="false">
+        <div class="user-avatar">
+          <i class="bi bi-person-fill"></i>
+        </div>
+        <div>
+          <div class="user-name">{{ current_user.username }}</div>
+          <div class="user-role">{{ current_user.role }}</div>
+        </div>
+      </button>
+      <ul class="dropdown-menu dropdown-menu-end" style="min-width:180px;">
+        <li><a class="dropdown-item text-danger" href="/logout">
+          <i class="bi bi-box-arrow-right me-2"></i>Logg ut
+        </a></li>
       </ul>
     </div>
+    {% else %}
+    <a href="/login" class="btn btn-sm btn-primary w-100">
+      <i class="bi bi-person me-1"></i>Logg inn
+    </a>
+    {% endif %}
   </div>
-</nav>
 
-<main class="container pb-5">
-  {% block content %}{% endblock %}
-</main>
+</nav>{# /sidebar #}
 
-<footer class="border-top mt-5 py-3 text-center text-muted small">
-  Slettix Analytics Data Portal
-</footer>
+{# ════════════════════════════════════════════════
+   INNHOLDSOMRÅDE
+   ════════════════════════════════════════════════ #}
+<div id="main-wrapper">
+  <main>
+    {% block content %}{% endblock %}
+  </main>
+  <footer>Slettix Analytics Data Portal</footer>
+</div>
+
+{# Søkeforhåndsvisning (plasseres utenfor sidebar for overflow) #}
+<div id="search-preview" style="display:none;"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
 <script>
-  // Oppdater Jupyter-lenken til å peke på produktets notebook om den finnes
+  // ── Tooltips ──
+  document.querySelectorAll("[data-bs-toggle='tooltip']").forEach(el =>
+    new bootstrap.Tooltip(el)
+  );
+
+  // ── Mobilmeny ──
+  (function () {
+    const toggle   = document.getElementById("sidebar-toggle");
+    const sidebar  = document.getElementById("sidebar");
+    const overlay  = document.getElementById("sidebar-overlay");
+    if (!toggle) return;
+    function open()  { sidebar.classList.add("open");  overlay.classList.add("open"); }
+    function close() { sidebar.classList.remove("open"); overlay.classList.remove("open"); }
+    toggle.addEventListener("click", () => sidebar.classList.contains("open") ? close() : open());
+    overlay.addEventListener("click", close);
+  })();
+
+  // ── Globalt søk ──
+  (function () {
+    const form    = document.getElementById("global-search-form");
+    const input   = document.getElementById("global-search-input");
+    const preview = document.getElementById("search-preview");
+    if (!form || !input) return;
+
+    form.addEventListener("submit", e => {
+      e.preventDefault();
+      const q = input.value.trim();
+      if (q) window.location.href = "/?q=" + encodeURIComponent(q);
+    });
+
+    let timer;
+    input.addEventListener("input", () => {
+      clearTimeout(timer);
+      const q = input.value.trim();
+      if (q.length < 2) { hidePreview(); return; }
+      timer = setTimeout(async () => {
+        try {
+          const resp = await fetch(`/api/search?q=${encodeURIComponent(q)}&limit=6`);
+          if (!resp.ok) return;
+          const results = await resp.json();
+          showPreview(q, results);
+        } catch { hidePreview(); }
+      }, 250);
+    });
+
+    document.addEventListener("click", e => {
+      if (!form.contains(e.target) && !preview.contains(e.target)) hidePreview();
+    });
+
+    function showPreview(q, results) {
+      if (!results.length) { hidePreview(); return; }
+      const rect = input.getBoundingClientRect();
+      preview.style.left  = rect.left + "px";
+      preview.style.top   = (rect.bottom + 4) + "px";
+      preview.style.width = Math.max(rect.width, 300) + "px";
+      preview.style.display = "block";
+      preview.innerHTML = results.map(r => `
+        <a href="/products/${r.id}">
+          <span style="font-weight:600;">${r.name || r.id}</span>
+          <span style="font-size:.75rem;color:#6c757d;">${r.domain || ''} ${r.description ? '— ' + r.description.slice(0,55) + (r.description.length > 55 ? '…' : '') : ''}</span>
+          ${r.col_matches && r.col_matches.length ? `<span style="font-size:.7rem;color:#0a58ca;"><i class="bi bi-table me-1"></i>${r.col_matches.slice(0,3).map(c=>'<code>'+c+'</code>').join(', ')}</span>` : ''}
+        </a>`).join('') +
+        `<a href="/?q=${encodeURIComponent(q)}" style="font-size:.78rem;color:#6c757d;justify-content:center;">
+          Vis alle resultater for «${q}» <i class="bi bi-arrow-right ms-1"></i>
+        </a>`;
+    }
+
+    function hidePreview() {
+      preview.style.display = "none";
+      preview.innerHTML = "";
+    }
+  })();
+
+  // ── Oppdater Jupyter-lenke til produktets notebook ──
   (function () {
     const link = document.getElementById("jupyter-nav-link");
     if (!link) return;
     const m = window.location.pathname.match(/^\/products\/(.+)$/);
     if (!m) return;
-    const productId = m[1];
-    fetch(`/api/products/${productId}/notebook`, {method: "HEAD"})
-      .catch(() => {});
-    // Sjekk om notebook-filen eksisterer via produktets notebook-endepunkt (ingen generering)
-    fetch(`/api/products/${productId}`)
+    fetch(`/api/products/${m[1]}`)
       .then(r => r.json())
       .then(data => {
-        const pid      = data.manifest && data.manifest.id;
-        const filename = pid ? "product_" + pid.replace(/[^a-zA-Z0-9_-]/g, "_") + ".ipynb" : null;
-        if (filename) {
-          link.href = `http://localhost:8888/lab/tree/${filename}`;
-        }
+        const pid = data.manifest && data.manifest.id;
+        if (pid) link.href = `{{ jupyter_url }}/lab/tree/product_${pid.replace(/[^a-zA-Z0-9_-]/g, "_")}.ipynb`;
       })
       .catch(() => {});
   })();

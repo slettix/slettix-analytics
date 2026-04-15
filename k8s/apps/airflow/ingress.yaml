@@ -1,0 +1,24 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: airflow
+  namespace: slettix-analytics
+  labels:
+    app: airflow
+    app.kubernetes.io/part-of: slettix-analytics
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: airflow.slettix.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: airflow-webserver
+                port:
+                  number: 8080

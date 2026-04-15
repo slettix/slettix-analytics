@@ -1,0 +1,25 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: jupyter
+  namespace: slettix-analytics
+  labels:
+    app: jupyter
+    app.kubernetes.io/part-of: slettix-analytics
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "600"
+    nginx.ingress.kubernetes.io/proxy-http-version: "1.1"
+spec:
+  ingressClassName: nginx
+  rules:
+    - host: jupyter.slettix.local
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: jupyter
+                port:
+                  number: 8888

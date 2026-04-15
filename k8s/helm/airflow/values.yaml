@@ -1,0 +1,278 @@
+# Helm values for Apache Airflow — slettix-analytics
+#
+# Forutsetninger:
+#   Opprett/oppdater DAG ConfigMap etter endringer:
+#     kubectl create configmap airflow-dags --namespace slettix-analytics \
+#       --from-file=airflow/dags/ --dry-run=client -o yaml | kubectl apply -f -
+#
+# Installer / oppgrader:
+#   helm repo add apache-airflow https://airflow.apache.org
+#   helm repo update
+#   helm upgrade --install airflow apache-airflow/airflow \
+#     --namespace slettix-analytics \
+#     --values k8s/helm/airflow/values.yaml \
+#     --version 1.14.0 \
+#     --timeout 8m
+
+# ── Image (egendefinert, bygget med build-airflow-image.sh) ──────────────────
+images:
+  airflow:
+    repository: slettix-analytics/airflow
+    tag: "2.9.2"
+    pullPolicy: IfNotPresent
+
+# ── Executor: KubernetesExecutor — hver task kjører i sin egen pod ───────────
+executor: KubernetesExecutor
+
+config:
+  core:
+    load_examples: "False"
+  kubernetes_executor:
+    namespace: slettix-analytics
+    worker_container_repository: slettix-analytics/airflow
+    worker_container_tag: "2.9.2"
+    delete_worker_pods: "True"
+    delete_worker_pods_on_failure: "False"
+
+# ── Database (ekstern PostgreSQL — se k8s/apps/airflow/postgres.yaml) ─────────
+postgresql:
+  enabled: false
+
+data:
+  metadataConnection:
+    user: airflow
+    pass: airflow
+    protocol: postgresql
+    host: airflow-postgres
+    port: 5432
+    db: airflow
+    sslmode: disable
+
+# ── DAGs: ConfigMap med subPath-montering ─────────────────────────────────────
+# subPath unngår K8s ConfigMap-symlink-strukturen som forårsaker
+# "Detected recursive loop"-feil i Airflow sin DAG-scanner.
+# Legg til nye DAG-filer i extraVolumeMounts-listene nedenfor.
+dags:
+  persistence:
+    enabled: false
+  gitSync:
+    enabled: false
+
+# ── Fernet- og webserver-nøkler fra K8s Secret ───────────────────────────────
+fernetKey: ""
+webserverSecretKey: ""
+
+# ── Miljøvariabler fra K8s Secret slettix-credentials ────────────────────────
+extraEnvVars:
+  - name: AIRFLOW__CORE__FERNET_KEY
+    valueFrom:
+      secretKeyRef:
+        name: slettix-credentials
+        key: airflow-fernet-key
+  - name: AIRFLOW__WEBSERVER__SECRET_KEY
+    valueFrom:
+      secretKeyRef:
+        name: slettix-credentials
+        key: airflow-secret-key
+  - name: MINIO_ACCESS_KEY
+    valueFrom:
+      secretKeyRef:
+        name: slettix-credentials
+        key: minio-root-user
+  - name: MINIO_SECRET_KEY
+    valueFrom:
+      secretKeyRef:
+        name: slettix-credentials
+        key: minio-root-password
+  - name: KAFKA_BOOTSTRAP_SERVERS
+    value: "kafka-bootstrap.customermaster.svc.cluster.local:9092"
+  - name: PORTAL_URL
+    value: "http://dataportal.slettix-analytics.svc.cluster.local:8090"
+  - name: PORTAL_API_KEY
+    valueFrom:
+      secretKeyRef:
+        name: slettix-credentials
+        key: portal-api-key
+  - name: MINIO_ENDPOINT
+    value: "http://minio.slettix-analytics.svc.cluster.local:9000"
+  - name: AIRFLOW__API__AUTH_BACKENDS
+    value: "airflow.api.auth.backend.basic_auth,airflow.api.auth.backend.session"
+
+# ── Airflow-koblinger ─────────────────────────────────────────────────────────
+connections:
+  - id: spark_default
+    type: spark
+    host: "k8s://https://kubernetes.default.svc"
+    port: 443
+  - id: kubernetes_default
+    type: kubernetes
+    extra: '{"in_cluster": true}'
+
+# ── Admin-bruker ──────────────────────────────────────────────────────────────
+defaultUser:
+  enabled: true
+  role: Admin
+  username: admin
+  email: admin@slettix.local
+  firstName: Admin
+  lastName: User
+  password: admin
+
+# ── Webserver ─────────────────────────────────────────────────────────────────
+webserver:
+  service:
+    type: LoadBalancer
+    ports:
+      - name: airflow-ui
+        port: 8080
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+  livenessProbe:
+    initialDelaySeconds: 60
+    periodSeconds: 20
+  readinessProbe:
+    initialDelaySeconds: 30
+    periodSeconds: 10
+  extraVolumes:
+    - name: dags-cm
+      configMap:
+        name: airflow-dags
+  extraVolumeMounts:
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/01_slettix_pipeline.py
+      subPath: 01_slettix_pipeline.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/02_sla_monitor.py
+      subPath: 02_sla_monitor.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/analytical_employees.py
+      subPath: analytical_employees.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/folkeregister_idp.py
+      subPath: folkeregister_idp.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/folkeregister_silver.py
+      subPath: folkeregister_silver.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/governance_retention.py
+      subPath: governance_retention.py
+
+# ── Scheduler ─────────────────────────────────────────────────────────────────
+scheduler:
+  resources:
+    requests:
+      cpu: 200m
+      memory: 512Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi
+  extraVolumes:
+    - name: dags-cm
+      configMap:
+        name: airflow-dags
+    - name: jobs-cm
+      configMap:
+        name: airflow-jobs
+  extraVolumeMounts:
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/01_slettix_pipeline.py
+      subPath: 01_slettix_pipeline.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/02_sla_monitor.py
+      subPath: 02_sla_monitor.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/analytical_employees.py
+      subPath: analytical_employees.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/folkeregister_idp.py
+      subPath: folkeregister_idp.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/folkeregister_silver.py
+      subPath: folkeregister_silver.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/governance_retention.py
+      subPath: governance_retention.py
+    - name: jobs-cm
+      mountPath: /opt/airflow/jobs
+      readOnly: true
+
+# ── KubernetesExecutor worker pods ───────────────────────────────────────────
+workers:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      memory: 512Mi
+  extraVolumes:
+    - name: dags-cm
+      configMap:
+        name: airflow-dags
+    - name: jobs-cm
+      configMap:
+        name: airflow-jobs
+  extraVolumeMounts:
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/01_slettix_pipeline.py
+      subPath: 01_slettix_pipeline.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/02_sla_monitor.py
+      subPath: 02_sla_monitor.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/analytical_employees.py
+      subPath: analytical_employees.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/folkeregister_idp.py
+      subPath: folkeregister_idp.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/folkeregister_silver.py
+      subPath: folkeregister_silver.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/governance_retention.py
+      subPath: governance_retention.py
+    - name: jobs-cm
+      mountPath: /opt/airflow/jobs
+      readOnly: true
+
+# ── Triggerer ─────────────────────────────────────────────────────────────────
+triggerer:
+  enabled: true
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 200m
+      memory: 512Mi
+  extraVolumes:
+    - name: dags-cm
+      configMap:
+        name: airflow-dags
+  extraVolumeMounts:
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/01_slettix_pipeline.py
+      subPath: 01_slettix_pipeline.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/02_sla_monitor.py
+      subPath: 02_sla_monitor.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/analytical_employees.py
+      subPath: analytical_employees.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/folkeregister_idp.py
+      subPath: folkeregister_idp.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/folkeregister_silver.py
+      subPath: folkeregister_silver.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/governance_retention.py
+      subPath: governance_retention.py
+
+# ── Labels ────────────────────────────────────────────────────────────────────
+labels:
+  app.kubernetes.io/part-of: slettix-analytics

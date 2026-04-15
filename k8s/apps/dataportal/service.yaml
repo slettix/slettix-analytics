@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: dataportal
+  namespace: slettix-analytics
+  labels:
+    app: dataportal
+    app.kubernetes.io/part-of: slettix-analytics
+    app.kubernetes.io/component: dataportal
+spec:
+  type: LoadBalancer
+  selector:
+    app: dataportal
+  ports:
+    - name: http
+      port: 8090
+      targetPort: 8090

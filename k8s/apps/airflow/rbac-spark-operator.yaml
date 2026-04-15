@@ -1,0 +1,30 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: airflow-spark-operator
+  namespace: slettix-analytics
+  labels:
+    app.kubernetes.io/part-of: slettix-analytics
+rules:
+  - apiGroups: ["sparkoperator.k8s.io"]
+    resources: ["sparkapplications", "scheduledsparkapplications", "sparkapplications/status"]
+    verbs: ["create", "get", "list", "watch", "delete", "update", "patch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: airflow-spark-operator
+  namespace: slettix-analytics
+  labels:
+    app.kubernetes.io/part-of: slettix-analytics
+subjects:
+  - kind: ServiceAccount
+    name: airflow-worker
+    namespace: slettix-analytics
+  - kind: ServiceAccount
+    name: airflow-scheduler
+    namespace: slettix-analytics
+roleRef:
+  kind: Role
+  name: airflow-spark-operator
+  apiGroup: rbac.authorization.k8s.io

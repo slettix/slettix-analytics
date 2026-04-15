@@ -1,0 +1,41 @@
+{
+  "id":           "folkeregister.family_relations",
+  "name":         "Folkeregister — Familierelasjoner",
+  "domain":       "folkeregister",
+  "owner":        "folkeregister-team",
+  "version":      "1.0.0",
+  "description":  "Relasjonsgraf over familiebånd i befolkningen. Kant-liste med ekteskap, skilsmisser og foreldre–barn-relasjoner. Ekteskapskanter er SCD2 (lukkes ved skilsmisse). Foreldre–barn-kanter er permanente. generation_depth=1 for direkte relasjoner.",
+  "source_path":  "s3://silver/folkeregister/family_relations",
+  "format":       "delta",
+  "primary_key":  "relation_id",
+  "dag_id":       "folkeregister_silver",
+  "product_type": "derived",
+  "access":       "restricted",
+  "quality_sla": {
+    "max_null_rate":   0.0,
+    "freshness_hours": 25
+  },
+  "tags": ["folkeregister", "pii", "silver", "relasjoner", "familie", "graf"],
+  "contract": {
+    "slo": {
+      "freshness_hours":    25,
+      "completeness_pct":   99
+    },
+    "schema_compatibility": "BACKWARD",
+    "guaranteed_columns": [
+      "relation_id", "person_id_a", "person_id_b",
+      "relation_type", "valid_from", "is_current"
+    ]
+  },
+  "schema": [
+    { "name": "relation_id",       "type": "string",    "nullable": false, "description": "Unik kant-ID (person_id_a_person_id_b_timestamp)", "pii": false },
+    { "name": "person_id_a",       "type": "string",    "nullable": false, "description": "Første person i relasjonen", "pii": false },
+    { "name": "person_id_b",       "type": "string",    "nullable": false, "description": "Andre person i relasjonen", "pii": false },
+    { "name": "relation_type",     "type": "string",    "nullable": false, "description": "GIFT | SKILT | FORELDER_AV | BARN_AV", "pii": false },
+    { "name": "generation_depth",  "type": "integer",   "nullable": true,  "description": "Generasjonsavstand (1 for direkte foreldre–barn, null for ekteskap)", "pii": false },
+    { "name": "valid_from",        "type": "timestamp", "nullable": false, "description": "Tidspunkt relasjonen ble etablert", "pii": false },
+    { "name": "valid_to",          "type": "timestamp", "nullable": true,  "description": "Tidspunkt relasjonen ble avsluttet (null = aktiv)", "pii": false },
+    { "name": "is_current",        "type": "boolean",   "nullable": false, "description": "True = aktiv relasjon", "pii": false },
+    { "name": "_updated_at",       "type": "timestamp", "nullable": false, "description": "Sist oppdatert av Silver-jobben", "pii": false }
+  ]
+}

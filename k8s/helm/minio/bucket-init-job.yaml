@@ -1,0 +1,82 @@
+# Oppretter mappe-struktur og placeholder-filer i MinIO etter at buckets finnes.
+# Tilsvarer minio-init-tjenesten i docker-compose.yml.
+#
+# Kjør etter helm-installasjon:
+#   kubectl apply -f k8s/helm/minio/bucket-init-job.yaml
+#
+# Sjekk status:
+#   kubectl logs job/minio-bucket-init -n slettix-analytics
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-bucket-init
+  namespace: slettix-analytics
+  labels:
+    app.kubernetes.io/part-of: slettix-analytics
+    app.kubernetes.io/component: minio-init
+  annotations:
+    # Kjøres manuelt — ikke som del av Helm release-livssyklusen
+    helm.sh/hook: ""
+spec:
+  # Idempotent — trygt å kjøre på nytt
+  backoffLimit: 3
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/part-of: slettix-analytics
+        app.kubernetes.io/component: minio-init
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: mc
+          image: minio/mc:latest
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: MINIO_ROOT_USER
+              valueFrom:
+                secretKeyRef:
+                  name: slettix-credentials
+                  key: minio-root-user
+            - name: MINIO_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: slettix-credentials
+                  key: minio-root-password
+          command:
+            - /bin/sh
+            - -c
+            - |
+              set -e
+
+              MINIO_ENDPOINT="http://minio.slettix-analytics.svc.cluster.local:9000"
+
+              echo "Venter på at MinIO skal bli tilgjengelig..."
+              until mc alias set local "$MINIO_ENDPOINT" "$MINIO_ROOT_USER" "$MINIO_ROOT_PASSWORD" 2>/dev/null; do
+                echo "  MinIO ikke klar ennå — prøver igjen om 5 sekunder..."
+                sleep 5
+              done
+              echo "MinIO er klar."
+
+              # Mappe-struktur: HR-domene
+              echo "Oppretter HR-mappestruktur..."
+              mc cp /dev/null local/raw/hr/employees/.domain
+              mc cp /dev/null local/bronze/hr/employees/.domain
+              mc cp /dev/null local/silver/hr/employees/.domain
+              mc cp /dev/null local/gold/hr/department_stats/.domain
+              mc cp /dev/null local/gold/data_products/.domain
+
+              # Mappe-struktur: Folkeregister-domene
+              echo "Oppretter Folkeregister-mappestruktur..."
+              mc cp /dev/null local/bronze/folkeregister/person_events/.domain
+              mc cp /dev/null local/bronze/folkeregister/family_events/.domain
+              mc cp /dev/null local/silver/folkeregister/.domain
+              mc cp /dev/null local/gold/folkeregister/.domain
+              mc cp /dev/null local/checkpoints/folkeregister/.keep
+
+              # Stream-input mappe (brukes av stream_to_bronze.py)
+              echo "Oppretter stream-input-mappe..."
+              mc cp /dev/null local/raw/stream-input/.domain
+
+              echo "Mappe-struktur klar."
+              mc ls local/

@@ -1,0 +1,91 @@
+# Alle dataprodukters manifest-filer som én ConfigMap.
+# Oppdateres automatisk ved ny manifest via: scripts/k8s-update-manifests.sh
+#
+# Pods som trenger tilgang monterer dette volumet:
+#   volumes:
+#     - name: product-manifests
+#       configMap:
+#         name: product-manifests
+#   volumeMounts:
+#     - name: product-manifests
+#       mountPath: /opt/conf/products
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: product-manifests
+  namespace: slettix-analytics
+  labels:
+    app.kubernetes.io/part-of: slettix-analytics
+data:
+  hr_employees.json: |
+    {
+      "id":          "hr.employees",
+      "name":        "Employees",
+      "domain":      "hr",
+      "owner":       "hr-team",
+      "version":     "1.0.0",
+      "description": "Alle aktive ansatte med stilling, avdeling, lønn og ansettelsesdato. Oppdateres daglig fra kildesystemet via Bronze → Silver pipeline.",
+      "source_path": "s3://silver/hr/employees",
+      "format":      "delta",
+      "primary_key": "id",
+      "dag_id":      "01_slettix_pipeline",
+      "quality_sla": {
+        "max_null_rate":    0.0,
+        "freshness_hours":  25
+      },
+      "access": "restricted",
+      "tags": ["hr", "pii", "employees", "salary"]
+    }
+  hr_department_stats.json: |
+    {
+      "id":          "hr.department_stats",
+      "name":        "Department Statistics",
+      "domain":      "hr",
+      "owner":       "hr-team",
+      "version":     "1.0.0",
+      "description": "Aggregerte nøkkeltall per avdeling: antall ansatte, gjennomsnittslønn, min/maks-lønn og total lønnskostnad. Beregnes daglig fra Silver employees-tabellen.",
+      "source_path": "s3://gold/hr/department_stats",
+      "format":      "delta",
+      "primary_key": "department",
+      "dag_id":      "01_slettix_pipeline",
+      "quality_sla": {
+        "max_null_rate":    0.0,
+        "freshness_hours":  25
+      },
+      "access": "public",
+      "tags": ["hr", "aggregated", "department", "salary"]
+    }
+  folkeregister.person_events.json: |
+    {
+      "id": "folkeregister.person_events",
+      "name": "Folkeregister — Personhendelser (IDP)",
+      "domain": "folkeregister",
+      "owner": "folkeregister-team",
+      "version": "1.0.0",
+      "description": "Input Data Product (IDP) som konsumerer personhendelser fra Folkeregisteret via Kafka.",
+      "source_path": "s3://bronze/folkeregister/person_events",
+      "format": "delta",
+      "primary_key": "event_id",
+      "dag_id": "folkeregister_idp",
+      "product_type": "source",
+      "access": "restricted",
+      "quality_sla": { "max_null_rate": 0.01, "freshness_hours": 1 },
+      "tags": ["folkeregister", "pii", "streaming", "kafka", "idp", "bronze"]
+    }
+  folkeregister.family_events.json: |
+    {
+      "id": "folkeregister.family_events",
+      "name": "Folkeregister — Familiehendelser (IDP)",
+      "domain": "folkeregister",
+      "owner": "folkeregister-team",
+      "version": "1.0.0",
+      "description": "Input Data Product (IDP) som konsumerer familiehendelser fra Folkeregisteret via Kafka.",
+      "source_path": "s3://bronze/folkeregister/family_events",
+      "format": "delta",
+      "primary_key": "event_id",
+      "dag_id": "folkeregister_idp",
+      "product_type": "source",
+      "access": "restricted",
+      "quality_sla": { "max_null_rate": 0.01, "freshness_hours": 1 },
+      "tags": ["folkeregister", "pii", "streaming", "kafka", "idp", "bronze"]
+    }

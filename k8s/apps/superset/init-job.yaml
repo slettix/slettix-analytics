@@ -1,0 +1,79 @@
+# Kjøres én gang for å migrere database, opprette admin og registrere DuckDB.
+# Tilsvarer superset-init-tjenesten i docker-compose.
+#
+# Idempotent — trygt å kjøre på nytt (alle steg håndterer "allerede eksisterer").
+#
+# Kjør manuelt etter første deploy eller ved oppgradering:
+#   kubectl delete job superset-init -n slettix-analytics --ignore-not-found
+#   kubectl apply -f k8s/apps/superset/init-job.yaml
+#   kubectl wait --for=condition=complete job/superset-init -n slettix-analytics --timeout=120s
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: superset-init
+  namespace: slettix-analytics
+  labels:
+    app: superset
+    app.kubernetes.io/part-of: slettix-analytics
+    app.kubernetes.io/component: superset-init
+spec:
+  backoffLimit: 2
+  ttlSecondsAfterFinished: 600
+  template:
+    metadata:
+      labels:
+        app: superset
+        app.kubernetes.io/component: superset-init
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: superset-init
+          image: slettix-analytics/superset:4.1.1
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/bash", "/app/pythonpath/superset-init.sh"]
+          env:
+            - name: SUPERSET_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: slettix-credentials
+                  key: airflow-secret-key   # gjenbruker secret-key for dev
+            - name: MINIO_ENDPOINT
+              value: "http://minio.slettix-analytics.svc.cluster.local:9000"
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: slettix-credentials
+                  key: minio-root-user
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: slettix-credentials
+                  key: minio-root-password
+            - name: SUPERSET_CONFIG_PATH
+              value: /app/pythonpath/superset_config.py
+            - name: PYTHONPATH
+              value: /app/pythonpath
+            - name: AWS_EC2_METADATA_DISABLED
+              value: "true"
+            - name: AWS_DEFAULT_REGION
+              value: "us-east-1"
+          volumeMounts:
+            - name: superset-data
+              mountPath: /var/lib/superset
+            - name: superset-config
+              mountPath: /app/pythonpath/superset_config.py
+              subPath: superset_config.py
+            - name: superset-config
+              mountPath: /app/pythonpath/setup_duckdb.py
+              subPath: setup_duckdb.py
+            - name: superset-config
+              mountPath: /app/pythonpath/superset-init.sh
+              subPath: superset-init.sh
+      volumes:
+        - name: superset-data
+          persistentVolumeClaim:
+            claimName: superset-data
+        - name: superset-config
+          configMap:
+            name: superset-config
+            defaultMode: 0755

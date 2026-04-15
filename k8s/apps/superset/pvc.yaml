@@ -1,0 +1,17 @@
+# PVC for Superset SQLite-metadatabase (dashboards, brukere, tilkoblinger).
+# Bruker Docker Desktops standard hostPath StorageClass — data overlever pod-restart.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: superset-data
+  namespace: slettix-analytics
+  labels:
+    app: superset
+    app.kubernetes.io/part-of: slettix-analytics
+    app.kubernetes.io/component: superset
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi

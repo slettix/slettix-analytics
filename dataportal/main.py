@@ -10,7 +10,11 @@ API (JSON):
   GET  /api/products/{id}/quality      — siste GE-valideringsresultat
   GET  /api/products/{id}/sla          — SLA-ferskhets-status
   GET  /api/products/{id}/versions     — versjonshistorikk med diff
+  GET  /api/products/{id}/lineage      — upstream/downstream lineage-graf
   GET  /api/browser                    — naviger MinIO og detekter Delta-tabeller
+  GET  /api/products/{id}/subscribers  — list abonnenter (eier/admin)
+  PATCH /api/products/{id}/subscribe   — abonner på endringer
+  DELETE /api/products/{id}/subscribe  — avslutt abonnement
 
 Auth API:
   POST /auth/login                     — logg inn, sett access/refresh cookies
@@ -30,6 +34,30 @@ UI (HTML):
   GET  /admin                          — brukeradministrasjon (kun admin)
   POST /admin/access-requests/{id}     — godkjenn/avslå forespørsel
   POST /access-requests                — be om tilgang til restricted produkt
+  GET  /domain/{domain}/contracts      — kontrakts-dashboard per domene
+  GET  /domain/{domain}/contracts.csv  — eksporter kontrakt-status
+  GET  /pipeline-builder               — selvbetjent pipeline-malbibliotek
+  GET  /pipelines/{dag_id}/edit        — rediger pipeline-konfigurasjon
+
+  POST /api/pipelines/preview          — forhåndsvis generert DAG-kode
+  POST /api/pipelines                  — opprett og deploy ny pipeline
+  PUT  /api/pipelines/{dag_id}         — oppdater og redeploy pipeline
+  GET  /api/pipelines/{dag_id}/config  — hent pipeline-konfigurasjon og historikk
+  GET  /api/pipelines/{dag_id}/status  — hent Airflow-status for DAG
+  GET  /api/governance/pii-map          — GDPR-datakart over alle PII-kolonner
+  POST /api/admin/users/{id}/domains    — Legg til domeneprivilegium (admin)
+  DELETE /api/admin/users/{id}/domains/{domain} — Fjern domeneprivilegium (admin)
+  GET  /governance                      — GDPR-styrings-dashboard
+  GET  /api/products/{id}/quality/history — historisk kvalitetstidsserie
+  GET  /api/products/{id}/anomalies       — siste anomalideteksjon
+  GET  /api/products/{id}/incidents       — alle incidents for produktet
+  POST /api/products/{id}/incidents       — opprett incident (system/admin)
+  PATCH /api/incidents/{id}               — oppdater incident-status
+  GET  /observability                     — plattformdekkende observerbarhetsdashboard
+  GET  /api/search                        — semantisk full-tekst søk
+  GET  /api/products/{id}/related         — relaterte produkter
+  POST /api/products/{id}/generate-description — AI-generert beskrivelse
+  POST /api/nl2sql                        — naturlig språk til SQL
 """
 
 import json
@@ -65,12 +93,19 @@ MINIO_ENDPOINT   = os.environ.get("MINIO_ENDPOINT",  "http://minio:9000")
 MINIO_ACCESS_KEY = os.environ.get("MINIO_ACCESS_KEY", "admin")
 MINIO_SECRET_KEY = os.environ.get("MINIO_SECRET_KEY", "changeme")
 
-AIRFLOW_URL  = os.environ.get("AIRFLOW_URL",  "http://airflow-webserver:8080")
+AIRFLOW_URL  = os.environ.get("AIRFLOW_URL",  "http://airflow-webserver.slettix-analytics.svc.cluster.local:8080")
 AIRFLOW_USER = os.environ.get("AIRFLOW_USER", "admin")
 AIRFLOW_PASS = os.environ.get("AIRFLOW_PASS", "admin")
 
 PORTAL_API_KEY  = os.environ.get("PORTAL_API_KEY", "dev-key-change-me")
-JUPYTER_URL     = os.environ.get("JUPYTER_URL",    "http://localhost:8888")
+JUPYTER_URL     = os.environ.get("JUPYTER_URL",    "http://jupyter.slettix-analytics.svc.cluster.local:8888")
+SUPERSET_URL    = os.environ.get("SUPERSET_URL",   "http://superset.slettix-analytics.svc.cluster.local:8088")
+
+# Eksterne URL-er — åpnes i nettleseren via port-forward (eller Ingress i prod)
+AIRFLOW_EXTERNAL_URL  = os.environ.get("AIRFLOW_EXTERNAL_URL",  "http://localhost:8080")
+JUPYTER_EXTERNAL_URL  = os.environ.get("JUPYTER_EXTERNAL_URL",  "http://localhost:8888")
+SUPERSET_EXTERNAL_URL = os.environ.get("SUPERSET_EXTERNAL_URL", "http://localhost:8088")
+MINIO_EXTERNAL_URL    = os.environ.get("MINIO_EXTERNAL_URL",    "http://localhost:9001")
 NOTEBOOKS_DIR   = os.environ.get("NOTEBOOKS_DIR",  "/opt/dataportal/notebooks")
 DAGS_DIR        = os.environ.get("DAGS_DIR",       "/opt/airflow/dags")
 _api_key_scheme = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -90,6 +125,22 @@ app = FastAPI(
     version="2.0.0",
     description="REST API for dataprodukter, pipeline-status og datakvalitet.",
 )
+
+@app.middleware("http")
+async def track_product_views(request, call_next):
+    """Logg produktvisninger anonymt til bruksstatistikk."""
+    response = await call_next(request)
+    path = request.url.path
+    # Matche /products/{id} og /api/products/{id} (GET, ikke sub-paths)
+    import re as _re
+    m = _re.match(r"^/(?:api/)?products/([^/]+)$", path)
+    if m and request.method == "GET" and response.status_code < 400:
+        pid  = m.group(1)
+        user = auth.get_current_user(request)
+        uid  = user["id"] if user else None
+        auth.track_usage(pid, "view", uid)
+    return response
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -193,6 +244,165 @@ def _safe_quality(product_id: str) -> dict | None:
         return None
 
 
+def _safe_quality_history(product_id: str, limit: int = 30) -> list[dict]:
+    """Les tidsserie av kvalitetsresultater fra MinIO history/-mappe."""
+    try:
+        s3   = _s3_client()
+        resp = s3.list_objects_v2(
+            Bucket="gold",
+            Prefix=f"quality_results/{product_id}/history/",
+        )
+        keys = sorted(
+            [o["Key"] for o in resp.get("Contents", [])],
+            reverse=True,
+        )[:limit]
+        result = []
+        for key in keys:
+            try:
+                obj = s3.get_object(Bucket="gold", Key=key)
+                result.append(json.loads(obj["Body"].read()))
+            except Exception:
+                pass
+        return list(reversed(result))  # kronologisk rekkefølge
+    except Exception:
+        return []
+
+
+def _safe_anomalies(product_id: str) -> dict | None:
+    """Les siste anomaliresultat fra MinIO."""
+    try:
+        obj = _s3_client().get_object(
+            Bucket="gold",
+            Key=f"quality_results/{product_id}/anomalies/latest.json",
+        )
+        return json.loads(obj["Body"].read())
+    except Exception:
+        return None
+
+
+def _build_search_index(products: list[dict]) -> "sqlite3.Connection":
+    """
+    Bygg en in-memory SQLite FTS5-indeks over alle produkter.
+    Indekserer: navn, beskrivelse, domene, eier, tags og kolonnenavn.
+    Returnerer åpen tilkobling (lukkes av kalleren).
+    """
+    import sqlite3 as _sqlite3
+    conn = _sqlite3.connect(":memory:")
+    conn.execute("""
+        CREATE VIRTUAL TABLE IF NOT EXISTS fts USING fts5(
+            product_id UNINDEXED,
+            content,
+            tokenize='unicode61'
+        )
+    """)
+    for m in products:
+        cols   = " ".join(c["name"] for c in (m.get("schema") or []) if c.get("name"))
+        tags   = " ".join(m.get("tags") or [])
+        text   = " ".join(filter(None, [
+            m.get("name", ""),
+            m.get("description", ""),
+            m.get("domain", ""),
+            m.get("owner", ""),
+            tags,
+            cols,
+        ]))
+        conn.execute("INSERT INTO fts (product_id, content) VALUES (?,?)", (m["id"], text))
+    conn.commit()
+    return conn
+
+
+def _search_products(query: str, products: list[dict], limit: int = 20) -> list[dict]:
+    """
+    Søk i produktkatalogen med FTS5. Returnerer produkter med match-info.
+    Faller tilbake til enkel substring-match hvis FTS feiler.
+    """
+    import sqlite3 as _sqlite3
+    idx = {m["id"]: m for m in products}
+
+    # Legg til bruksstatistikk i rangeringen
+    usage  = {r["product_id"]: r["views"] for r in auth.get_usage_counts(30)}
+
+    try:
+        conn = _build_search_index(products)
+        # Escape FTS5 special chars
+        safe_q = query.replace('"', '""')
+        rows   = conn.execute(
+            'SELECT product_id, snippet(fts, 1, "<mark>", "</mark>", "…", 20) AS snip '
+            'FROM fts WHERE fts MATCH ? ORDER BY rank LIMIT ?',
+            (safe_q, limit),
+        ).fetchall()
+        conn.close()
+        results = []
+        for row in rows:
+            pid = row[0]
+            m   = idx.get(pid)
+            if not m:
+                continue
+            # Finn kolonnetreff
+            col_matches = [
+                c["name"] for c in (m.get("schema") or [])
+                if query.lower() in (c.get("name") or "").lower()
+            ]
+            results.append({
+                **m,
+                "snippet":     row[1],
+                "col_matches": col_matches,
+                "views":       usage.get(pid, 0),
+            })
+        return results
+    except Exception:
+        # Fallback: enkel substring-match
+        q = query.lower()
+        results = []
+        for m in products:
+            text = " ".join(filter(None, [
+                m.get("name",""), m.get("description",""),
+                m.get("domain",""), " ".join(m.get("tags") or []),
+            ])).lower()
+            if q in text:
+                col_matches = [c["name"] for c in (m.get("schema") or []) if q in c.get("name","").lower()]
+                results.append({**m, "snippet": "", "col_matches": col_matches, "views": usage.get(m["id"], 0)})
+        return results[:limit]
+
+
+def _related_products(product_id: str, manifest: dict, all_products: list[dict], limit: int = 4) -> list[dict]:
+    """
+    Finn relaterte produkter basert på:
+    1. Samme domene (+3 poeng)
+    2. Overlappende kolonnenavn (+2 per overlapp, maks 6)
+    3. Del av samme lineage-tre (+2)
+    4. Samme eier (+1)
+    """
+    domain    = manifest.get("domain", "")
+    owner     = manifest.get("owner", "")
+    my_cols   = {c["name"] for c in (manifest.get("schema") or [])}
+    my_lineage = set(manifest.get("source_products") or [])
+
+    # Alle produkter i lineage-treet (upstream + downstream)
+    downstream = {m["id"] for m in all_products if product_id in (m.get("source_products") or [])}
+    lineage_ids = my_lineage | downstream
+
+    scored = []
+    for m in all_products:
+        if m["id"] == product_id:
+            continue
+        score = 0
+        if m.get("domain") == domain:
+            score += 3
+        other_cols = {c["name"] for c in (m.get("schema") or [])}
+        overlap = len(my_cols & other_cols)
+        score += min(overlap * 2, 6)
+        if m["id"] in lineage_ids:
+            score += 2
+        if m.get("owner") == owner:
+            score += 1
+        if score > 0:
+            scored.append((score, m))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    return [m for _, m in scored[:limit]]
+
+
 def _safe_pipeline(dag_id: str | None) -> dict:
     if not dag_id:
         return {"status": "unknown"}
@@ -256,6 +466,209 @@ def _get_dag_timeline(dag_id: str, days: int = 7) -> list[dict]:
     return [{"date": d, "status": s} for d, s in date_status.items()]
 
 
+# ── Lineage-hjelpere (#65) ─────────────────────────────────────────────────
+
+_MEDALLION_ORDER = ["raw", "bronze", "silver", "gold", "analytics"]
+
+
+def _source_layer(source_path: str) -> str:
+    """Utled medallion-lag fra source_path (f.eks. s3://silver/hr/employees → 'silver')."""
+    path  = (source_path or "").replace("s3a://", "").replace("s3://", "")
+    layer = path.split("/")[0].lower()
+    return layer if layer in _MEDALLION_ORDER else "gold"
+
+
+def _build_upstream(product_id: str, idx: dict, visited: set, depth: int = 0) -> list[dict]:
+    """Bygg rekursivt upstream-tre. Bruker visited-set mot sirkulære avhengigheter."""
+    if depth >= 5:
+        return []
+    nodes = []
+    manifest = idx.get(product_id, {})
+    for sid in manifest.get("source_products") or []:
+        if sid in visited:
+            continue
+        src = idx.get(sid)
+        nodes.append({
+            "id":           sid,
+            "name":         src.get("name", sid) if src else sid,
+            "product_type": src.get("product_type", "source") if src else "unknown",
+            "layer":        _source_layer(src.get("source_path", "")) if src else "unknown",
+            "upstream":     _build_upstream(sid, idx, visited | {sid}, depth + 1),
+        })
+    return nodes
+
+
+def _find_downstream(product_id: str, idx: dict) -> list[dict]:
+    """Finn alle produkter som refererer til product_id i source_products."""
+    result = []
+    for pid, m in idx.items():
+        if product_id in (m.get("source_products") or []):
+            result.append({
+                "id":           pid,
+                "name":         m.get("name", pid),
+                "product_type": m.get("product_type", "source"),
+            })
+    return result
+
+
+def _has_pii_access(user: dict | None) -> bool:
+    """Admin og pii_access-rolle ser PII-kolonner i klartekst."""
+    return auth.has_pii_access(user)
+
+
+def _mask_schema(schema: list[dict], pii_ok: bool) -> list[dict]:
+    """Masker PII-kolonner for brukere uten PII-tilgang."""
+    if pii_ok or not schema:
+        return schema
+    result = []
+    for col in schema:
+        if col.get("pii"):
+            result.append({**col, "type": "***", "description": "*** (PII — begrenset tilgang)"})
+        else:
+            result.append(col)
+    return result
+
+
+def _safe_node_id(s: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9]", "_", s)
+
+
+def _mermaid_label(text: str) -> str:
+    """Escape tekst for bruk i Mermaid-nodel."""
+    return text.replace('"', "'").replace("\n", " ")
+
+
+def _mermaid_lineage(manifest: dict, upstream: list, downstream: list) -> str:
+    """Generer Mermaid flowchart-streng for lineage-visualisering."""
+    product_id   = manifest["id"]
+    product_name = _mermaid_label(manifest.get("name", product_id))
+    product_type = manifest.get("product_type", "source")
+    layer        = _source_layer(manifest.get("source_path", ""))
+    curr_node    = _safe_node_id(product_id)
+    lines        = ["flowchart LR"]
+
+    if product_type != "analytical":
+        # ── Kildeprodukter: vis medallion-sti ──────────────────────────────
+        try:
+            depth = _MEDALLION_ORDER.index(layer)
+        except ValueError:
+            depth = 3  # fallback til gold
+
+        layers_to_show = _MEDALLION_ORDER[: depth + 1]
+
+        lines.append('  EXT(["☁ Ekstern kilde"])')
+        lines.append("  style EXT fill:#f8f9fa,stroke:#adb5bd,color:#6c757d")
+        prev = "EXT"
+
+        for l in layers_to_show:
+            nid = l.upper()
+            if l == layer:
+                lines.append(f'  {nid}["{l}\\n{product_name}"]')
+                lines.append(f"  style {nid} fill:#0d6efd,color:#fff,stroke:#0a58ca")
+            else:
+                lines.append(f'  {nid}["{l}"]')
+                lines.append(f"  style {nid} fill:#e9ecef,color:#495057,stroke:#dee2e6")
+            lines.append(f"  {prev} --> {nid}")
+            prev = nid
+
+        for d in downstream[:4]:
+            did   = _safe_node_id(d["id"])
+            dname = _mermaid_label(d["name"])
+            lines.append(f'  {did}(["{dname}"])')
+            lines.append(f"  style {did} fill:#198754,color:#fff,stroke:#157347")
+            lines.append(f"  {prev} --> {did}")
+            lines.append(f'  click {did} "/products/{d["id"]}"')
+
+    else:
+        # ── Analytiske produkter: upstream → current → downstream ──────────
+        lines.append(f'  {curr_node}(["{product_name}"])')
+        lines.append(f"  style {curr_node} fill:#198754,color:#fff,stroke:#157347")
+
+        if upstream:
+            for u in upstream:
+                uid   = _safe_node_id(u["id"])
+                uname = _mermaid_label(u["name"])
+                if u["product_type"] == "analytical":
+                    lines.append(f'  {uid}(["{uname}"])')
+                    lines.append(f"  style {uid} fill:#DD8452,color:#fff,stroke:#b86c3e")
+                else:
+                    ulayer = u["layer"]
+                    uid_href = u["id"]
+                    lines.append(f'  {uid}["{uname}\\n{ulayer}"]')
+                    lines.append(f"  style {uid} fill:#4C72B0,color:#fff,stroke:#3d5a8e")
+                lines.append(f"  {uid} --> {curr_node}")
+                uid_href = u["id"]
+                lines.append(f'  click {uid} "/products/{uid_href}"')
+        else:
+            lines.append('  EXT(["☁ Ingen registrerte\\nkilder"])')
+            lines.append("  style EXT fill:#f8f9fa,stroke:#adb5bd,color:#6c757d")
+            lines.append(f"  EXT --> {curr_node}")
+
+        for d in downstream[:4]:
+            did   = _safe_node_id(d["id"])
+            dname = _mermaid_label(d["name"])
+            lines.append(f'  {did}(["{dname}"])')
+            lines.append(f"  style {did} fill:#DD8452,color:#fff,stroke:#b86c3e")
+            lines.append(f"  {curr_node} --> {did}")
+            lines.append(f'  click {did} "/products/{d["id"]}"')
+
+    return "\n".join(lines)
+
+
+def _check_schema_compatibility(
+    old_schema: list[dict] | None,
+    new_schema: list[dict] | None,
+    mode: str,
+) -> list[str]:
+    """
+    Sjekker skjemakompatibilitet etter Confluent-semantikk.
+    Returnerer liste med bruddmeldinger. Tom liste = kompatibelt.
+
+    BACKWARD: nye nullable-felter OK, fjerning/typeendring blokkeres
+    FORWARD:  fjerning OK, nye felter blokkeres
+    FULL:     ingen strukturelle endringer tillatt
+    NONE:     ingen sjekk
+    """
+    if mode == "NONE" or not old_schema or not new_schema:
+        return []
+    old_cols = {f["name"]: f for f in old_schema}
+    new_cols = {f["name"]: f for f in new_schema}
+    removed  = set(old_cols) - set(new_cols)
+    added    = set(new_cols) - set(old_cols)
+    violations = []
+    if mode in ("BACKWARD", "FULL"):
+        for col in removed:
+            violations.append(f"Kolonne '{col}' er fjernet (BACKWARD-brudd)")
+        for col in old_cols:
+            if col in new_cols and old_cols[col].get("type") != new_cols[col].get("type"):
+                violations.append(
+                    f"Type for '{col}' endret fra '{old_cols[col].get('type')}'"
+                    f" til '{new_cols[col].get('type')}' (BACKWARD-brudd)"
+                )
+    if mode in ("FORWARD", "FULL"):
+        for col in added:
+            violations.append(f"Ny kolonne '{col}' lagt til (FORWARD-brudd)")
+    return violations
+
+
+SLACK_WEBHOOK_URL  = os.environ.get("SLACK_WEBHOOK_URL", "")
+ANTHROPIC_API_KEY  = os.environ.get("ANTHROPIC_API_KEY", "")
+
+
+def _notify_subscribers(product_id: str, subject: str, body: str) -> None:
+    """Send Slack-varsling til produktets abonnenter (best-effort)."""
+    subscribers = auth.list_subscribers(product_id)
+    if not subscribers:
+        return
+    emails = ", ".join(s["email"] for s in subscribers)
+    full_msg = f"*{subject}*\n{body}\nAbonnenter: {emails}"
+    if SLACK_WEBHOOK_URL:
+        try:
+            httpx.post(SLACK_WEBHOOK_URL, json={"text": full_msg}, timeout=5.0)
+        except Exception:
+            pass
+
+
 def _diff_manifests(prev: dict, curr: dict) -> list[str]:
     changes = []
     watch   = ["version", "description", "owner", "source_path", "format", "access", "tags", "schema"]
@@ -293,6 +706,40 @@ def _safe_schema(source_path: str) -> list[dict] | None:
                 for f in fields]
     except Exception:
         return None
+
+
+def _merge_schema(delta_schema: list[dict] | None, manifest_schema: list[dict] | None) -> list[dict] | None:
+    """
+    Slå sammen Delta-tabellens schema (type, nullable) med manifestets schema-metadata
+    (pii, sensitivity, description). Manifestet er kilden til sannhet for metadata.
+    """
+    if not delta_schema and not manifest_schema:
+        return None
+    # Bygg oppslag fra manifest-schema (kan mangle for eldre produkter)
+    meta = {col["name"]: col for col in (manifest_schema or [])}
+    base = delta_schema or [{"name": c["name"], "type": c.get("type", ""), "nullable": True}
+                             for c in (manifest_schema or [])]
+    result = []
+    for field in base:
+        m = meta.get(field["name"], {})
+        merged = {**field}
+        if m.get("pii"):
+            merged["pii"] = True
+        if m.get("sensitivity"):
+            merged["sensitivity"] = m["sensitivity"]
+        if m.get("description"):
+            merged["description"] = m["description"]
+        result.append(merged)
+    return result or None
+
+
+def _bump_patch(version: str) -> str:
+    """Øk patch-versjon: '1.2.3' → '1.2.4'. Returnerer '1.0.1' ved feil."""
+    try:
+        major, minor, patch = version.split(".")
+        return f"{major}.{minor}.{int(patch) + 1}"
+    except Exception:
+        return "1.0.1"
 
 
 _BROWSE_BUCKETS = ["gold", "silver", "analytics"]
@@ -511,7 +958,20 @@ def _safe_filename(product_id: str) -> str:
 
 
 def _jupyter_open_url(filename: str) -> str:
-    return f"{JUPYTER_URL}/lab/tree/{filename}"
+    return f"{JUPYTER_EXTERNAL_URL}/lab/tree/{filename}"
+
+
+def _push_to_jupyter(filename: str, nb: dict) -> None:
+    """Push notebook til Jupyter Contents API (intern URL) så filen dukker opp umiddelbart."""
+    import httpx, logging
+    try:
+        httpx.put(
+            f"{JUPYTER_URL}/api/contents/{filename}",
+            json={"type": "notebook", "content": nb},
+            timeout=10,
+        )
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Kunne ikke pushe notebook til Jupyter: %s", exc)
 
 
 # ── DAG-generering ─────────────────────────────────────────────────────────────
@@ -650,6 +1110,356 @@ with DAG(
 '''
 
 
+# ── Selvbetjent pipeline-infrastruktur (Epic 20) ──────────────────────────────
+
+_PIPELINE_TEMPLATES = {
+    "csv_ingest": {
+        "label":       "CSV-innlesing",
+        "icon":        "bi-file-earmark-spreadsheet",
+        "description": "Les CSV-filer fra MinIO raw-bucket og skriv til bronze som Delta-tabell",
+        "tags":        ["ingest", "csv", "bronze"],
+        "fields": [
+            {"name": "dag_id",       "label": "DAG-ID",          "type": "text",   "placeholder": "mitt_domene_csv_ingest", "required": True},
+            {"name": "source_path",  "label": "Kilde (S3-sti)",   "type": "text",   "placeholder": "s3a://raw/domene/tabell", "required": True},
+            {"name": "target_path",  "label": "Mål (S3-sti)",     "type": "text",   "placeholder": "s3a://bronze/domene/tabell", "required": True},
+            {"name": "domain",       "label": "Domene",           "type": "text",   "placeholder": "hr", "required": True},
+            {"name": "owner",        "label": "Eier",             "type": "text",   "placeholder": "teamet-ditt", "required": True},
+            {"name": "schedule",     "label": "Kjøreplan",        "type": "select", "options": ["@daily","@weekly","@monthly","None"], "required": True},
+            {"name": "retries",      "label": "Antall forsøk",    "type": "number", "default": "2"},
+        ],
+    },
+    "api_ingest": {
+        "label":       "API-innlesing",
+        "icon":        "bi-cloud-download",
+        "description": "Hent data fra et REST API og lagre til raw/bronze som Delta-tabell",
+        "tags":        ["ingest", "api", "bronze"],
+        "fields": [
+            {"name": "dag_id",       "label": "DAG-ID",           "type": "text",   "placeholder": "mitt_api_ingest", "required": True},
+            {"name": "api_url",      "label": "API-URL",          "type": "text",   "placeholder": "https://api.eksempel.no/data", "required": True},
+            {"name": "api_headers",  "label": "Headers (JSON)",   "type": "text",   "placeholder": '{"Authorization": "Bearer TOKEN"}', "required": False},
+            {"name": "target_path",  "label": "Mål (S3-sti)",     "type": "text",   "placeholder": "s3a://bronze/domene/tabell", "required": True},
+            {"name": "domain",       "label": "Domene",           "type": "text",   "placeholder": "hr", "required": True},
+            {"name": "owner",        "label": "Eier",             "type": "text",   "placeholder": "teamet-ditt", "required": True},
+            {"name": "schedule",     "label": "Kjøreplan",        "type": "select", "options": ["@daily","@weekly","@monthly","None"], "required": True},
+            {"name": "retries",      "label": "Antall forsøk",    "type": "number", "default": "2"},
+        ],
+    },
+    "silver_transform": {
+        "label":       "Silver-transformasjon",
+        "icon":        "bi-funnel",
+        "description": "Rens og valider bronze-data til silver med konfigurerbare transformasjonsregler",
+        "tags":        ["transform", "silver"],
+        "fields": [
+            {"name": "dag_id",       "label": "DAG-ID",           "type": "text",   "placeholder": "mitt_silver_transform", "required": True},
+            {"name": "config_path",  "label": "Konfig-sti",       "type": "text",   "placeholder": "/opt/airflow/spark_conf/silver/domene/tabell.json", "required": True},
+            {"name": "domain",       "label": "Domene",           "type": "text",   "placeholder": "hr", "required": True},
+            {"name": "owner",        "label": "Eier",             "type": "text",   "placeholder": "teamet-ditt", "required": True},
+            {"name": "schedule",     "label": "Kjøreplan",        "type": "select", "options": ["@daily","@weekly","@monthly","None"], "required": True},
+            {"name": "retries",      "label": "Antall forsøk",    "type": "number", "default": "2"},
+        ],
+    },
+    "gold_aggregate": {
+        "label":       "Gold-aggregering",
+        "icon":        "bi-star",
+        "description": "Aggreger silver-data til gold-tabeller med konfigurerbare regler",
+        "tags":        ["aggregate", "gold"],
+        "fields": [
+            {"name": "dag_id",       "label": "DAG-ID",           "type": "text",   "placeholder": "mitt_gold_aggregat", "required": True},
+            {"name": "config_path",  "label": "Konfig-sti",       "type": "text",   "placeholder": "/opt/airflow/spark_conf/gold/domene/tabell.json", "required": True},
+            {"name": "domain",       "label": "Domene",           "type": "text",   "placeholder": "hr", "required": True},
+            {"name": "owner",        "label": "Eier",             "type": "text",   "placeholder": "teamet-ditt", "required": True},
+            {"name": "schedule",     "label": "Kjøreplan",        "type": "select", "options": ["@daily","@weekly","@monthly","None"], "required": True},
+            {"name": "retries",      "label": "Antall forsøk",    "type": "number", "default": "2"},
+        ],
+    },
+    "scheduled_notebook": {
+        "label":       "Planlagt notebook",
+        "icon":        "bi-journal-code",
+        "description": "Kjør en Jupyter notebook på en tidsplan med parametere via Papermill",
+        "tags":        ["notebook", "analytical"],
+        "fields": [
+            {"name": "dag_id",         "label": "DAG-ID",           "type": "text",   "placeholder": "mitt_notebook_dag", "required": True},
+            {"name": "notebook_path",  "label": "Notebook-sti",     "type": "text",   "placeholder": "/home/spark/notebooks/min_notebook.ipynb", "required": True},
+            {"name": "domain",         "label": "Domene",           "type": "text",   "placeholder": "analytics", "required": True},
+            {"name": "owner",          "label": "Eier",             "type": "text",   "placeholder": "teamet-ditt", "required": True},
+            {"name": "schedule",       "label": "Kjøreplan",        "type": "select", "options": ["@daily","@weekly","@monthly","None"], "required": True},
+            {"name": "retries",        "label": "Antall forsøk",    "type": "number", "default": "2"},
+        ],
+    },
+}
+
+
+def _generate_dag_from_template(template_id: str, config: dict) -> str:
+    """Generer Airflow DAG-kode fra mal og konfigurasjon."""
+    dag_id   = config.get("dag_id", "generated_dag")
+    domain   = config.get("domain", "default")
+    owner    = config.get("owner", "slettix")
+    schedule = config.get("schedule", "None")
+    retries  = int(config.get("retries", 2))
+
+    _SPARK_CONF_BLOCK = """\
+SPARK_CONF = {
+    "spark.sql.extensions":                       "io.delta.sql.DeltaSparkSessionExtension",
+    "spark.sql.catalog.spark_catalog":            "org.apache.spark.sql.delta.catalog.DeltaCatalog",
+    "spark.hadoop.fs.s3a.endpoint":               "http://minio:9000",
+    "spark.hadoop.fs.s3a.access.key":             "admin",
+    "spark.hadoop.fs.s3a.secret.key":             "changeme",
+    "spark.hadoop.fs.s3a.path.style.access":      "true",
+    "spark.hadoop.fs.s3a.impl":                   "org.apache.hadoop.fs.s3a.S3AFileSystem",
+    "spark.hadoop.fs.s3a.connection.ssl.enabled": "false",
+    "spark.sql.shuffle.partitions":               "8",
+    "spark.driver.host":                          "airflow-scheduler",
+    "spark.driver.bindAddress":                   "0.0.0.0",
+}
+DELTA_JARS = ",".join([
+    "io.delta:delta-spark_2.12:3.2.0",
+    "org.apache.hadoop:hadoop-aws:3.3.4",
+    "com.amazonaws:aws-java-sdk-bundle:1.12.262",
+])"""
+
+    _header = f'''"""
+Airflow DAG — {_PIPELINE_TEMPLATES[template_id]["label"]}: {dag_id}
+Mal       : {template_id}
+Domene    : {domain}
+Eier      : {owner}
+Auto-generert av Slettix Analytics Portal
+"""
+from datetime import datetime, timedelta
+from airflow import DAG
+'''
+    _default_args = f'''
+default_args = {{
+    "owner":                    "{owner}",
+    "retries":                  {retries},
+    "retry_delay":              timedelta(minutes=3),
+    "retry_exponential_backoff": True,
+}}
+
+'''
+    _dag_open = f'''with DAG(
+    dag_id="{dag_id}",
+    schedule={repr(schedule) if schedule != "None" else "None"},
+    start_date=datetime(2024, 1, 1),
+    catchup=False,
+    default_args=default_args,
+    tags={repr(["generated", domain] + _PIPELINE_TEMPLATES[template_id]["tags"])},
+) as dag:
+'''
+
+    if template_id == "csv_ingest":
+        source = config.get("source_path", "s3a://raw/data")
+        target = config.get("target_path", "s3a://bronze/data")
+        body = f'''from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
+
+{_SPARK_CONF_BLOCK}
+
+{_default_args}
+{_dag_open}
+    ingest = SparkSubmitOperator(
+        task_id="csv_to_bronze",
+        application="/opt/airflow/spark_jobs/ingest_to_bronze.py",
+        conn_id="spark_default",
+        packages=DELTA_JARS,
+        conf=SPARK_CONF,
+        application_args=[
+            "--source", "{source}",
+            "--target", "{target}",
+            "--format", "csv",
+            "--ingestion-date", "{{{{ ds }}}}",
+        ],
+        name="{dag_id}",
+        execution_timeout=timedelta(minutes=15),
+    )
+'''
+
+    elif template_id == "api_ingest":
+        api_url     = config.get("api_url", "https://api.example.com/data")
+        api_headers = config.get("api_headers", "{}")
+        target      = config.get("target_path", "s3a://bronze/data")
+        body = f'''import json
+from airflow.operators.python import PythonOperator
+
+{_default_args}
+
+def _fetch_api(**context):
+    import requests
+    import pyarrow as pa
+    import pandas as pd
+    from deltalake.writer import write_deltalake
+
+    headers = json.loads('{api_headers}') if '{api_headers}' else {{}}
+    resp = requests.get("{api_url}", headers=headers, timeout=30)
+    resp.raise_for_status()
+    data = resp.json()
+    if isinstance(data, dict):
+        data = [data]
+    df = pd.DataFrame(data)
+    arrow_table = pa.Table.from_pandas(df, preserve_index=False)
+    storage_options = {{
+        "AWS_ENDPOINT_URL":           "http://minio:9000",
+        "AWS_ACCESS_KEY_ID":          "admin",
+        "AWS_SECRET_ACCESS_KEY":      "changeme",
+        "AWS_ALLOW_HTTP":             "true",
+        "AWS_S3_ALLOW_UNSAFE_RENAME": "true",
+    }}
+    write_deltalake("{target}", arrow_table, mode="overwrite", storage_options=storage_options)
+    context["task_instance"].log.info(f"Skrev {{len(df)}} rader til {target}")
+
+{_dag_open}
+    fetch = PythonOperator(
+        task_id="api_fetch",
+        python_callable=_fetch_api,
+        execution_timeout=timedelta(minutes=15),
+    )
+'''
+
+    elif template_id == "silver_transform":
+        config_path = config.get("config_path", "/opt/airflow/spark_conf/silver/data.json")
+        body = f'''from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
+
+{_SPARK_CONF_BLOCK}
+
+{_default_args}
+{_dag_open}
+    transform = SparkSubmitOperator(
+        task_id="bronze_to_silver",
+        application="/opt/airflow/spark_jobs/transform_bronze_to_silver.py",
+        conn_id="spark_default",
+        packages=DELTA_JARS,
+        conf=SPARK_CONF,
+        application_args=["--config", "{config_path}"],
+        name="{dag_id}",
+        execution_timeout=timedelta(minutes=20),
+    )
+'''
+
+    elif template_id == "gold_aggregate":
+        config_path = config.get("config_path", "/opt/airflow/spark_conf/gold/data.json")
+        body = f'''from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
+
+{_SPARK_CONF_BLOCK}
+
+{_default_args}
+{_dag_open}
+    aggregate = SparkSubmitOperator(
+        task_id="silver_to_gold",
+        application="/opt/airflow/spark_jobs/build_gold_table.py",
+        conn_id="spark_default",
+        packages=DELTA_JARS,
+        conf=SPARK_CONF,
+        application_args=["--config", "{config_path}"],
+        name="{dag_id}",
+        execution_timeout=timedelta(minutes=20),
+    )
+'''
+
+    elif template_id == "scheduled_notebook":
+        nb_path  = config.get("notebook_path", "/home/spark/notebooks/notebook.ipynb")
+        safe_id  = re.sub(r"[^a-zA-Z0-9_]", "_", dag_id)
+        body = f'''from airflow.providers.papermill.operators.papermill import PapermillOperator
+
+{_default_args}
+{_dag_open}
+    run_notebook = PapermillOperator(
+        task_id="run_notebook",
+        input_nb="{nb_path}",
+        output_nb="/home/spark/notebooks/output/{safe_id}_{{{{ ds }}}}.ipynb",
+        parameters={{"run_date": "{{{{ ds }}}}"}},
+        execution_timeout=timedelta(minutes=30),
+    )
+'''
+    else:
+        raise ValueError(f"Ukjent mal: {template_id}")
+
+    return _header + body
+
+
+def _save_pipeline_config(dag_id: str, template_id: str, config: dict) -> None:
+    """Lagre pipeline-konfigurasjon til MinIO for versjonering og rollback."""
+    s3 = boto3.client(
+        "s3",
+        endpoint_url=MINIO_ENDPOINT,
+        aws_access_key_id=MINIO_ACCESS_KEY,
+        aws_secret_access_key=MINIO_SECRET_KEY,
+        config=Config(signature_version="s3v4"),
+    )
+    now     = datetime.now(tz=timezone.utc).isoformat()
+    payload = {"dag_id": dag_id, "template_id": template_id, "config": config, "saved_at": now}
+    # Current config
+    s3.put_object(
+        Bucket="gold",
+        Key=f"pipeline_configs/{dag_id}/current.json",
+        Body=json.dumps(payload, indent=2).encode(),
+        ContentType="application/json",
+    )
+    # Append to history
+    history = []
+    try:
+        obj = s3.get_object(Bucket="gold", Key=f"pipeline_configs/{dag_id}/history.json")
+        history = json.loads(obj["Body"].read())
+    except ClientError:
+        pass
+    history.insert(0, payload)
+    history = history[:10]  # maks 10 versjoner
+    s3.put_object(
+        Bucket="gold",
+        Key=f"pipeline_configs/{dag_id}/history.json",
+        Body=json.dumps(history, indent=2).encode(),
+        ContentType="application/json",
+    )
+
+
+def _load_pipeline_config(dag_id: str) -> dict | None:
+    """Last gjeldende pipeline-konfigurasjon fra MinIO."""
+    try:
+        s3 = boto3.client(
+            "s3",
+            endpoint_url=MINIO_ENDPOINT,
+            aws_access_key_id=MINIO_ACCESS_KEY,
+            aws_secret_access_key=MINIO_SECRET_KEY,
+            config=Config(signature_version="s3v4"),
+        )
+        obj = s3.get_object(Bucket="gold", Key=f"pipeline_configs/{dag_id}/current.json")
+        return json.loads(obj["Body"].read())
+    except ClientError:
+        return None
+
+
+def _load_pipeline_history(dag_id: str) -> list[dict]:
+    """Last versjonshistorikk for en pipeline."""
+    try:
+        s3 = boto3.client(
+            "s3",
+            endpoint_url=MINIO_ENDPOINT,
+            aws_access_key_id=MINIO_ACCESS_KEY,
+            aws_secret_access_key=MINIO_SECRET_KEY,
+            config=Config(signature_version="s3v4"),
+        )
+        obj = s3.get_object(Bucket="gold", Key=f"pipeline_configs/{dag_id}/history.json")
+        return json.loads(obj["Body"].read())
+    except ClientError:
+        return []
+
+
+_ERROR_HINTS = [
+    ("NoSuchKey",          "Kildefil ikke funnet i MinIO. Sjekk at S3-stien er korrekt og at filen er lastet opp."),
+    ("Connection refused", "Kunne ikke koble til Spark-master. Sjekk at spark-master-containeren kjører."),
+    ("AnalysisException",  "Spark kunne ikke analysere spørringen. Sjekk kolonnenavn og schema i kildedata."),
+    ("NoSuchKernel",       "Python-kernel ikke funnet i Airflow. Kjør: pip install ipykernel && python -m ipykernel install --user"),
+    ("PermissionError",    "Mangler tilgang. Sjekk PORTAL_API_KEY og tilgangskontroll i portalen."),
+    ("PapermillExecutionError", "Notebooken feilet under kjøring. Åpne output-notebooken i Jupyter for å se detaljert feilmelding."),
+    ("SparkException",     "Spark-jobb feilet. Sjekk Spark Operator-logger med: kubectl logs -n slettix-analytics -l spark-role=driver"),
+    ("FileNotFoundError",  "En fil ble ikke funnet. Sjekk at notebook-stien og konfig-stien eksisterer."),
+]
+
+def _diagnose_error(error_msg: str) -> str | None:
+    """Returner brukervennlig hint basert på feilmelding."""
+    for pattern, hint in _ERROR_HINTS:
+        if pattern.lower() in (error_msg or "").lower():
+            return hint
+    return None
+
+
 # ── API: Delta Lake-browser ───────────────────────────────────────────────────
 
 @app.get("/api/browser", tags=["browser"], summary="Naviger MinIO og detekter Delta-tabeller")
@@ -711,6 +1521,7 @@ def api_generate_notebook(product_id: str, request: Request, force: bool = False
 
     pathlib.Path(NOTEBOOKS_DIR).mkdir(parents=True, exist_ok=True)
     nb_path.write_text(json.dumps(nb, ensure_ascii=False, indent=1))
+    _push_to_jupyter(filename, nb)
 
     return {"filename": filename, "url": _jupyter_open_url(filename), "created": True}
 
@@ -747,6 +1558,7 @@ async def api_generate_multi_notebook(request: Request):
     nb_path = _notebook_path(filename)
     pathlib.Path(NOTEBOOKS_DIR).mkdir(parents=True, exist_ok=True)
     nb_path.write_text(json.dumps(nb, ensure_ascii=False, indent=1))
+    _push_to_jupyter(filename, nb)
 
     return {"filename": filename, "url": _jupyter_open_url(filename)}
 
@@ -840,12 +1652,69 @@ def api_register_product(
     user = auth.get_current_user(request)
     if api_key != PORTAL_API_KEY and (not user or user["role"] != "admin"):
         raise HTTPException(status_code=403, detail="Registrering krever admin-rolle eller gyldig API-nøkkel.")
+
+    # Domeneisolasjon: brukere kan bare publisere i sine egne domener (admin kan alt)
+    if user and user["role"] != "admin":
+        user_domains = auth.get_user_domains(user["id"])
+        product_domain = manifest.get("domain", "")
+        if user_domains and product_domain and product_domain not in user_domains:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Du har ikke tilgang til å publisere i domenet '{product_domain}'. Kontakt admin for å få domeneprivilegier.",
+            )
+
     required = {"id", "name", "domain", "owner", "version", "source_path", "format"}
     missing  = required - manifest.keys()
     if missing:
         raise HTTPException(status_code=422, detail=f"Manglende felt: {sorted(missing)}")
+
+    product_id = manifest["id"]
+
+    # ── Skjemakompatibilitetssjekk ────────────────────────────────────────
+    contract      = manifest.get("contract") or {}
+    compat_mode   = contract.get("schema_compatibility", "NONE")
+    history       = list_versions(product_id)
+    prev_manifest = history[0]["manifest"] if history else {}
+    old_schema    = prev_manifest.get("schema")
+    new_schema    = manifest.get("schema")
+
+    violations = _check_schema_compatibility(old_schema, new_schema, compat_mode)
+    if violations:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "error":             "schema_compatibility_violation",
+                "compatibility_mode": compat_mode,
+                "violations":         violations,
+                "message":            f"Schema-endring bryter {compat_mode}-kompatibilitet. "
+                                      f"Øk versjonsnummeret eller endre schema_compatibility.",
+            },
+        )
+
     register(manifest)
-    return {"status": "registered", "id": manifest["id"]}
+
+    # ── Varsle abonnenter ved schema- eller SLO-endring ───────────────────
+    if prev_manifest:
+        schema_changed = old_schema != new_schema
+        old_contract   = prev_manifest.get("contract") or {}
+        slo_changed    = old_contract.get("slo") != contract.get("slo")
+        if schema_changed or slo_changed:
+            changes = []
+            if schema_changed:
+                changes.append("Schema er endret")
+            if slo_changed:
+                changes.append("SLO er endret")
+            _notify_subscribers(
+                product_id,
+                subject=f"Endring i dataprodukt: {manifest.get('name', product_id)}",
+                body=(
+                    f"Produkt `{product_id}` (v{manifest.get('version')}) er oppdatert.\n"
+                    + "\n".join(f"• {c}" for c in changes)
+                    + f"\nSe detaljer: http://localhost:8090/products/{product_id}"
+                ),
+            )
+
+    return {"status": "registered", "id": product_id}
 
 
 @app.get("/api/products/{product_id}/schema", tags=["products"], summary="Delta-tabellens schema")
@@ -893,6 +1762,132 @@ async def api_patch_product(
     return {"updated": list(updates.keys()), "product_id": product_id}
 
 
+@app.patch("/api/products/{product_id}/subscribe", tags=["products"], summary="Abonner på endringer")
+def api_subscribe(product_id: str, request: Request):
+    """Registrer innlogget bruker som abonnent på produkt-endringer."""
+    user = auth.get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Logg inn for å abonnere")
+    _resolve_product(product_id)
+    result = auth.subscribe(user["id"], product_id)
+    return {"subscribed": True, "product_id": product_id, "created_at": result["created_at"]}
+
+
+@app.delete("/api/products/{product_id}/subscribe", tags=["products"], summary="Avslutt abonnement")
+def api_unsubscribe(product_id: str, request: Request):
+    """Fjern innlogget bruker fra abonnentlisten."""
+    user = auth.get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Logg inn for å avslutte abonnement")
+    auth.unsubscribe(user["id"], product_id)
+    return {"subscribed": False, "product_id": product_id}
+
+
+@app.get("/api/products/{product_id}/subscribers", tags=["products"], summary="List abonnenter (kun eier/admin)")
+def api_list_subscribers(product_id: str, request: Request):
+    manifest = _resolve_product(product_id)
+    user     = auth.get_current_user(request)
+    if not user or (user["role"] != "admin" and manifest.get("owner") != user["username"]):
+        raise HTTPException(status_code=403, detail="Kun produkteier eller admin kan se abonnenter")
+    return auth.list_subscribers(product_id)
+
+
+# ── API: Pipeline-builder (Epic 20) ───────────────────────────────────────────
+
+@app.post("/api/pipelines/preview", tags=["pipelines"], summary="Forhåndsvis generert DAG-kode")
+async def api_pipeline_preview(request: Request):
+    """Generer DAG-kode fra mal og konfig uten å skrive til disk."""
+    body        = await request.json()
+    template_id = body.get("template_id")
+    config      = body.get("config", {})
+    if template_id not in _PIPELINE_TEMPLATES:
+        raise HTTPException(status_code=422, detail=f"Ukjent mal: {template_id}")
+    try:
+        code = _generate_dag_from_template(template_id, config)
+    except Exception as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {"code": code, "dag_id": config.get("dag_id")}
+
+
+@app.post("/api/pipelines", status_code=201, tags=["pipelines"], summary="Opprett og deploy ny pipeline")
+async def api_create_pipeline(request: Request, api_key: str | None = Security(_api_key_scheme)):
+    """Generer DAG fra mal, skriv til DAGS_DIR, lagre konfig i MinIO."""
+    user = auth.get_current_user(request)
+    if not user and api_key != PORTAL_API_KEY:
+        raise HTTPException(status_code=401, detail="Krever innlogging eller API-nøkkel")
+    body        = await request.json()
+    template_id = body.get("template_id")
+    config      = body.get("config", {})
+    if template_id not in _PIPELINE_TEMPLATES:
+        raise HTTPException(status_code=422, detail=f"Ukjent mal: {template_id}")
+    dag_id = config.get("dag_id", "").strip()
+    if not dag_id or not re.match(r"^[a-zA-Z0-9_]+$", dag_id):
+        raise HTTPException(status_code=422, detail="dag_id må kun inneholde bokstaver, tall og understrek")
+    try:
+        code     = _generate_dag_from_template(template_id, config)
+        dag_path = pathlib.Path(DAGS_DIR) / f"{dag_id}.py"
+        dag_path.write_text(code, encoding="utf-8")
+        _save_pipeline_config(dag_id, template_id, config)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Kunne ikke opprette DAG: {exc}")
+    return {"status": "deployed", "dag_id": dag_id, "dag_file": str(dag_path)}
+
+
+@app.put("/api/pipelines/{dag_id}", tags=["pipelines"], summary="Oppdater og redeploy pipeline")
+async def api_update_pipeline(dag_id: str, request: Request, api_key: str | None = Security(_api_key_scheme)):
+    """Oppdater config, regenerer DAG og skriv til DAGS_DIR."""
+    user = auth.get_current_user(request)
+    if not user and api_key != PORTAL_API_KEY:
+        raise HTTPException(status_code=401, detail="Krever innlogging eller API-nøkkel")
+    body        = await request.json()
+    template_id = body.get("template_id")
+    config      = body.get("config", {})
+    if template_id not in _PIPELINE_TEMPLATES:
+        raise HTTPException(status_code=422, detail=f"Ukjent mal: {template_id}")
+    try:
+        code     = _generate_dag_from_template(template_id, config)
+        dag_path = pathlib.Path(DAGS_DIR) / f"{dag_id}.py"
+        dag_path.write_text(code, encoding="utf-8")
+        _save_pipeline_config(dag_id, template_id, config)
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Kunne ikke oppdatere DAG: {exc}")
+    return {"status": "redeployed", "dag_id": dag_id}
+
+
+@app.get("/api/pipelines/{dag_id}/config", tags=["pipelines"], summary="Hent pipeline-konfigurasjon")
+def api_get_pipeline_config(dag_id: str):
+    """Hent lagret konfigurasjon og historikk for en pipeline."""
+    current = _load_pipeline_config(dag_id)
+    history = _load_pipeline_history(dag_id)
+    return {"current": current, "history": history}
+
+
+@app.get("/api/pipelines/{dag_id}/status", tags=["pipelines"], summary="Hent Airflow-status for DAG")
+def api_get_pipeline_status(dag_id: str):
+    """Poll Airflow API for deploy-status og siste kjøring."""
+    try:
+        resp = httpx.get(
+            f"{AIRFLOW_URL}/api/v1/dags/{dag_id}",
+            auth=(AIRFLOW_USER, AIRFLOW_PASS),
+            timeout=5.0,
+        )
+        if resp.status_code == 404:
+            return {"status": "not_found", "message": "DAG ikke funnet i Airflow ennå — venter på fil-watcher"}
+        resp.raise_for_status()
+        dag_data = resp.json()
+        last_run = _safe_pipeline(dag_id)
+        hint     = _diagnose_error(last_run.get("error")) if last_run else None
+        return {
+            "status":    "active" if not dag_data.get("is_paused") else "paused",
+            "dag_id":    dag_id,
+            "is_paused": dag_data.get("is_paused"),
+            "last_run":  last_run,
+            "hint":      hint,
+        }
+    except Exception as exc:
+        return {"status": "error", "message": str(exc)}
+
+
 @app.get("/api/products/{product_id}/quality", tags=["products"], summary="Siste GE-valideringsresultat")
 def api_get_quality(product_id: str, request: Request, api_key: str | None = Security(_api_key_scheme)):
     manifest = _resolve_product(product_id)
@@ -909,6 +1904,229 @@ def api_get_quality(product_id: str, request: Request, api_key: str | None = Sec
         raise HTTPException(status_code=502, detail=str(exc))
 
 
+@app.get("/api/products/{product_id}/quality/history", tags=["products"], summary="Historisk kvalitetstidsserie")
+def api_get_quality_history(product_id: str, request: Request, api_key: str | None = Security(_api_key_scheme)):
+    manifest = _resolve_product(product_id)
+    user     = auth.get_current_user(request)
+    _require_access(manifest, user, api_key)
+    return _safe_quality_history(product_id)
+
+
+@app.get("/api/products/{product_id}/anomalies", tags=["products"], summary="Siste anomalideteksjon")
+def api_get_anomalies(product_id: str, request: Request, api_key: str | None = Security(_api_key_scheme)):
+    manifest = _resolve_product(product_id)
+    user     = auth.get_current_user(request)
+    _require_access(manifest, user, api_key)
+    result = _safe_anomalies(product_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Ingen anomaliresultater funnet")
+    return result
+
+
+@app.get("/api/products/{product_id}/incidents", tags=["products"], summary="Alle incidents for produktet")
+def api_list_incidents(product_id: str, request: Request, api_key: str | None = Security(_api_key_scheme)):
+    manifest = _resolve_product(product_id)
+    user     = auth.get_current_user(request)
+    _require_access(manifest, user, api_key)
+    return auth.list_incidents(product_id=product_id)
+
+
+@app.post("/api/products/{product_id}/incidents", tags=["products"], summary="Opprett incident")
+async def api_create_incident(product_id: str, request: Request, api_key: str | None = Security(_api_key_scheme)):
+    user = auth.get_current_user(request)
+    if not user and api_key != PORTAL_API_KEY:
+        raise HTTPException(status_code=401, detail="Krever innlogging eller API-nøkkel")
+    _resolve_product(product_id)
+    body      = await request.json()
+    title     = body.get("title", "").strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="title er påkrevd")
+    created_by = user["username"] if user else "system"
+    incident   = auth.create_incident(
+        product_id=product_id,
+        title=title,
+        description=body.get("description", ""),
+        severity=body.get("severity", "warning"),
+        created_by=created_by,
+    )
+    return incident
+
+
+@app.patch("/api/incidents/{incident_id}", tags=["products"], summary="Oppdater incident-status")
+async def api_update_incident(incident_id: str, request: Request):
+    user = auth.get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Krever innlogging")
+    body   = await request.json()
+    status = body.get("status", "")
+    result = auth.update_incident(incident_id, status, user["username"])
+    if not result:
+        raise HTTPException(status_code=404, detail="Incident ikke funnet eller ugyldig status")
+    # Varsle abonnenter ved resolved
+    if status == "resolved":
+        _notify_subscribers(
+            result["product_id"],
+            f"[{result['product_id']}] Incident løst: {result['title']}",
+            "",
+        )
+    return result
+
+
+# ── API: søk ──────────────────────────────────────────────────────────────────
+
+@app.get("/api/search", tags=["search"], summary="Semantisk søk i produktkatalogen")
+def api_search(q: str = "", limit: int = 20, request: Request = None):
+    """
+    Full-tekst søk over alle produkter. Indekserer navn, beskrivelse,
+    domene, eier, tags og kolonnenavn. Returnerer rangerte resultater.
+    """
+    if not q or not q.strip():
+        return []
+    products = list_all()
+    results  = _search_products(q.strip(), products, limit=limit)
+
+    # Logg søkehendelse (anonymt)
+    user = auth.get_current_user(request) if request else None
+    uid  = user["id"] if user else None
+    for r in results:
+        auth.track_usage(r["id"], "search", uid)
+
+    return results
+
+
+@app.get("/api/products/{product_id}/related", tags=["products"], summary="Relaterte produkter")
+def api_get_related(product_id: str, request: Request, api_key: str | None = Security(_api_key_scheme)):
+    manifest     = _resolve_product(product_id)
+    user         = auth.get_current_user(request)
+    _require_access(manifest, user, api_key)
+    all_products = list_all()
+    related      = _related_products(product_id, manifest, all_products)
+    return related
+
+
+@app.post("/api/products/{product_id}/generate-description", tags=["products"], summary="AI-generert produktbeskrivelse")
+async def api_generate_description(product_id: str, request: Request):
+    """
+    Kaller Claude API med schema og kontekst for å generere en produktbeskrivelse.
+    Krever ANTHROPIC_API_KEY og at innlogget bruker er eier eller admin.
+    """
+    user = auth.get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Krever innlogging")
+    manifest = _resolve_product(product_id)
+    is_owner = user["role"] == "admin" or manifest.get("owner") == user.get("username")
+    if not is_owner:
+        raise HTTPException(status_code=403, detail="Kun produkteier eller admin kan generere beskrivelse")
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY er ikke konfigurert")
+
+    # Bygg prompt-kontekst
+    schema_text = ""
+    if manifest.get("schema"):
+        cols = [
+            f"  - {c['name']} ({c.get('type','?')})"
+            + (f" [PII]" if c.get("pii") else "")
+            + (f": {c['description']}" if c.get("description") else "")
+            for c in manifest["schema"]
+        ]
+        schema_text = "Kolonner:\n" + "\n".join(cols)
+
+    prompt = f"""Du er en teknisk forfatter for en data mesh-plattform. Skriv en konsis, norsk produktbeskrivelse for følgende dataprodukt.
+
+Produkt: {manifest.get('name', product_id)}
+Domene: {manifest.get('domain', '?')}
+Format: {manifest.get('format', '?')}
+{schema_text}
+
+Krav til beskrivelsen:
+- 2-4 setninger
+- Forklar hva produktet inneholder og hvilke bruksscenarier det passer for
+- Nevn viktige kolonner ved navn
+- Skriv på norsk, faglig men forståelig
+- Ikke bruk teknisk jargon unødvendig
+- Ikke gjenta produktnavnet i første setning
+
+Returner kun beskrivelsesteksten, ingen markdown-formatering."""
+
+    try:
+        import anthropic
+        client   = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        message  = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=300,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        generated = message.content[0].text.strip()
+        return {"description": generated}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"AI-generering feilet: {exc}")
+
+
+@app.post("/api/nl2sql", tags=["search"], summary="Naturlig språk til SQL")
+async def api_nl2sql(request: Request):
+    """
+    Oversett naturlig språk til SQL ved hjelp av Claude API.
+    Body: {question: str, product_id: str (valgfritt)}
+    """
+    user = auth.get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Krever innlogging")
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY er ikke konfigurert")
+
+    body       = await request.json()
+    question   = body.get("question", "").strip()
+    product_id = body.get("product_id", "").strip()
+    if not question:
+        raise HTTPException(status_code=422, detail="question er påkrevd")
+
+    schema_ctx = ""
+    if product_id:
+        try:
+            m = get(product_id)
+            if m.get("schema"):
+                cols = ", ".join(
+                    f"{c['name']} {c.get('type','TEXT')}"
+                    for c in m["schema"]
+                    if not c.get("pii")  # Ikke inkluder PII-kolonner i konteksten
+                )
+                table_name = product_id.replace(".", "_")
+                schema_ctx = f"\nTabell: {table_name} ({cols})"
+        except KeyError:
+            pass
+
+    prompt = f"""Du er en SQL-ekspert. Oversett følgende spørsmål til en DuckDB SQL-spørring.
+{schema_ctx}
+
+Spørsmål: {question}
+
+Regler:
+- Bruk kun DuckDB-kompatibel SQL
+- Returner kun SQL-koden, ingen forklaring
+- Bruk tabellanavnet fra konteksten hvis oppgitt
+- Begrens resultater til 1000 rader med LIMIT 1000
+- Kommenter på norsk med -- hvis logikken er kompleks"""
+
+    try:
+        import anthropic
+        client  = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        message = client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=500,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        sql = message.content[0].text.strip()
+        # Fjern markdown code blocks hvis modellen returnerte dem
+        if sql.startswith("```"):
+            sql = "\n".join(sql.split("\n")[1:])
+        if sql.endswith("```"):
+            sql = "\n".join(sql.split("\n")[:-1])
+        sql = sql.strip()
+        return {"sql": sql}
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"NL2SQL feilet: {exc}")
+
+
 @app.get("/api/products/{product_id}/sla", tags=["products"], summary="SLA-ferskhets-status")
 def api_get_sla(product_id: str, request: Request, api_key: str | None = Security(_api_key_scheme)):
     manifest = _resolve_product(product_id)
@@ -918,6 +2136,42 @@ def api_get_sla(product_id: str, request: Request, api_key: str | None = Securit
     if result is None:
         result = _compute_sla_live(manifest)
     return result
+
+
+@app.get("/api/products/{product_id}/lineage", tags=["products"], summary="Datalineage — upstream og downstream")
+def api_get_lineage(product_id: str, request: Request, api_key: str | None = Security(_api_key_scheme)):
+    """
+    Returnerer lineage-graf for produktet:
+    - product: grunnleggende manifest-info
+    - upstream: rekursivt tre av kildeprodukter (maks 5 nivåer)
+    - downstream: produkter som bruker dette produktet som kilde
+    - medallion_path: lag produktet finnes i (utledet fra source_path)
+    - column_lineage: kolonnenivå mapping om registrert
+    - mermaid: Mermaid flowchart-streng for visualisering
+    """
+    manifest = _resolve_product(product_id)
+    user     = auth.get_current_user(request)
+    _require_access(manifest, user, api_key)
+
+    idx        = {m["id"]: m for m in list_all()}
+    upstream   = _build_upstream(product_id, idx, {product_id})
+    downstream = _find_downstream(product_id, idx)
+    layer      = _source_layer(manifest.get("source_path", ""))
+
+    return {
+        "product": {
+            "id":           manifest["id"],
+            "name":         manifest.get("name", product_id),
+            "product_type": manifest.get("product_type", "source"),
+            "domain":       manifest.get("domain"),
+            "owner":        manifest.get("owner"),
+        },
+        "upstream":       upstream,
+        "downstream":     downstream,
+        "medallion_path": [layer] if layer else [],
+        "column_lineage": manifest.get("column_lineage") or [],
+        "mermaid":        _mermaid_lineage(manifest, upstream, downstream),
+    }
 
 
 @app.get("/api/products/{product_id}/versions", tags=["products"], summary="Versjonshistorikk med diff")
@@ -940,9 +2194,92 @@ def api_get_versions(product_id: str):
 
 
 @app.get("/api/products/{product_id}", tags=["products"], summary="Hent ett produkt med historikk")
-def api_get_product(product_id: str):
+def api_get_product(product_id: str, request: Request, api_key: str | None = Security(_api_key_scheme)):
     manifest = _resolve_product(product_id)
-    return {"manifest": manifest, "history": list_versions(product_id)}
+    user     = auth.get_current_user(request)
+    _require_access(manifest, user, api_key)
+    pii_ok   = _has_pii_access(user) or api_key == PORTAL_API_KEY
+    m        = dict(manifest)
+    if m.get("schema"):
+        m["schema"] = _mask_schema(m["schema"], pii_ok)
+    return {"manifest": m, "history": list_versions(product_id)}
+
+
+# ── API: schema-metadata ───────────────────────────────────────────────────────
+
+@app.patch("/api/products/{product_id}/schema", tags=["products"], summary="Oppdater kolonnemetadata (PII, sensitivitet, beskrivelse)")
+async def api_patch_schema(product_id: str, request: Request, api_key: str | None = Security(_api_key_scheme)):
+    """
+    Oppdater PII-merking, sensitivitetsnivå og beskrivelse for enkeltkolonner.
+
+    Krever at innlogget bruker er eier av produktet eller admin.
+    Registrerer en ny manifestversjon (patch-bump) uten å endre selve dataene.
+
+    Body: {"columns": [{"name": "col", "pii": true, "sensitivity": "high", "description": "..."}]}
+    """
+    user = auth.get_current_user(request)
+    if not user and api_key != PORTAL_API_KEY:
+        raise HTTPException(status_code=401, detail="Krever innlogging eller API-nøkkel")
+
+    manifest = _resolve_product(product_id)
+    is_owner = user and (user["role"] == "admin" or manifest.get("owner") == user.get("username"))
+    if not is_owner and api_key != PORTAL_API_KEY:
+        raise HTTPException(status_code=403, detail="Kun produkteier eller admin kan oppdatere schema-metadata")
+
+    body    = await request.json()
+    updates = {col["name"]: col for col in body.get("columns", []) if col.get("name")}
+    if not updates:
+        raise HTTPException(status_code=422, detail="columns er påkrevd og kan ikke være tom")
+
+    # Hent eksisterende schema fra manifest (kan mangle for eldre produkter)
+    existing_schema = manifest.get("schema") or []
+    existing_by_name = {col["name"]: col for col in existing_schema}
+
+    # Hent Delta-schema for å kjenne alle kolonnenavn
+    delta_schema = _safe_schema(manifest["source_path"])
+    all_col_names = (
+        [f["name"] for f in delta_schema]
+        if delta_schema
+        else [c["name"] for c in existing_schema]
+    )
+
+    # Valider at kolonnenavn som oppdateres faktisk finnes
+    unknown = [n for n in updates if n not in all_col_names]
+    if unknown:
+        raise HTTPException(status_code=422, detail=f"Ukjente kolonner: {unknown}")
+
+    # Bygg oppdatert schema — bevar eksisterende metadata, merge inn oppdateringer
+    new_schema = []
+    for col_name in all_col_names:
+        base = dict(existing_by_name.get(col_name, {"name": col_name}))
+        if col_name in updates:
+            upd = updates[col_name]
+            # Tillat eksplisitt fjerning (pii=false fjerner feltet)
+            if "pii" in upd:
+                if upd["pii"]:
+                    base["pii"] = True
+                else:
+                    base.pop("pii", None)
+            if "sensitivity" in upd:
+                if upd["sensitivity"]:
+                    base["sensitivity"] = upd["sensitivity"]
+                else:
+                    base.pop("sensitivity", None)
+            if "description" in upd:
+                if upd["description"]:
+                    base["description"] = upd["description"]
+                else:
+                    base.pop("description", None)
+        new_schema.append(base)
+
+    # Bump patch-versjon og registrer ny manifestversjon
+    updated_manifest = {
+        **manifest,
+        "schema":  new_schema,
+        "version": _bump_patch(manifest["version"]),
+    }
+    register(updated_manifest)
+    return {"status": "updated", "product_id": product_id, "version": updated_manifest["version"]}
 
 
 # ── API: tilgangsforespørsler ──────────────────────────────────────────────────
@@ -1010,11 +2347,92 @@ def api_delete_user(user_id: str, request: Request):
     return {"status": "deleted"}
 
 
+# ── API: governance / PII-kart ─────────────────────────────────────────────────
+
+@app.get("/api/governance/pii-map", tags=["governance"], summary="GDPR-datakart over PII-kolonner")
+def api_pii_map(request: Request, api_key: str | None = Security(_api_key_scheme)):
+    """Returnerer alle produkter med PII-kolonner for GDPR-dokumentasjon."""
+    user = auth.get_current_user(request)
+    if not user and api_key != PORTAL_API_KEY:
+        raise HTTPException(status_code=401, detail="Krever innlogging eller API-nøkkel")
+    result = []
+    for m in list_all():
+        pii_cols = [
+            {
+                "column":      col["name"],
+                "type":        col.get("type"),
+                "sensitivity": col.get("sensitivity", "unknown"),
+                "nullable":    col.get("nullable"),
+            }
+            for col in (m.get("schema") or [])
+            if col.get("pii")
+        ]
+        # Include products that either have pii_columns field or have pii=true columns in schema
+        pii_columns_field = m.get("pii_columns", [])
+        if pii_cols or pii_columns_field:
+            result.append({
+                "product_id":    m["id"],
+                "name":          m.get("name", m["id"]),
+                "domain":        m.get("domain"),
+                "owner":         m.get("owner"),
+                "source_path":   m.get("source_path"),
+                "pii_columns":   pii_cols,
+                "sensitivity":   max((c.get("sensitivity", "low") for c in pii_cols), default="unknown",
+                                     key=lambda s: {"low": 0, "medium": 1, "high": 2}.get(s, -1)),
+                "retention_days": (m.get("retention") or {}).get("days"),
+                "retention_strategy": (m.get("retention") or {}).get("strategy"),
+            })
+    return result
+
+
+@app.post("/api/admin/users/{user_id}/domains", tags=["admin"], summary="Legg til domeneprivilegium")
+def api_add_domain(user_id: str, body: dict, request: Request):
+    user = auth.get_current_user(request)
+    _require_admin_api(user)
+    domain = body.get("domain", "").strip()
+    if not domain:
+        raise HTTPException(status_code=422, detail="domain er påkrevd")
+    auth.add_domain_membership(user_id, domain)
+    return {"status": "added", "user_id": user_id, "domain": domain}
+
+
+@app.delete("/api/admin/users/{user_id}/domains/{domain}", tags=["admin"], summary="Fjern domeneprivilegium")
+def api_remove_domain(user_id: str, domain: str, request: Request):
+    user = auth.get_current_user(request)
+    _require_admin_api(user)
+    auth.remove_domain_membership(user_id, domain)
+    return {"status": "removed", "user_id": user_id, "domain": domain}
+
+
+@app.get("/api/admin/users/{user_id}/domains", tags=["admin"], summary="Liste domeneprivilegier")
+def api_get_user_domains(user_id: str, request: Request):
+    user = auth.get_current_user(request)
+    _require_admin_api(user)
+    return {"user_id": user_id, "domains": auth.get_user_domains(user_id)}
+
+
 # ── UI: HTML-sider ─────────────────────────────────────────────────────────────
 
+def _check_service(url: str, timeout: float = 2.0) -> bool:
+    """Returner True hvis tjenesten svarer på `url` med HTTP < 500."""
+    try:
+        resp = httpx.get(url, timeout=timeout, follow_redirects=True)
+        return resp.status_code < 500
+    except Exception:
+        return False
+
+
 def _template_ctx(request: Request, **kwargs) -> dict:
-    """Felles malkontekst med innlogget bruker."""
-    return {"request": request, "current_user": auth.get_current_user(request), **kwargs}
+    """Felles malkontekst med innlogget bruker og globale URL-er."""
+    return {
+        "request":      request,
+        "current_user": auth.get_current_user(request),
+        "airflow_url":  AIRFLOW_EXTERNAL_URL,
+        "jupyter_url":  JUPYTER_EXTERNAL_URL,
+        "superset_url": SUPERSET_EXTERNAL_URL,
+        "minio_url":    MINIO_EXTERNAL_URL,
+        **kwargs,
+    }
 
 
 @app.get("/login", response_class=HTMLResponse, include_in_schema=False)
@@ -1100,9 +2518,16 @@ def page_admin(request: Request):
     users    = auth.list_users()
     requests = auth.list_access_requests()
     pending  = [r for r in requests if r["status"] == "pending"]
+    # Berik brukere med domener
+    for u in users:
+        u["domains"] = auth.get_user_domains(u["id"])
+    domains      = sorted({m.get("domain") for m in list_all() if m.get("domain")})
+    top_products = auth.get_usage_counts(days=30)
     return templates.TemplateResponse(
         "admin.html",
-        _template_ctx(request, users=users, access_requests=requests, pending_count=len(pending)),
+        _template_ctx(request, users=users, access_requests=requests,
+                      pending_count=len(pending), all_domains=domains,
+                      top_products=top_products),
     )
 
 
@@ -1339,12 +2764,19 @@ def page_catalog(request: Request):
         p["_sla"]      = _safe_sla(p["id"])
     domains  = sorted({p["domain"] for p in products})
     all_tags = sorted({tag for p in products for tag in p.get("tags", [])})
+    anomaly_map = {}
+    for m in products:
+        a = _safe_anomalies(m["id"])
+        if a and a.get("has_anomaly"):
+            anomaly_map[m["id"]] = True
+    view_counts = {r["product_id"]: r["views"] for r in auth.get_usage_counts(30)}
     return templates.TemplateResponse("catalog.html", _template_ctx(
         request,
         products=products,
         domains=domains,
         all_tags=all_tags,
-        jupyter_url=JUPYTER_URL,
+        anomaly_map=anomaly_map,
+        view_counts=view_counts,
     ))
 
 
@@ -1369,8 +2801,12 @@ def page_product(request: Request, product_id: str):
             "changes": _diff_manifests(prev, entry["manifest"]),
         })
 
-    schema   = _safe_schema(manifest["source_path"]) if has_access else None
-    quality  = _safe_quality(product_id) if has_access else None
+    delta_schema = _safe_schema(manifest["source_path"]) if has_access else None
+    schema       = _merge_schema(delta_schema, manifest.get("schema"))
+    quality      = _safe_quality(product_id) if has_access else None
+    anomalies = _safe_anomalies(product_id) if has_access else None
+    incidents = auth.list_incidents(product_id=product_id) if has_access else []
+    quality_history = _safe_quality_history(product_id) if has_access else []
     pipeline = _safe_pipeline(manifest.get("dag_id"))
     sla      = (_safe_sla(product_id) or _compute_sla_live(manifest)) if has_access else None
 
@@ -1393,10 +2829,24 @@ def page_product(request: Request, product_id: str):
         except KeyError:
             source_product_manifests.append({"id": spid, "name": spid})
 
+    # Lineage (#62/#63)
+    _idx        = {m["id"]: m for m in list_all()}
+    upstream    = _build_upstream(product_id, _idx, {product_id})
+    downstream  = _find_downstream(product_id, _idx)
+    mermaid_lineage = _mermaid_lineage(manifest, upstream, downstream)
+    column_lineage  = manifest.get("column_lineage") or []
+
+    related = _related_products(product_id, manifest, list_all()) if has_access else []
+    views   = auth.get_product_views(product_id, days=30)
+
     # Sjekk om notebook allerede finnes
     nb_filename     = _safe_filename(product_id)
     nb_exists       = _notebook_path(nb_filename).exists()
     jupyter_nb_url  = _jupyter_open_url(nb_filename) if nb_exists else None
+
+    subscribers   = auth.list_subscribers(product_id) if user and (user["role"] == "admin" or manifest.get("owner") == user.get("username")) else None
+    is_subscribed = auth.is_subscribed(user["id"], product_id) if user else False
+    is_owner      = bool(user and (user["role"] == "admin" or manifest.get("owner") == user.get("username")))
 
     return templates.TemplateResponse("product.html", _template_ctx(
         request,
@@ -1406,14 +2856,25 @@ def page_product(request: Request, product_id: str):
         quality=quality,
         pipeline=pipeline,
         sla=sla,
-        airflow_url=AIRFLOW_URL.replace("airflow-webserver", "localhost").replace(":8080", ":8081"),
+        airflow_url=AIRFLOW_EXTERNAL_URL,
         has_access=has_access,
         is_restricted=is_restricted,
         pending_request=pending_request,
         nb_filename=nb_filename,
         jupyter_nb_url=jupyter_nb_url,
-        jupyter_url=JUPYTER_URL,
         source_product_manifests=source_product_manifests,
+        upstream=upstream,
+        downstream=downstream,
+        mermaid_lineage=mermaid_lineage,
+        column_lineage=column_lineage,
+        subscribers=subscribers,
+        is_subscribed=is_subscribed,
+        is_owner=is_owner,
+        anomalies=anomalies,
+        incidents=incidents,
+        quality_history=quality_history,
+        related=related,
+        views=views,
     ))
 
 
@@ -1459,9 +2920,266 @@ def page_pipelines(request: Request):
             "timeline": timeline,
         })
 
-    airflow_ui = AIRFLOW_URL.replace("airflow-webserver", "localhost").replace(":8080", ":8081")
     return templates.TemplateResponse("pipelines.html", _template_ctx(
         request,
         dags=dags,
-        airflow_ui=airflow_ui,
+        airflow_ui=AIRFLOW_EXTERNAL_URL,
     ))
+
+
+@app.get("/platform", response_class=HTMLResponse, include_in_schema=False)
+def page_platform(request: Request):
+    """Plattformoversikt — status og lenker for alle tjenester."""
+    services = [
+        {
+            "name":       "Apache Airflow",
+            "desc":       "Pipeline-orkestrering, DAG-planlegging og kjøringsovervåking",
+            "icon":       "bi-diagram-3",
+            "color":      "#017cee",
+            "bg":         "#e8f3ff",
+            "ext_url":    AIRFLOW_EXTERNAL_URL,
+            "health_url": f"{AIRFLOW_URL}/health",
+            "port":       "8080",
+        },
+        {
+            "name":       "Jupyter Lab",
+            "desc":       "Interaktiv notebook for dataanalyse, eksperimentering og publisering",
+            "icon":       "bi-journal-code",
+            "color":      "#F37626",
+            "bg":         "#fff3eb",
+            "ext_url":    JUPYTER_EXTERNAL_URL,
+            "health_url": f"{JUPYTER_URL}/api",
+            "port":       "8888",
+        },
+        {
+            "name":       "Apache Superset",
+            "desc":       "BI-dashboards og interaktiv SQL-utforskning mot Delta Lake",
+            "icon":       "bi-bar-chart-line",
+            "color":      "#20A7C9",
+            "bg":         "#e6f6fb",
+            "ext_url":    SUPERSET_EXTERNAL_URL,
+            "health_url": f"{SUPERSET_URL}/health",
+            "port":       "8088",
+        },
+        {
+            "name":       "MinIO Console",
+            "desc":       "S3-kompatibel objektlagring — raw, bronze, silver, gold, analytics",
+            "icon":       "bi-bucket-fill",
+            "color":      "#C72C48",
+            "bg":         "#fdeaed",
+            "ext_url":    MINIO_EXTERNAL_URL,
+            "health_url": f"{MINIO_ENDPOINT.replace(':9000', ':9001')}/minio/health/live",
+            "port":       "9001",
+        },
+    ]
+
+    for svc in services:
+        svc["online"] = _check_service(svc["health_url"])
+
+    products  = list_all()
+    medallion = [
+        {"layer": "raw",       "icon": "bi-cloud-upload",    "desc": "Rådata fra kildesystemer"},
+        {"layer": "bronze",    "icon": "bi-database",        "desc": "Innlest til Delta Lake"},
+        {"layer": "silver",    "icon": "bi-funnel",          "desc": "Renset og validert"},
+        {"layer": "gold",      "icon": "bi-star",            "desc": "Domeneprodukter"},
+        {"layer": "analytics", "icon": "bi-graph-up-arrow",  "desc": "Analytiske produkter"},
+    ]
+
+    return templates.TemplateResponse("platform.html", _template_ctx(
+        request,
+        services=services,
+        product_count=len(products),
+        medallion=medallion,
+        airflow_ext=airflow_ext,
+        superset_ext=superset_ext,
+        jupyter_ext=jupyter_ext,
+    ))
+
+
+@app.get("/governance", response_class=HTMLResponse, include_in_schema=False)
+def page_governance(request: Request):
+    user = auth.get_current_user(request)
+    if not user:
+        return RedirectResponse("/login?next=/governance", status_code=303)
+    # Bygg PII-kart
+    pii_map = []
+    for m in list_all():
+        pii_cols = [
+            col for col in (m.get("schema") or []) if col.get("pii")
+        ]
+        if pii_cols:
+            pii_map.append({
+                "product_id":    m["id"],
+                "name":          m.get("name", m["id"]),
+                "domain":        m.get("domain"),
+                "owner":         m.get("owner"),
+                "source_path":   m.get("source_path"),
+                "pii_columns":   pii_cols,
+                "retention":     m.get("retention"),
+            })
+    domains = sorted({m.get("domain") for m in list_all() if m.get("domain")})
+    return templates.TemplateResponse(
+        "governance.html",
+        _template_ctx(request, pii_map=pii_map, domains=domains, pii_access=_has_pii_access(user)),
+    )
+
+
+@app.get("/observability", response_class=HTMLResponse, include_in_schema=False)
+def page_observability(request: Request):
+    user = auth.get_current_user(request)
+    if not user:
+        return RedirectResponse("/login?next=/observability", status_code=303)
+
+    products     = list_all()
+    all_domains  = sorted({m.get("domain") for m in products if m.get("domain")})
+    product_data = []
+
+    for m in products:
+        pid      = m["id"]
+        quality  = _safe_quality(pid)
+        anomaly  = _safe_anomalies(pid)
+        incidents = auth.list_incidents(product_id=pid)
+        open_incidents = [i for i in incidents if i["status"] != "resolved"]
+
+        product_data.append({
+            "id":             pid,
+            "name":           m.get("name", pid),
+            "domain":         m.get("domain"),
+            "owner":          m.get("owner"),
+            "quality":        quality,
+            "anomaly":        anomaly,
+            "open_incidents": len(open_incidents),
+            "incidents":      incidents[:5],
+        })
+
+    # Beregn plattformhelse som vektet gjennomsnitt av score_pct
+    scored = [p for p in product_data if p["quality"] and p["quality"].get("score_pct") is not None]
+    platform_health = round(sum(p["quality"]["score_pct"] for p in scored) / len(scored), 1) if scored else None
+
+    return templates.TemplateResponse(
+        "observability.html",
+        _template_ctx(
+            request,
+            product_data=product_data,
+            all_domains=all_domains,
+            platform_health=platform_health,
+        ),
+    )
+
+
+@app.get("/pipeline-builder", response_class=HTMLResponse, include_in_schema=False)
+def page_pipeline_builder(request: Request):
+    """Selvbetjent pipeline-builder — velg mal, konfigurer og deploy."""
+    user = auth.get_current_user(request)
+    if not user:
+        return RedirectResponse("/login?next=/pipeline-builder", status_code=303)
+    return templates.TemplateResponse("pipeline_builder.html", _template_ctx(
+        request,
+        templates=_PIPELINE_TEMPLATES,
+    ))
+
+
+@app.get("/pipelines/{dag_id}/edit", response_class=HTMLResponse, include_in_schema=False)
+def page_pipeline_edit(request: Request, dag_id: str):
+    """Rediger eksisterende pipeline-konfigurasjon."""
+    user = auth.get_current_user(request)
+    if not user:
+        return RedirectResponse(f"/login?next=/pipelines/{dag_id}/edit", status_code=303)
+    stored   = _load_pipeline_config(dag_id)
+    history  = _load_pipeline_history(dag_id)
+    last_run = _safe_pipeline(dag_id)
+    hint     = _diagnose_error(last_run.get("error")) if last_run else None
+    return templates.TemplateResponse("pipeline_edit.html", _template_ctx(
+        request,
+        dag_id=dag_id,
+        stored=stored,
+        history=history,
+        templates=_PIPELINE_TEMPLATES,
+        last_run=last_run,
+        hint=hint,
+    ))
+
+
+def _contract_status(manifest: dict, sla_result: dict | None) -> str:
+    """
+    Returner trafikklys-status for kontrakt: 'ok', 'warning', 'breach', 'none'.
+    """
+    contract = manifest.get("contract")
+    if not contract:
+        return "none"
+    slo = contract.get("slo") or {}
+    if not sla_result:
+        return "none"
+    compliant = sla_result.get("compliant")
+    if compliant is None:
+        return "none"
+    if not compliant:
+        return "breach"
+    freshness_hours  = slo.get("freshness_hours")
+    hours_since      = sla_result.get("hours_since_update")
+    if freshness_hours and hours_since is not None:
+        ratio = hours_since / freshness_hours
+        if ratio > 0.8:
+            return "warning"
+    return "ok"
+
+
+@app.get("/domain/{domain}/contracts", response_class=HTMLResponse, include_in_schema=False)
+def page_domain_contracts(request: Request, domain: str):
+    """Kontrakts-dashboard for et domene — trafikklys per produkt."""
+    all_products = [p for p in list_all() if p.get("domain") == domain]
+    if not all_products and domain:
+        # Sjekk om domenet eksisterer i det hele tatt
+        known_domains = {p.get("domain") for p in list_all()}
+        if domain not in known_domains:
+            raise HTTPException(status_code=404, detail=f"Domene '{domain}' ikke funnet")
+
+    rows = []
+    for p in all_products:
+        sla    = _safe_sla(p["id"]) or _compute_sla_live(p)
+        status = _contract_status(p, sla)
+        rows.append({
+            "manifest": p,
+            "sla":      sla,
+            "status":   status,
+        })
+
+    # Sorter: brudd øverst, deretter advarsel, OK, ingen kontrakt
+    _order = {"breach": 0, "warning": 1, "ok": 2, "none": 3}
+    rows.sort(key=lambda r: _order.get(r["status"], 4))
+
+    return templates.TemplateResponse("contracts.html", _template_ctx(
+        request,
+        domain=domain,
+        rows=rows,
+        all_domains=sorted({p.get("domain", "") for p in list_all()}),
+    ))
+
+
+@app.get("/domain/{domain}/contracts.csv", include_in_schema=False)
+def export_domain_contracts_csv(request: Request, domain: str):
+    """Eksporter kontrakt-status for domenet som CSV."""
+    import csv, io
+    all_products = [p for p in list_all() if p.get("domain") == domain]
+    buf = io.StringIO()
+    writer = csv.writer(buf)
+    writer.writerow(["product_id", "name", "owner", "version", "schema_compatibility",
+                     "freshness_hours", "completeness_pct", "sla_status", "contract_status"])
+    for p in all_products:
+        sla      = _safe_sla(p["id"]) or _compute_sla_live(p)
+        status   = _contract_status(p, sla)
+        contract = p.get("contract") or {}
+        slo      = contract.get("slo") or {}
+        writer.writerow([
+            p["id"], p.get("name"), p.get("owner"), p.get("version"),
+            contract.get("schema_compatibility", "NONE"),
+            slo.get("freshness_hours", ""),
+            slo.get("completeness_pct", ""),
+            "compliant" if (sla or {}).get("compliant") else "breach",
+            status,
+        ])
+    return JSONResponse(
+        content=buf.getvalue(),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename=contracts_{domain}.csv"},
+    )

@@ -1,0 +1,220 @@
+{% extends "base.html" %}
+{% block title %}Styringssentral — Slettix Analytics{% endblock %}
+
+{% block content %}
+
+<div class="d-flex align-items-start gap-3 mb-4">
+  <div>
+    <h1 class="h3 mb-0"><i class="bi bi-shield-shaded me-2 text-primary"></i>Styringssentral</h1>
+    <p class="text-muted mb-0">GDPR datakart og retensjons-oversikt</p>
+  </div>
+  <div class="ms-auto d-flex gap-2 align-self-center">
+    <a href="/api/governance/pii-map" target="_blank" class="btn btn-sm btn-outline-secondary">
+      <i class="bi bi-download me-1"></i>Eksporter JSON
+    </a>
+  </div>
+</div>
+
+{# ── sammendragskort ── #}
+{% set total_pii_products = pii_map | length %}
+
+<div class="row g-3 mb-4">
+  <div class="col-sm-6 col-lg-3">
+    <div class="card text-center">
+      <div class="card-body py-3">
+        <div class="display-5 fw-bold text-danger">{{ total_pii_products }}</div>
+        <div class="text-muted small mt-1">Produkter med PII</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-6 col-lg-3">
+    <div class="card text-center">
+      <div class="card-body py-3">
+        <div class="display-5 fw-bold text-warning">
+          {% set ns = namespace(count=0) %}
+          {% for p in pii_map %}{% set ns.count = ns.count + (p.pii_columns | length) %}{% endfor %}
+          {{ ns.count }}
+        </div>
+        <div class="text-muted small mt-1">Totalt PII-kolonner</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-6 col-lg-3">
+    <div class="card text-center">
+      <div class="card-body py-3">
+        <div class="display-5 fw-bold text-danger">
+          {% set ns2 = namespace(count=0) %}
+          {% for p in pii_map %}
+            {% for col in p.pii_columns %}
+              {% if col.sensitivity == 'high' %}{% set ns2.count = ns2.count + 1 %}{% endif %}
+            {% endfor %}
+          {% endfor %}
+          {{ ns2.count }}
+        </div>
+        <div class="text-muted small mt-1">Høy-sensitiv kolonner</div>
+      </div>
+    </div>
+  </div>
+  <div class="col-sm-6 col-lg-3">
+    <div class="card text-center">
+      <div class="card-body py-3">
+        <div class="display-5 fw-bold text-success">
+          {% set ns3 = namespace(count=0) %}
+          {% for p in pii_map %}{% if p.retention %}{% set ns3.count = ns3.count + 1 %}{% endif %}{% endfor %}
+          {{ ns3.count }}
+        </div>
+        <div class="text-muted small mt-1">Med retensjons-policy</div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ── domenefilter ── #}
+{% if domains %}
+<div class="d-flex gap-2 mb-3 align-items-center flex-wrap">
+  <span class="text-muted small">Filtrer domene:</span>
+  <button class="btn btn-sm btn-primary domain-filter active" data-domain="">Alle</button>
+  {% for d in domains %}
+  <button class="btn btn-sm btn-outline-secondary domain-filter" data-domain="{{ d }}">{{ d }}</button>
+  {% endfor %}
+</div>
+{% endif %}
+
+{# ── PII datakart tabell ── #}
+{% if pii_map %}
+<div class="card">
+  <div class="card-header bg-white fw-semibold">
+    <i class="bi bi-table me-2"></i>PII-datakart
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm table-hover mb-0 align-middle" id="pii-table">
+      <thead class="table-light">
+        <tr>
+          <th>Produkt</th>
+          <th>Domene</th>
+          <th>Eier</th>
+          <th>PII-kolonner</th>
+          <th>Maks. sensitivitet</th>
+          <th>Retensjon</th>
+          <th>Lagring</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for p in pii_map %}
+        {% set max_sens = namespace(val='low') %}
+        {% for col in p.pii_columns %}
+          {% if col.sensitivity == 'high' %}{% set max_sens.val = 'high' %}
+          {% elif col.sensitivity == 'medium' and max_sens.val != 'high' %}{% set max_sens.val = 'medium' %}
+          {% endif %}
+        {% endfor %}
+        <tr class="pii-row" data-domain="{{ p.domain or '' }}">
+          <td>
+            <a href="/products/{{ p.product_id }}" class="text-decoration-none fw-semibold">
+              {{ p.name }}
+            </a>
+            <div class="text-muted small font-monospace">{{ p.product_id }}</div>
+          </td>
+          <td>
+            {% if p.domain %}
+            <span class="badge bg-light text-dark border">{{ p.domain }}</span>
+            {% else %}
+            <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+          <td class="text-muted small">{{ p.owner or '—' }}</td>
+          <td>
+            <span class="badge bg-danger-subtle text-danger-emphasis border border-danger-subtle me-1">
+              {{ p.pii_columns | length }} kolonner
+            </span>
+            <button class="btn btn-sm btn-link p-0 text-muted toggle-pii-cols" type="button"
+                    data-bs-toggle="collapse" data-bs-target="#pii-cols-{{ loop.index }}">
+              <i class="bi bi-chevron-down" style="font-size:.75rem;"></i>
+            </button>
+            <div class="collapse mt-1" id="pii-cols-{{ loop.index }}">
+              {% for col in p.pii_columns %}
+              <div class="d-flex align-items-center gap-1 small">
+                <code>{{ col.column }}</code>
+                {% if col.sensitivity %}
+                <span class="badge
+                  {% if col.sensitivity == 'high' %}bg-danger
+                  {% elif col.sensitivity == 'medium' %}bg-warning text-dark
+                  {% else %}bg-success{% endif %}"
+                  style="font-size:.55rem;">{{ col.sensitivity }}</span>
+                {% endif %}
+                <span class="text-muted">{{ col.type or '' }}</span>
+              </div>
+              {% endfor %}
+            </div>
+          </td>
+          <td>
+            {% if max_sens.val == 'high' %}
+            <span class="badge bg-danger"><i class="bi bi-exclamation-triangle me-1"></i>Høy</span>
+            {% elif max_sens.val == 'medium' %}
+            <span class="badge bg-warning text-dark">Middels</span>
+            {% else %}
+            <span class="badge bg-success">Lav</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if p.retention %}
+              <span class="text-muted small">
+                {{ p.retention.days }} dager
+                {% if p.retention.strategy %}
+                  <span class="badge bg-secondary ms-1" style="font-size:.6rem;">{{ p.retention.strategy }}</span>
+                {% endif %}
+              </span>
+            {% else %}
+              <span class="text-muted small">—</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if p.source_path %}
+            <code class="small text-muted">{{ p.source_path | truncate(30) }}</code>
+            {% else %}
+            <span class="text-muted">—</span>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% else %}
+<div class="card">
+  <div class="card-body text-center py-5">
+    <i class="bi bi-shield-check display-4 text-success d-block mb-3"></i>
+    <h5>Ingen dataprodukter med PII-merking funnet</h5>
+    <p class="text-muted mb-0">
+      Legg til <code>pii: true</code> på kolonner i produkt-manifestet for å vise dem her.
+    </p>
+  </div>
+</div>
+{% endif %}
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+  // Domenefilter
+  document.querySelectorAll(".domain-filter").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".domain-filter").forEach(b => {
+        b.classList.remove("active", "btn-primary");
+        b.classList.add("btn-outline-secondary");
+      });
+      btn.classList.add("active", "btn-primary");
+      btn.classList.remove("btn-outline-secondary");
+
+      const domain = btn.dataset.domain;
+      document.querySelectorAll(".pii-row").forEach(row => {
+        if (!domain || row.dataset.domain === domain) {
+          row.style.display = "";
+        } else {
+          row.style.display = "none";
+        }
+      });
+    });
+  });
+</script>
+{% endblock %}

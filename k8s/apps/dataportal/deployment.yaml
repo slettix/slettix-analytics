@@ -1,0 +1,100 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: dataportal
+  namespace: slettix-analytics
+  labels:
+    app: dataportal
+    app.kubernetes.io/part-of: slettix-analytics
+    app.kubernetes.io/component: dataportal
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: dataportal
+  template:
+    metadata:
+      labels:
+        app: dataportal
+        app.kubernetes.io/part-of: slettix-analytics
+    spec:
+      containers:
+        - name: dataportal
+          image: slettix-analytics/dataportal:1.0.0
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8090
+          env:
+            - name: MINIO_ENDPOINT
+              value: "http://minio.slettix-analytics.svc.cluster.local:9000"
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: slettix-credentials
+                  key: minio-root-user
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: slettix-credentials
+                  key: minio-root-password
+            - name: AIRFLOW_URL
+              value: "http://airflow-webserver.slettix-analytics.svc.cluster.local:8080"
+            - name: AIRFLOW_USER
+              value: "admin"
+            - name: AIRFLOW_PASS
+              value: "admin"
+            - name: SUPERSET_URL
+              value: "http://superset.slettix-analytics.svc.cluster.local:8088"
+            - name: JUPYTER_URL
+              value: "http://jupyter.slettix-analytics.svc.cluster.local:8888"
+            - name: AIRFLOW_EXTERNAL_URL
+              value: "http://localhost:8080"
+            - name: JUPYTER_EXTERNAL_URL
+              value: "http://localhost:8888"
+            - name: SUPERSET_EXTERNAL_URL
+              value: "http://localhost:8088"
+            - name: MINIO_EXTERNAL_URL
+              value: "http://localhost:9001"
+            - name: PORTAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: slettix-credentials
+                  key: portal-api-key
+            - name: ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: slettix-credentials
+                  key: anthropic-api-key
+                  optional: true
+            - name: REGISTRY_PATH
+              value: "s3://gold/data_products"
+            - name: DAGS_DIR
+              value: "/opt/dataportal/dags"
+            - name: NOTEBOOKS_DIR
+              value: "/opt/dataportal/notebooks"
+            - name: AWS_DEFAULT_REGION
+              value: "us-east-1"
+            - name: AWS_EC2_METADATA_DISABLED
+              value: "true"
+            - name: WATCHFILES_FORCE_POLLING
+              value: "true"
+          command: ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8090", "--reload"]
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 8090
+            initialDelaySeconds: 10
+            periodSeconds: 15
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 8090
+            initialDelaySeconds: 30
+            periodSeconds: 30

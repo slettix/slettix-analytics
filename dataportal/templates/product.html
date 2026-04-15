@@ -50,7 +50,10 @@
     <span class="badge bg-warning text-dark align-self-center"><i class="bi bi-lock me-1"></i>Begrenset</span>
   {% endif %}
   {% if has_access %}
-  <div class="ms-auto d-flex gap-2 align-self-center">
+  <div class="ms-auto d-flex gap-2 align-self-center flex-wrap">
+    <a href="{{ superset_url }}/sqllab/" target="_blank" class="btn btn-sm btn-outline-info">
+      <i class="bi bi-bar-chart-line me-1"></i>Utforsk i Superset
+    </a>
     {% if jupyter_nb_url %}
     <a href="{{ jupyter_nb_url }}" target="_blank" class="btn btn-sm btn-warning">
       <i class="bi bi-journal-code me-1"></i>Åpne notebook
@@ -60,10 +63,18 @@
             data-product-id="{{ manifest.id }}">
       <i class="bi bi-journal-plus me-1"></i>{% if jupyter_nb_url %}Ny notebook{% else %}Åpne i Jupyter{% endif %}
     </button>
+    {% if is_owner %}
+    <button class="btn btn-sm btn-outline-primary" id="gen-desc-btn" data-product-id="{{ manifest.id }}">
+      <i class="bi bi-stars me-1"></i>Generer beskrivelse
+    </button>
+    {% endif %}
   </div>
   {% endif %}
 </div>
 <p class="text-muted mb-2">{{ manifest.domain }} / {{ manifest.owner }}</p>
+{% if views %}
+<div class="text-muted small mb-2"><i class="bi bi-eye me-1"></i>{{ views }} visninger siste 30 dager</div>
+{% endif %}
 
 {% if manifest.description %}
 <p class="lead mb-3">{{ manifest.description }}</p>
@@ -84,21 +95,72 @@
 
     {# schema #}
     <div class="card mb-4">
-      <div class="card-header bg-white fw-semibold">
-        <i class="bi bi-table me-2"></i>Schema
+      <div class="card-header bg-white fw-semibold d-flex align-items-center">
+        <span><i class="bi bi-table me-2"></i>Schema</span>
+        {% if is_owner and schema %}
+        <span class="ms-auto text-muted small fw-normal">
+          <i class="bi bi-pencil me-1"></i>Klikk <i class="bi bi-pencil-square"></i> for å redigere kolonnemetadata
+        </span>
+        {% endif %}
       </div>
       <div class="card-body p-0">
         {% if schema %}
         <table class="table table-sm table-hover mb-0">
           <thead class="table-light">
-            <tr><th>Kolonne</th><th>Type</th><th>Nullbar</th></tr>
+            <tr>
+              <th>Kolonne</th>
+              <th>Type</th>
+              <th>Nullbar</th>
+              <th>Info</th>
+              {% if is_owner %}<th style="width:40px;"></th>{% endif %}
+            </tr>
           </thead>
           <tbody>
             {% for field in schema %}
             <tr>
-              <td class="font-monospace">{{ field.name }}</td>
-              <td class="text-muted">{{ field.type }}</td>
+              <td class="font-monospace">
+                {{ field.name }}
+                {% if field.pii %}
+                <span class="badge bg-danger ms-1" style="font-size:.6rem;">PII</span>
+                {% endif %}
+              </td>
+              <td>
+                {% if field.type == "***" %}
+                <em class="text-muted">*** (maskert)</em>
+                {% else %}
+                <span class="text-muted">{{ field.type }}</span>
+                {% endif %}
+              </td>
               <td>{% if field.nullable %}<span class="text-muted">ja</span>{% else %}<span class="text-danger fw-semibold">nei</span>{% endif %}</td>
+              <td>
+                {% if field.sensitivity %}
+                <span class="badge
+                  {% if field.sensitivity == 'high' %}bg-danger
+                  {% elif field.sensitivity == 'medium' %}bg-warning text-dark
+                  {% else %}bg-success{% endif %}"
+                  style="font-size:.6rem;">
+                  {{ field.sensitivity }}
+                </span>
+                {% endif %}
+                {% if field.description and field.description != "*** (PII — begrenset tilgang)" %}
+                <span class="text-muted small">{{ field.description }}</span>
+                {% elif field.type == "***" %}
+                <em class="text-muted small">PII — begrenset tilgang</em>
+                {% endif %}
+              </td>
+              {% if is_owner %}
+              <td>
+                <button type="button"
+                        class="btn btn-sm btn-link p-0 text-muted edit-col-btn"
+                        title="Rediger metadata"
+                        data-col-name="{{ field.name }}"
+                        data-col-pii="{{ field.pii | default(false) | lower }}"
+                        data-col-sensitivity="{{ field.sensitivity | default('') }}"
+                        data-col-description="{{ field.description | default('') }}">
+                  <i class="bi bi-pencil-square"></i>
+                </button>
+              </td>
+              {% endif %}
             </tr>
             {% endfor %}
           </tbody>
@@ -108,6 +170,52 @@
         {% endif %}
       </div>
     </div>
+
+    {# ── modal: rediger kolonnemetadata (kun eier/admin) ── #}
+    {% if is_owner %}
+    <div class="modal fade" id="editColModal" tabindex="-1">
+      <div class="modal-dialog">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title"><i class="bi bi-pencil-square me-2"></i>Rediger kolonne: <code id="modal-col-name"></code></h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <div class="mb-3">
+              <div class="form-check form-switch">
+                <input class="form-check-input" type="checkbox" id="modal-pii" role="switch">
+                <label class="form-check-label fw-semibold" for="modal-pii">
+                  <span class="badge bg-danger me-1">PII</span>Personopplysning
+                </label>
+              </div>
+              <div class="form-text">Marker kolonnen som personidentifiserende informasjon (GDPR-relevant).</div>
+            </div>
+            <div class="mb-3">
+              <label class="form-label fw-semibold" for="modal-sensitivity">Sensitivitetsnivå</label>
+              <select class="form-select" id="modal-sensitivity">
+                <option value="">— ikke angitt —</option>
+                <option value="low">Lav</option>
+                <option value="medium">Middels</option>
+                <option value="high">Høy</option>
+              </select>
+            </div>
+            <div class="mb-3">
+              <label class="form-label fw-semibold" for="modal-description">Beskrivelse</label>
+              <input type="text" class="form-control" id="modal-description" placeholder="Kort beskrivelse av kolonnen">
+            </div>
+            <div id="modal-save-error" class="alert alert-danger py-2 d-none"></div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Avbryt</button>
+            <button type="button" class="btn btn-primary" id="modal-save-btn">
+              <span class="spinner-border spinner-border-sm d-none me-1" id="modal-spinner"></span>
+              Lagre
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
 
     {# datakvalitet #}
     <div class="card mb-4">
@@ -162,6 +270,242 @@
       </div>
     </div>
 
+    {# kvalitetstrendkort — vises hvis history finnes #}
+    {% if quality_history and quality_history | length > 1 %}
+    <div class="card mb-4">
+      <div class="card-header bg-white fw-semibold">
+        <i class="bi bi-graph-up me-2"></i>Kvalitetstrend (siste {{ quality_history | length }} kjøringer)
+      </div>
+      <div class="card-body">
+        <canvas id="quality-chart" height="100"></canvas>
+      </div>
+    </div>
+    {% endif %}
+
+    {# anomalivarsel — vises hvis anomalier er oppdaget #}
+    {% if anomalies and anomalies.has_anomaly %}
+    <div class="alert alert-warning d-flex align-items-start gap-2 mb-4">
+      <i class="bi bi-exclamation-triangle-fill flex-shrink-0 mt-1 text-warning"></i>
+      <div>
+        <strong>{{ anomalies.anomalies | length }} anomali{% if anomalies.anomalies | length != 1 %}er{% endif %} oppdaget</strong>
+        <span class="text-muted small ms-2">{{ anomalies.checked_at[:16].replace("T", " ") }} UTC</span>
+        <ul class="mb-0 mt-1 small">
+          {% for a in anomalies.anomalies %}
+          <li>
+            {% if a.severity == "critical" %}<span class="badge bg-danger me-1">Kritisk</span>{% else %}<span class="badge bg-warning text-dark me-1">Advarsel</span>{% endif %}
+            {{ a.message }}
+          </li>
+          {% endfor %}
+        </ul>
+      </div>
+    </div>
+    {% endif %}
+
+    {# incidents #}
+    {% if incidents %}
+    <div class="card mb-4">
+      <div class="card-header bg-white fw-semibold d-flex align-items-center">
+        <span><i class="bi bi-bug me-2"></i>Incidents</span>
+        {% if incidents | selectattr("status", "ne", "resolved") | list | length > 0 %}
+        <span class="badge bg-danger ms-2">{{ incidents | selectattr("status", "ne", "resolved") | list | length }} åpen{% if (incidents | selectattr("status", "ne", "resolved") | list | length) != 1 %}e{% endif %}</span>
+        {% endif %}
+        {% if is_owner %}
+        <button class="btn btn-sm btn-outline-secondary ms-auto" id="new-incident-btn">
+          <i class="bi bi-plus me-1"></i>Opprett
+        </button>
+        {% endif %}
+      </div>
+      <div class="list-group list-group-flush">
+        {% for inc in incidents %}
+        <div class="list-group-item">
+          <div class="d-flex align-items-start gap-2">
+            {% if inc.status == "resolved" %}
+            <i class="bi bi-check-circle-fill text-success mt-1"></i>
+            {% elif inc.severity == "critical" %}
+            <i class="bi bi-exclamation-circle-fill text-danger mt-1"></i>
+            {% else %}
+            <i class="bi bi-exclamation-triangle-fill text-warning mt-1"></i>
+            {% endif %}
+            <div class="flex-grow-1">
+              <div class="fw-semibold small">{{ inc.title }}</div>
+              {% if inc.description %}<div class="text-muted small">{{ inc.description }}</div>{% endif %}
+              <div class="text-muted" style="font-size:.7rem;">
+                {{ inc.created_at[:16].replace("T"," ") }} UTC
+                · av {{ inc.created_by }}
+              </div>
+            </div>
+            <div class="d-flex flex-column align-items-end gap-1">
+              {% if inc.status == "open" %}<span class="badge bg-danger">Åpen</span>
+              {% elif inc.status == "acknowledged" %}<span class="badge bg-warning text-dark">Kjent</span>
+              {% elif inc.status == "resolving" %}<span class="badge bg-info text-dark">Under arbeid</span>
+              {% else %}<span class="badge bg-success">Løst</span>{% endif %}
+              {% if is_owner and inc.status != "resolved" %}
+              <div class="btn-group btn-group-sm mt-1">
+                {% if inc.status == "open" %}
+                <button class="btn btn-outline-secondary incident-status-btn" data-incident-id="{{ inc.id }}" data-new-status="acknowledged" title="Merk som kjent">Kjent</button>
+                <button class="btn btn-outline-info incident-status-btn" data-incident-id="{{ inc.id }}" data-new-status="resolving" title="Under arbeid">Arbeid</button>
+                {% endif %}
+                {% if inc.status in ["acknowledged", "resolving"] %}
+                <button class="btn btn-outline-success incident-status-btn" data-incident-id="{{ inc.id }}" data-new-status="resolved" title="Merk som løst">Løst</button>
+                {% endif %}
+              </div>
+              {% endif %}
+            </div>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% elif is_owner %}
+    <div class="card mb-4">
+      <div class="card-header bg-white fw-semibold d-flex align-items-center">
+        <span><i class="bi bi-bug me-2"></i>Incidents</span>
+        <button class="btn btn-sm btn-outline-secondary ms-auto" id="new-incident-btn">
+          <i class="bi bi-plus me-1"></i>Opprett
+        </button>
+      </div>
+      <div class="card-body text-muted small text-center py-3">Ingen incidents registrert.</div>
+    </div>
+    {% endif %}
+
+    {# modal: ny incident #}
+    {% if is_owner %}
+    <div class="modal fade" id="newIncidentModal" tabindex="-1">
+      <div class="modal-dialog">
+        <div class="modal-content">
+          <div class="modal-header">
+            <h5 class="modal-title"><i class="bi bi-bug me-2"></i>Ny incident</h5>
+            <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+          </div>
+          <div class="modal-body">
+            <div class="mb-3">
+              <label class="form-label fw-semibold">Tittel</label>
+              <input type="text" class="form-control" id="inc-title" placeholder="Kort beskrivelse av problemet">
+            </div>
+            <div class="mb-3">
+              <label class="form-label fw-semibold">Beskrivelse</label>
+              <textarea class="form-control" id="inc-description" rows="3" placeholder="Utdyp gjerne..."></textarea>
+            </div>
+            <div class="mb-3">
+              <label class="form-label fw-semibold">Alvorlighetsgrad</label>
+              <select class="form-select" id="inc-severity">
+                <option value="warning">Advarsel</option>
+                <option value="critical">Kritisk</option>
+              </select>
+            </div>
+            <div id="inc-error" class="alert alert-danger py-2 d-none"></div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Avbryt</button>
+            <button type="button" class="btn btn-danger" id="inc-save-btn">
+              <span class="spinner-border spinner-border-sm d-none me-1" id="inc-spinner"></span>
+              Opprett incident
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    {# ── downstream impact-varsel (#63) ── #}
+    {% if downstream and has_access %}
+    <div class="alert alert-warning d-flex align-items-start gap-2 py-2 mb-4">
+      <i class="bi bi-exclamation-triangle-fill flex-shrink-0 mt-1"></i>
+      <div class="small">
+        <strong>{{ downstream | length }} nedstrøms produkt{% if downstream | length != 1 %}er{% endif %} kan være påvirket</strong>
+        ved schema-endringer i dette produktet.
+        <div class="d-flex flex-wrap gap-1 mt-1">
+          {% for d in downstream %}
+          <a href="/products/{{ d.id }}" class="badge bg-warning text-dark text-decoration-none">{{ d.name }}</a>
+          {% endfor %}
+        </div>
+      </div>
+    </div>
+    {% endif %}
+
+    {# ── lineage-graf (#62/#63) ── #}
+    <div class="card mb-4">
+      <div class="card-header bg-white fw-semibold d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-diagram-3 me-2"></i>Datalineage</span>
+        <div class="d-flex gap-2">
+          {% if upstream %}
+          <span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle">
+            {{ upstream | length }} kilde{% if upstream | length != 1 %}r{% endif %} oppstrøms
+          </span>
+          {% endif %}
+          {% if downstream %}
+          <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle">
+            {{ downstream | length }} produkt{% if downstream | length != 1 %}er{% endif %} nedstrøms
+          </span>
+          {% endif %}
+        </div>
+      </div>
+      <div class="card-body">
+        <div class="mermaid" id="lineage-diagram">{{ mermaid_lineage }}</div>
+      </div>
+      {% if downstream %}
+      <div class="card-footer bg-white">
+        <p class="mb-1 small fw-semibold text-muted">Nedstrøms avhengigheter</p>
+        <div class="d-flex flex-wrap gap-2">
+          {% for d in downstream %}
+          <a href="/products/{{ d.id }}" class="badge bg-light text-dark border text-decoration-none">
+            <i class="bi bi-diagram-2 me-1"></i>{{ d.name }}
+          </a>
+          {% endfor %}
+        </div>
+      </div>
+      {% endif %}
+    </div>
+
+    {# ── kolonnelineage (#64) ── #}
+    {% if column_lineage or schema %}
+    <div class="card mb-4">
+      <div class="card-header bg-white fw-semibold">
+        <i class="bi bi-arrow-left-right me-2"></i>Kolonnelineage
+      </div>
+      <div class="card-body p-0">
+        {% set cl_index = {} %}
+        {% for cl in column_lineage %}
+          {% if cl_index.update({cl.column: cl}) %}{% endif %}
+        {% endfor %}
+        <table class="table table-sm table-hover mb-0">
+          <thead class="table-light">
+            <tr>
+              <th>Kolonne</th>
+              <th>Kildekolonner</th>
+              <th>Transformasjon</th>
+            </tr>
+          </thead>
+          <tbody>
+            {# Vis alle schema-kolonner; bruk column_lineage der det finnes, ellers «–» #}
+            {% set all_columns = (schema | map(attribute='name') | list) if schema else (column_lineage | map(attribute='column') | list) %}
+            {% for col_name in all_columns %}
+            {% set cl = cl_index.get(col_name) %}
+            <tr>
+              <td class="font-monospace">{{ col_name }}</td>
+              <td>
+                {% if cl and cl.sources %}
+                  {% for src in cl.sources %}
+                  <span class="badge bg-light text-dark border me-1">
+                    {% if src.product_id %}<code class="small">{{ src.product_id }}</code>.{% endif %}
+                    <code class="small">{{ src.column }}</code>
+                  </span>
+                  {% endfor %}
+                {% else %}
+                  <span class="text-muted">–</span>
+                {% endif %}
+              </td>
+              <td class="text-muted small">
+                {% if cl %}{{ cl.transformation or cl.description or "–" }}{% else %}–{% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endif %}
+
     {# kodeeksempel #}
     <div class="card mb-4">
       <div class="card-header bg-white fw-semibold">
@@ -174,6 +518,11 @@
           </li>
           <li class="nav-item">
             <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-duckdb">DuckDB</button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-superset">
+              <i class="bi bi-bar-chart-line me-1 text-info"></i>Superset SQL Lab
+            </button>
           </li>
         </ul>
         <div class="tab-content">
@@ -209,6 +558,30 @@ df = con.execute("""
     SELECT * FROM delta_scan('{{ manifest.source_path }}')
 """).df()
 print(df.head())</pre>
+          </div>
+          <div class="tab-pane fade" id="tab-superset">
+            <p class="text-muted small mb-2">
+              Lim inn i <strong>SQL Lab</strong> i Superset — database
+              <code>Slettix Delta Lake</code> er forhåndskonfigurert med
+              MinIO S3 og Delta Lake-utvidelsene.
+            </p>
+<pre class="code-block">-- Hent alle rader fra {{ manifest.name }}
+SELECT *
+FROM delta_scan('{{ manifest.source_path }}')
+LIMIT 1000;
+
+-- Aggregeringseksempel
+SELECT COUNT(*) AS antall_rader
+FROM delta_scan('{{ manifest.source_path }}');</pre>
+            <div class="d-flex gap-2 mt-2">
+              <a href="{{ superset_url }}/sqllab/" target="_blank"
+                 class="btn btn-sm btn-info text-white">
+                <i class="bi bi-box-arrow-up-right me-1"></i>Åpne SQL Lab
+              </a>
+              <button type="button" class="btn btn-sm btn-outline-primary" id="nl2sql-btn">
+                <i class="bi bi-magic me-1"></i>Spør med AI
+              </button>
+            </div>
           </div>
         </div>
       </div>
@@ -284,6 +657,78 @@ print(df.head())</pre>
         {% endif %}
       </div>
     </div>
+
+    {# kontrakt #}
+    {% if manifest.contract %}
+    <div class="card mb-4">
+      <div class="card-header bg-white fw-semibold">
+        <i class="bi bi-file-earmark-check me-2"></i>Datakontakt
+        {% set compat = manifest.contract.schema_compatibility or "NONE" %}
+        <span class="badge ms-1
+          {% if compat == 'FULL' %}bg-success
+          {% elif compat in ('BACKWARD','FORWARD') %}bg-primary
+          {% else %}bg-secondary{% endif %}" style="font-size:.65rem;">
+          {{ compat }}
+        </span>
+      </div>
+      <ul class="list-group list-group-flush">
+        {% if manifest.contract.slo %}
+        <li class="list-group-item">
+          <span class="text-muted d-block small mb-1">SLO</span>
+          {% if manifest.contract.slo.freshness_hours %}
+          <small>Ferskhet: maks {{ manifest.contract.slo.freshness_hours }}t</small><br>
+          {% endif %}
+          {% if manifest.contract.slo.completeness_pct %}
+          <small>Kompletthet: min {{ manifest.contract.slo.completeness_pct }}%</small>
+          {% endif %}
+        </li>
+        {% endif %}
+        {% if manifest.contract.guaranteed_columns %}
+        <li class="list-group-item">
+          <span class="text-muted d-block small mb-1">Garanterte kolonner</span>
+          {% for col in manifest.contract.guaranteed_columns %}
+          <code class="small me-1">{{ col }}</code>
+          {% endfor %}
+        </li>
+        {% endif %}
+        {% if manifest.contract.deprecation %}
+        <li class="list-group-item">
+          <div class="alert alert-warning py-1 px-2 mb-0 small">
+            <i class="bi bi-exclamation-triangle me-1"></i>
+            <strong>Avvikles {{ manifest.contract.deprecation.sunset_date }}</strong>
+            {% if manifest.contract.deprecation.successor %}
+            — etterfølges av
+            <a href="/products/{{ manifest.contract.deprecation.successor }}">
+              {{ manifest.contract.deprecation.successor }}
+            </a>
+            {% endif %}
+          </div>
+        </li>
+        {% endif %}
+      </ul>
+    </div>
+    {% endif %}
+
+    {# abonner på endringer #}
+    {% if current_user %}
+    <div class="card mb-4">
+      <div class="card-header bg-white fw-semibold">
+        <i class="bi bi-bell me-2"></i>Varsler
+      </div>
+      <div class="card-body">
+        <p class="small text-muted mb-2">Motta varsel ved schema- eller SLO-endringer.</p>
+        <button id="subscribe-btn" class="btn btn-sm btn-outline-primary w-100"
+                data-product-id="{{ manifest.id }}"
+                data-subscribed="{{ 'true' if is_subscribed else 'false' }}">
+          <i class="bi bi-bell{% if is_subscribed %}-fill{% endif %} me-1"></i>
+          {% if is_subscribed %}Avslutt abonnement{% else %}Abonner{% endif %}
+        </button>
+        {% if subscribers is not none and (current_user.role == 'admin' or current_user.username == manifest.owner) %}
+        <p class="small text-muted mt-2 mb-0">{{ subscribers | length }} abonnent{% if subscribers | length != 1 %}er{% endif %}</p>
+        {% endif %}
+      </div>
+    </div>
+    {% endif %}
 
     {# pipeline #}
     <div class="card mb-4">
@@ -376,11 +821,136 @@ print(df.head())</pre>
     </div>
     {% endif %}
 
+    {# relaterte produkter #}
+    {% if related %}
+    <div class="card mb-4">
+      <div class="card-header bg-white fw-semibold">
+        <i class="bi bi-stars me-2 text-warning"></i>Du liker kanskje også
+      </div>
+      <div class="list-group list-group-flush">
+        {% for r in related %}
+        <a href="/products/{{ r.id }}" class="list-group-item list-group-item-action">
+          <div class="fw-semibold small">{{ r.name }}</div>
+          <div class="d-flex gap-1 mt-1 flex-wrap">
+            <span class="badge bg-light text-dark border" style="font-size:.6rem;">{{ r.domain }}</span>
+            {% for t in (r.tags or [])[:3] %}
+            <span class="badge rounded-pill bg-light text-dark border" style="font-size:.6rem;">{{ t }}</span>
+            {% endfor %}
+          </div>
+        </a>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
   </div>{# /col-lg-4 #}
 </div>
 {% endblock %}
 
+{# ── Modal: AI-generert beskrivelse ── #}
+{% if is_owner %}
+<div class="modal fade" id="genDescModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-stars me-2 text-primary"></i>AI-generert beskrivelse</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div id="gen-desc-loading" class="text-center py-4">
+          <div class="spinner-border text-primary"></div>
+          <div class="mt-2 text-muted">Genererer beskrivelse med Claude AI…</div>
+        </div>
+        <div id="gen-desc-result" class="d-none">
+          <label class="form-label fw-semibold">Generert beskrivelse (redigerbar)</label>
+          <textarea class="form-control" id="gen-desc-text" rows="4"></textarea>
+          <div class="form-text">Gjennomgå og rediger teksten før du lagrer.</div>
+          <div id="gen-desc-error" class="alert alert-danger py-2 mt-2 d-none"></div>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Avbryt</button>
+        <button type="button" class="btn btn-primary d-none" id="gen-desc-save-btn">
+          <i class="bi bi-floppy me-1"></i>Lagre beskrivelse
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{# ── Modal: NL2SQL ── #}
+<div class="modal fade" id="nl2sqlModal" tabindex="-1">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-magic me-2 text-primary"></i>Naturlig språk til SQL</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Hva vil du finne ut?</label>
+          <input type="text" class="form-control" id="nl2sql-input"
+                 placeholder="f.eks. «Hvilke avdelinger har høyest gjennomsnittslønn?»">
+        </div>
+        <div id="nl2sql-result" class="d-none">
+          <label class="form-label fw-semibold">Generert SQL</label>
+          <pre class="code-block" id="nl2sql-output"></pre>
+          <a id="nl2sql-superset-link" href="#" target="_blank" class="btn btn-sm btn-outline-info mt-2">
+            <i class="bi bi-bar-chart-line me-1"></i>Åpne i Superset SQL Lab
+          </a>
+        </div>
+        <div id="nl2sql-error" class="alert alert-danger py-2 mt-2 d-none"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Lukk</button>
+        <button type="button" class="btn btn-primary" id="nl2sql-submit-btn">
+          <span class="spinner-border spinner-border-sm d-none me-1" id="nl2sql-spinner"></span>
+          Generer SQL
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
 {% block scripts %}
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({startOnLoad: true, theme: "base", securityLevel: "loose"});
+</script>
+{% if quality_history and quality_history | length > 1 %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<script>
+  (function () {
+    const labels = {{ quality_history | map(attribute='validated_at') | list | tojson }};
+    const scores = {{ quality_history | map(attribute='score_pct') | list | tojson }};
+    const shortLabels = labels.map(l => l.slice(0, 10));
+    const ctx = document.getElementById("quality-chart");
+    if (!ctx) return;
+    new Chart(ctx, {
+      type: "line",
+      data: {
+        labels: shortLabels,
+        datasets: [{
+          label: "Kvalitetsscore (%)",
+          data: scores,
+          borderColor: "#198754",
+          backgroundColor: "rgba(25,135,84,.1)",
+          fill: true,
+          tension: 0.3,
+          pointRadius: 4,
+        }],
+      },
+      options: {
+        scales: {
+          y: { min: 0, max: 100, ticks: { callback: v => v + "%" } },
+        },
+        plugins: { legend: { display: false } },
+      },
+    });
+  })();
+</script>
+{% endif %}
 <script>
   const btn = document.getElementById("open-jupyter-btn");
   if (btn) {
@@ -403,5 +973,245 @@ print(df.head())</pre>
       }
     });
   }
+
+  // ── Abonnement-toggle ──
+  const subBtn = document.getElementById("subscribe-btn");
+  if (subBtn) {
+    subBtn.addEventListener("click", async () => {
+      const pid        = subBtn.dataset.productId;
+      const subscribed = subBtn.dataset.subscribed === "true";
+      const method     = subscribed ? "DELETE" : "PATCH";
+      subBtn.disabled  = true;
+      try {
+        const resp = await fetch(`/api/products/${pid}/subscribe`, {method});
+        if (!resp.ok) throw new Error(await resp.text());
+        location.reload();
+      } catch (e) {
+        alert("Kunne ikke endre abonnement: " + e.message);
+        subBtn.disabled = false;
+      }
+    });
+  }
+
+  // ── Incident-status ──
+  document.querySelectorAll(".incident-status-btn").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      const incId  = btn.dataset.incidentId;
+      const status = btn.dataset.newStatus;
+      btn.disabled = true;
+      try {
+        const resp = await fetch(`/api/incidents/${incId}`, {
+          method:  "PATCH",
+          headers: {"Content-Type": "application/json"},
+          body:    JSON.stringify({status}),
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+        location.reload();
+      } catch (e) {
+        alert("Feil: " + e.message);
+        btn.disabled = false;
+      }
+    });
+  });
+
+  // ── Ny incident-modal ──
+  {% if is_owner %}
+  const newIncidentBtn = document.getElementById("new-incident-btn");
+  if (newIncidentBtn) {
+    const incModal = new bootstrap.Modal(document.getElementById("newIncidentModal"));
+    newIncidentBtn.addEventListener("click", () => incModal.show());
+    document.getElementById("inc-save-btn").addEventListener("click", async () => {
+      const title = document.getElementById("inc-title").value.trim();
+      const errDiv = document.getElementById("inc-error");
+      if (!title) { errDiv.textContent = "Tittel er påkrevd"; errDiv.classList.remove("d-none"); return; }
+      const spinner = document.getElementById("inc-spinner");
+      spinner.classList.remove("d-none");
+      document.getElementById("inc-save-btn").disabled = true;
+      errDiv.classList.add("d-none");
+      try {
+        const resp = await fetch(`/api/products/{{ manifest.id }}/incidents`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({
+            title,
+            description: document.getElementById("inc-description").value.trim(),
+            severity: document.getElementById("inc-severity").value,
+          }),
+        });
+        if (!resp.ok) throw new Error((await resp.json()).detail || resp.statusText);
+        incModal.hide();
+        location.reload();
+      } catch(e) {
+        errDiv.textContent = "Feil: " + e.message;
+        errDiv.classList.remove("d-none");
+      } finally {
+        spinner.classList.add("d-none");
+        document.getElementById("inc-save-btn").disabled = false;
+      }
+    });
+  }
+  {% endif %}
+
+  // ── Rediger kolonnemetadata ──
+  {% if is_owner %}
+  (function () {
+    const productId = "{{ manifest.id }}";
+    const modal     = new bootstrap.Modal(document.getElementById("editColModal"));
+    let   currentCol = null;
+
+    document.querySelectorAll(".edit-col-btn").forEach(btn => {
+      btn.addEventListener("click", () => {
+        currentCol = btn.dataset.colName;
+        document.getElementById("modal-col-name").textContent        = currentCol;
+        document.getElementById("modal-pii").checked                 = btn.dataset.colPii === "true";
+        document.getElementById("modal-sensitivity").value           = btn.dataset.colSensitivity || "";
+        document.getElementById("modal-description").value           = btn.dataset.colDescription || "";
+        document.getElementById("modal-save-error").classList.add("d-none");
+        modal.show();
+      });
+    });
+
+    document.getElementById("modal-save-btn").addEventListener("click", async () => {
+      if (!currentCol) return;
+      const spinner   = document.getElementById("modal-spinner");
+      const errDiv    = document.getElementById("modal-save-error");
+      const saveBtn   = document.getElementById("modal-save-btn");
+      spinner.classList.remove("d-none");
+      saveBtn.disabled = true;
+      errDiv.classList.add("d-none");
+
+      const payload = {
+        columns: [{
+          name:        currentCol,
+          pii:         document.getElementById("modal-pii").checked,
+          sensitivity: document.getElementById("modal-sensitivity").value || null,
+          description: document.getElementById("modal-description").value.trim() || null,
+        }]
+      };
+
+      try {
+        const resp = await fetch(`/api/products/${productId}/schema`, {
+          method:  "PATCH",
+          headers: {"Content-Type": "application/json"},
+          body:    JSON.stringify(payload),
+        });
+        if (!resp.ok) {
+          const err = await resp.json().catch(() => ({detail: resp.statusText}));
+          throw new Error(err.detail || resp.statusText);
+        }
+        modal.hide();
+        location.reload();
+      } catch (e) {
+        errDiv.textContent = "Feil: " + e.message;
+        errDiv.classList.remove("d-none");
+      } finally {
+        spinner.classList.add("d-none");
+        saveBtn.disabled = false;
+      }
+    });
+  })();
+  {% endif %}
+
+  // ── AI-beskrivelse ──
+  {% if is_owner %}
+  (function () {
+    const genBtn = document.getElementById("gen-desc-btn");
+    if (!genBtn) return;
+    const modal    = new bootstrap.Modal(document.getElementById("genDescModal"));
+    const loading  = document.getElementById("gen-desc-loading");
+    const result   = document.getElementById("gen-desc-result");
+    const textarea = document.getElementById("gen-desc-text");
+    const saveBtn  = document.getElementById("gen-desc-save-btn");
+    const errDiv   = document.getElementById("gen-desc-error");
+
+    genBtn.addEventListener("click", async () => {
+      loading.classList.remove("d-none");
+      result.classList.add("d-none");
+      saveBtn.classList.add("d-none");
+      errDiv.classList.add("d-none");
+      modal.show();
+      try {
+        const resp = await fetch(`/api/products/{{ manifest.id }}/generate-description`, {method: "POST"});
+        if (!resp.ok) throw new Error((await resp.json()).detail || resp.statusText);
+        const data = await resp.json();
+        textarea.value = data.description;
+        loading.classList.add("d-none");
+        result.classList.remove("d-none");
+        saveBtn.classList.remove("d-none");
+      } catch(e) {
+        loading.classList.add("d-none");
+        result.classList.remove("d-none");
+        errDiv.textContent = "Feil: " + e.message;
+        errDiv.classList.remove("d-none");
+      }
+    });
+
+    saveBtn.addEventListener("click", async () => {
+      const desc = textarea.value.trim();
+      if (!desc) return;
+      saveBtn.disabled = true;
+      try {
+        const manifestResp = await fetch(`/api/products/{{ manifest.id }}`);
+        const manifestData = await manifestResp.json();
+        const updated  = {...manifestData.manifest, description: desc};
+        const resp = await fetch(`/api/products`, {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify(updated),
+        });
+        if (!resp.ok) throw new Error((await resp.json()).detail || resp.statusText);
+        modal.hide();
+        location.reload();
+      } catch(e) {
+        errDiv.textContent = "Feil ved lagring: " + e.message;
+        errDiv.classList.remove("d-none");
+        saveBtn.disabled = false;
+      }
+    });
+  })();
+  {% endif %}
+
+  // ── NL2SQL ──
+  (function () {
+    const btn = document.getElementById("nl2sql-btn");
+    if (!btn) return;
+    const modal   = new bootstrap.Modal(document.getElementById("nl2sqlModal"));
+    const submit  = document.getElementById("nl2sql-submit-btn");
+    const spinner = document.getElementById("nl2sql-spinner");
+    const output  = document.getElementById("nl2sql-output");
+    const result  = document.getElementById("nl2sql-result");
+    const errDiv  = document.getElementById("nl2sql-error");
+    const ssLink  = document.getElementById("nl2sql-superset-link");
+
+    btn.addEventListener("click", () => modal.show());
+
+    submit.addEventListener("click", async () => {
+      const q = document.getElementById("nl2sql-input").value.trim();
+      if (!q) return;
+      spinner.classList.remove("d-none");
+      submit.disabled = true;
+      result.classList.add("d-none");
+      errDiv.classList.add("d-none");
+      try {
+        const resp = await fetch("/api/nl2sql", {
+          method: "POST",
+          headers: {"Content-Type": "application/json"},
+          body: JSON.stringify({question: q, product_id: "{{ manifest.id }}"}),
+        });
+        if (!resp.ok) throw new Error((await resp.json()).detail || resp.statusText);
+        const data = await resp.json();
+        output.textContent = data.sql;
+        const ssUrl = "{{ superset_url }}/sqllab/?sql=" + encodeURIComponent(data.sql);
+        ssLink.href = ssUrl;
+        result.classList.remove("d-none");
+      } catch(e) {
+        errDiv.textContent = "Feil: " + e.message;
+        errDiv.classList.remove("d-none");
+      } finally {
+        spinner.classList.add("d-none");
+        submit.disabled = false;
+      }
+    });
+  })();
 </script>
 {% endblock %}

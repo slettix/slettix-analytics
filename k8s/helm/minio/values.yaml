@@ -1,0 +1,95 @@
+# Helm values for MinIO — slettix-analytics
+#
+# Installer / oppgrader:
+#   helm repo add minio https://charts.min.io/
+#   helm repo update
+#   helm upgrade --install minio minio/minio \
+#     --namespace slettix-analytics \
+#     --values k8s/helm/minio/values.yaml
+#
+# Etter installasjon — opprett mappe-struktur:
+#   kubectl apply -f k8s/helm/minio/bucket-init-job.yaml
+
+image:
+  repository: quay.io/minio/minio
+  tag: RELEASE.2024-11-07T00-52-20Z
+  pullPolicy: IfNotPresent
+
+# ── Credentials ───────────────────────────────────────────────────────────────
+# Satt eksplisitt — chartet genererer ellers random credentials som ikke samsvarer
+# med slettix-credentials Secret som resten av plattformen leser fra.
+rootUser: "admin"
+rootPassword: "changeme"
+
+# ── Lagring ───────────────────────────────────────────────────────────────────
+persistence:
+  enabled: true
+  size: 10Gi
+  # Docker Desktop sin default StorageClass (hostPath) brukes automatisk
+
+# ── Buckets (opprettes automatisk ved installasjon) ──────────────────────────
+buckets:
+  - name: raw
+    policy: none
+    purge: false
+  - name: bronze
+    policy: none
+    purge: false
+  - name: silver
+    policy: none
+    purge: false
+  - name: gold
+    policy: none
+    purge: false
+  - name: checkpoints
+    policy: none
+    purge: false
+  - name: analytics
+    policy: none
+    purge: false
+
+# ── Ressurser (tilpasset lokal Docker Desktop) ────────────────────────────────
+resources:
+  requests:
+    memory: 512Mi
+    cpu: 250m
+  limits:
+    memory: 1Gi
+    cpu: 500m
+
+# ── Tjenester ─────────────────────────────────────────────────────────────────
+# NodePort gjør at localhost:9000 og localhost:9001 fungerer direkte på Docker Desktop
+
+service:
+  type: NodePort
+  port: 9000
+  nodePort: 30900   # tilgjengelig som localhost:30900 (S3 API)
+
+consoleService:
+  type: NodePort
+  port: 9001
+  nodePort: 30901   # tilgjengelig som localhost:30901 (MinIO Console)
+
+# ── Helse og oppstart ─────────────────────────────────────────────────────────
+livenessProbe:
+  initialDelaySeconds: 30
+  periodSeconds: 20
+
+readinessProbe:
+  initialDelaySeconds: 15
+  periodSeconds: 10
+
+# ── Sikkerhet ─────────────────────────────────────────────────────────────────
+securityContext:
+  enabled: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+
+# ── Pod-oppsett ───────────────────────────────────────────────────────────────
+replicas: 1
+mode: standalone   # ikke distribuert — enkelt-node for lokal utvikling
+
+# ── Labels ────────────────────────────────────────────────────────────────────
+commonLabels:
+  app.kubernetes.io/part-of: slettix-analytics

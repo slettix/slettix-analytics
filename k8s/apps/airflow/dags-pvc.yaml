@@ -1,0 +1,44 @@
+# hostPath PersistentVolume + PVC for Airflow DAGs (lokal utvikling).
+#
+# PV-en peker direkte på airflow/dags/ i repo-roten, slik at DAG-endringer
+# er umiddelbart synlige i Airflow uten å push til Git.
+#
+# Docker Desktop sin K8s-node har tilgang til Mac-filsystemet via /Users — dette
+# er kun ment for lokal utvikling. I produksjon brukes gitSync i stedet.
+#
+# Oppdater hostPath.path hvis repoet ligger et annet sted.
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: airflow-dags-pv
+  labels:
+    app.kubernetes.io/part-of: slettix-analytics
+    app.kubernetes.io/component: airflow
+spec:
+  capacity:
+    storage: 500Mi
+  accessModes:
+    - ReadOnlyMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""          # ikke bruk default StorageClass — eksplisitt binding
+  hostPath:
+    path: /Users/slettix/projects/slettix-analytics/airflow/dags
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: airflow-dags
+  namespace: slettix-analytics
+  labels:
+    app.kubernetes.io/part-of: slettix-analytics
+    app.kubernetes.io/component: airflow
+spec:
+  accessModes:
+    - ReadOnlyMany
+  storageClassName: ""          # binder eksplisitt til airflow-dags-pv
+  resources:
+    requests:
+      storage: 500Mi
+  volumeName: airflow-dags-pv

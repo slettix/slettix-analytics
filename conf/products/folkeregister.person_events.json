@@ -1,0 +1,205 @@
+{
+  "id": "folkeregister.person_events",
+  "name": "Folkeregister — Personhendelser (IDP)",
+  "domain": "folkeregister",
+  "owner": "folkeregister-team",
+  "version": "1.0.0",
+  "description": "Input Data Product (IDP) som konsumerer personhendelser fra Folkeregisteret via Kafka. Inneholder alle livshendelser for enkeltpersoner: registrering, fødsel, død og flytting. fnr er SHA-256-hashet (fnr_hash) — originalt fødselsnummer lagres aldri. Bruk person_id (UUID) som nøkkel nedstrøms.",
+  "source_path": "s3://bronze/folkeregister/person_events",
+  "format": "delta",
+  "primary_key": "event_id",
+  "dag_id": "folkeregister_idp",
+  "product_type": "source",
+  "access": "restricted",
+  "quality_sla": {
+    "max_null_rate": 0.01,
+    "freshness_hours": 1
+  },
+  "tags": ["folkeregister", "pii", "streaming", "kafka", "idp", "bronze"],
+  "contract": {
+    "slo": {
+      "freshness_hours": 1,
+      "completeness_pct": 99
+    },
+    "schema_compatibility": "BACKWARD",
+    "guaranteed_columns": [
+      "event_id",
+      "event_type",
+      "event_timestamp",
+      "person_id",
+      "kafka_topic",
+      "kafka_timestamp",
+      "_processed_at"
+    ]
+  },
+  "schema": [
+    {
+      "name": "event_id",
+      "type": "string",
+      "nullable": false,
+      "description": "Unik hendelse-ID (UUID fra kildesystemet)",
+      "pii": false
+    },
+    {
+      "name": "event_type",
+      "type": "string",
+      "nullable": false,
+      "description": "Hendelsestype: PersonRegistrert | PersonFødt | PersonDød | PersonFlyttet",
+      "pii": false
+    },
+    {
+      "name": "event_timestamp",
+      "type": "string",
+      "nullable": true,
+      "description": "Tidspunkt hendelsen inntraff (ISO 8601, fra kildesystemet)",
+      "pii": false
+    },
+    {
+      "name": "person_id",
+      "type": "string",
+      "nullable": true,
+      "description": "Intern UUID for personen — nøkkel nedstrøms i Silver og Gold",
+      "pii": false
+    },
+    {
+      "name": "fnr_hash",
+      "type": "string",
+      "nullable": true,
+      "description": "SHA-256 hash av fødselsnummer. Original fnr slettes i Bronze-laget og lagres aldri.",
+      "pii": false,
+      "sensitivity": "medium"
+    },
+    {
+      "name": "first_name",
+      "type": "string",
+      "nullable": true,
+      "description": "Fornavn — kun til stede ved PersonRegistrert og PersonFødt",
+      "pii": true,
+      "sensitivity": "high"
+    },
+    {
+      "name": "last_name",
+      "type": "string",
+      "nullable": true,
+      "description": "Etternavn — kun til stede ved PersonRegistrert og PersonFødt",
+      "pii": true,
+      "sensitivity": "high"
+    },
+    {
+      "name": "birth_date",
+      "type": "string",
+      "nullable": true,
+      "description": "Fødselsdato (ISO 8601 dato-streng) — til stede ved PersonRegistrert og PersonFødt",
+      "pii": true,
+      "sensitivity": "high"
+    },
+    {
+      "name": "gender",
+      "type": "string",
+      "nullable": true,
+      "description": "Kjønn (M/F/X) — til stede ved PersonRegistrert og PersonFødt",
+      "pii": false,
+      "sensitivity": "low"
+    },
+    {
+      "name": "mother_id",
+      "type": "string",
+      "nullable": true,
+      "description": "person_id for mor — kun til stede ved PersonFødt",
+      "pii": false
+    },
+    {
+      "name": "father_id",
+      "type": "string",
+      "nullable": true,
+      "description": "person_id for far — kun til stede ved PersonFødt",
+      "pii": false
+    },
+    {
+      "name": "death_date",
+      "type": "string",
+      "nullable": true,
+      "description": "Dødsdato (ISO 8601) — kun til stede ved PersonDød",
+      "pii": false,
+      "sensitivity": "medium"
+    },
+    {
+      "name": "death_cause_category",
+      "type": "string",
+      "nullable": true,
+      "description": "Kategorisert dødsårsak (naturlig/ulykke/sykdom/...) — kun til stede ved PersonDød",
+      "pii": false,
+      "sensitivity": "medium"
+    },
+    {
+      "name": "municipality_code",
+      "type": "string",
+      "nullable": true,
+      "description": "Kommunenummer (4 siffer, SSB-standard) — kun til stede ved PersonFlyttet",
+      "pii": false
+    },
+    {
+      "name": "municipality_name",
+      "type": "string",
+      "nullable": true,
+      "description": "Kommunenavn — kun til stede ved PersonFlyttet",
+      "pii": false
+    },
+    {
+      "name": "county",
+      "type": "string",
+      "nullable": true,
+      "description": "Fylkesnavn — kun til stede ved PersonFlyttet",
+      "pii": false
+    },
+    {
+      "name": "kafka_topic",
+      "type": "string",
+      "nullable": false,
+      "description": "Kafka-topic meldingen kom fra (person.registered | person.born | person.died | person.moved)",
+      "pii": false
+    },
+    {
+      "name": "kafka_partition",
+      "type": "integer",
+      "nullable": false,
+      "description": "Kafka-partisjon (for debugging og replay)",
+      "pii": false
+    },
+    {
+      "name": "kafka_offset",
+      "type": "long",
+      "nullable": false,
+      "description": "Kafka-offset (for eksakt reprosessering)",
+      "pii": false
+    },
+    {
+      "name": "kafka_timestamp",
+      "type": "timestamp",
+      "nullable": false,
+      "description": "Kafka broker-tidsstempel for meldingen",
+      "pii": false
+    },
+    {
+      "name": "_processed_at",
+      "type": "timestamp",
+      "nullable": false,
+      "description": "Tidspunkt Spark-jobben prosesserte og skrev hendelsen til Bronze",
+      "pii": false
+    },
+    {
+      "name": "_source_topics",
+      "type": "string",
+      "nullable": false,
+      "description": "Kommaseparert liste over topics jobben abonnerte på",
+      "pii": false
+    },
+    {
+      "name": "event_date",
+      "type": "date",
+      "nullable": true,
+      "description": "Dato-partisjoneringskolonne (avledet fra event_timestamp eller kafka_timestamp)",
+      "pii": false
+    }
+  ]
+}

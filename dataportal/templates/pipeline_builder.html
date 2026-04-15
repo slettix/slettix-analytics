@@ -1,0 +1,277 @@
+{% extends "base.html" %}
+{% block title %}Pipeline Builder — Slettix Analytics{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center mb-4">
+  <div>
+    <h1 class="h3 mb-0">Pipeline Builder</h1>
+    <p class="text-muted mb-0">Opprett og deploy Airflow-pipelines uten å skrive kode</p>
+  </div>
+</div>
+
+{# ── Stegindikator ── #}
+<div class="d-flex align-items-center mb-4 gap-0" id="step-indicator">
+  {% for step, label in [('1','Velg mal'), ('2','Konfigurer'), ('3','Forhåndsvisning'), ('4','Deploy')] %}
+  <div class="d-flex align-items-center {% if not loop.last %}flex-grow-1{% endif %}">
+    <div class="step-circle" data-step="{{ step }}">{{ step }}</div>
+    <span class="ms-2 small step-label" data-step="{{ step }}">{{ label }}</span>
+    {% if not loop.last %}<div class="flex-grow-1 border-top mx-3"></div>{% endif %}
+  </div>
+  {% endfor %}
+</div>
+
+{# ── Step 1: Velg mal ── #}
+<div id="step-1">
+  <div class="row g-4">
+    {% for tid, tmpl in templates.items() %}
+    <div class="col-md-6 col-lg-4">
+      <div class="card h-100 template-card" data-template="{{ tid }}" style="cursor:pointer;">
+        <div class="card-body">
+          <div class="d-flex align-items-center mb-3">
+            <i class="bi {{ tmpl.icon }} fs-3 me-3 text-primary"></i>
+            <div>
+              <h6 class="mb-0 fw-bold">{{ tmpl.label }}</h6>
+              {% for tag in tmpl.tags %}
+              <span class="badge bg-light text-dark border me-1" style="font-size:.6rem;">{{ tag }}</span>
+              {% endfor %}
+            </div>
+          </div>
+          <p class="text-muted small mb-0">{{ tmpl.description }}</p>
+        </div>
+        <div class="card-footer bg-white border-top-0">
+          <button class="btn btn-sm btn-primary w-100 select-template-btn" data-template="{{ tid }}">
+            <i class="bi bi-arrow-right me-1"></i>Velg denne malen
+          </button>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+{# ── Step 2: Konfigurer ── #}
+<div id="step-2" class="d-none">
+  <div class="card">
+    <div class="card-header bg-white fw-semibold">
+      <i class="bi bi-sliders me-2"></i>Konfigurer pipeline
+      <span id="template-label-2" class="text-muted ms-2 small"></span>
+    </div>
+    <div class="card-body">
+      <form id="pipeline-config-form">
+        <div id="config-fields" class="row g-3"></div>
+      </form>
+    </div>
+    <div class="card-footer bg-white d-flex gap-2">
+      <button class="btn btn-outline-secondary" onclick="goStep(1)">
+        <i class="bi bi-arrow-left me-1"></i>Tilbake
+      </button>
+      <button class="btn btn-primary ms-auto" onclick="generatePreview()">
+        <i class="bi bi-eye me-1"></i>Forhåndsvisning
+      </button>
+    </div>
+  </div>
+</div>
+
+{# ── Step 3: Forhåndsvisning ── #}
+<div id="step-3" class="d-none">
+  <div class="card mb-3">
+    <div class="card-header bg-white fw-semibold d-flex justify-content-between">
+      <span><i class="bi bi-code-slash me-2"></i>Generert DAG-kode</span>
+      <button class="btn btn-sm btn-outline-secondary" onclick="copyCode()">
+        <i class="bi bi-clipboard me-1"></i>Kopier
+      </button>
+    </div>
+    <div class="card-body p-0">
+      <pre id="dag-preview" class="code-block m-3" style="max-height:400px;overflow-y:auto;"></pre>
+    </div>
+  </div>
+  <div class="d-flex gap-2">
+    <button class="btn btn-outline-secondary" onclick="goStep(2)">
+      <i class="bi bi-arrow-left me-1"></i>Tilbake
+    </button>
+    <button class="btn btn-success ms-auto" onclick="deployPipeline()">
+      <i class="bi bi-rocket-takeoff me-1"></i>Deploy pipeline
+    </button>
+  </div>
+</div>
+
+{# ── Step 4: Deploy og status ── #}
+<div id="step-4" class="d-none">
+  <div class="card">
+    <div class="card-body text-center py-5">
+      <div id="deploy-spinner" class="mb-3">
+        <div class="spinner-border text-primary" style="width:3rem;height:3rem;"></div>
+        <p class="mt-3 text-muted">Deployer pipeline til Airflow…</p>
+      </div>
+      <div id="deploy-success" class="d-none">
+        <i class="bi bi-check-circle-fill text-success" style="font-size:3rem;"></i>
+        <h4 class="mt-3">Pipeline deployed!</h4>
+        <p class="text-muted" id="deploy-dag-id"></p>
+        <div class="d-flex gap-2 justify-content-center mt-3">
+          <a id="airflow-dag-link" href="#" target="_blank" class="btn btn-outline-primary">
+            <i class="bi bi-diagram-3 me-1"></i>Åpne i Airflow
+          </a>
+          <a href="/pipelines" class="btn btn-outline-secondary">
+            <i class="bi bi-speedometer2 me-1"></i>Pipeline-dashboard
+          </a>
+          <button class="btn btn-primary" onclick="location.reload()">
+            <i class="bi bi-plus-circle me-1"></i>Ny pipeline
+          </button>
+        </div>
+      </div>
+      <div id="deploy-error" class="d-none">
+        <i class="bi bi-x-circle-fill text-danger" style="font-size:3rem;"></i>
+        <h4 class="mt-3">Deploy feilet</h4>
+        <p class="text-muted" id="deploy-error-msg"></p>
+        <button class="btn btn-outline-secondary mt-2" onclick="goStep(3)">
+          <i class="bi bi-arrow-left me-1"></i>Tilbake
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<style>
+.step-circle {
+  width: 32px; height: 32px; border-radius: 50%;
+  background: #dee2e6; color: #6c757d;
+  display: flex; align-items: center; justify-content: center;
+  font-weight: 700; font-size: .85rem; flex-shrink: 0;
+  transition: background .2s;
+}
+.step-circle.active { background: #0d6efd; color: #fff; }
+.step-circle.done   { background: #198754; color: #fff; }
+.step-label { color: #6c757d; }
+.step-label.active { color: #0d6efd; font-weight: 600; }
+.template-card:hover { box-shadow: 0 4px 16px rgba(0,0,0,.15); }
+.template-card.selected { border: 2px solid #0d6efd; }
+</style>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const TEMPLATES = {{ templates | tojson }};
+let selectedTemplate = null;
+let currentConfig    = {};
+let generatedCode    = "";
+
+// ── Step navigation ─────────────────────────────────────────────────────────
+function goStep(n) {
+  [1,2,3,4].forEach(i => {
+    document.getElementById(`step-${i}`).classList.add("d-none");
+    const circle = document.querySelector(`.step-circle[data-step="${i}"]`);
+    const label  = document.querySelector(`.step-label[data-step="${i}"]`);
+    if (i < n)       { circle.className = "step-circle done";   label.classList.remove("active"); }
+    else if (i === n){ circle.className = "step-circle active";  label.classList.add("active"); }
+    else             { circle.className = "step-circle";         label.classList.remove("active"); }
+  });
+  document.getElementById(`step-${n}`).classList.remove("d-none");
+}
+
+// ── Template selection ───────────────────────────────────────────────────────
+document.querySelectorAll(".select-template-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    selectedTemplate = btn.dataset.template;
+    document.querySelectorAll(".template-card").forEach(c => c.classList.remove("selected"));
+    btn.closest(".template-card").classList.add("selected");
+    buildConfigForm(selectedTemplate);
+    goStep(2);
+  });
+});
+
+function buildConfigForm(templateId) {
+  const tmpl  = TEMPLATES[templateId];
+  const label = document.getElementById("template-label-2");
+  label.textContent = "— " + tmpl.label;
+  const container = document.getElementById("config-fields");
+  container.innerHTML = "";
+  tmpl.fields.forEach(field => {
+    const col = document.createElement("div");
+    col.className = "col-md-6";
+    let input = "";
+    if (field.type === "select") {
+      const opts = field.options.map(o => `<option value="${o}">${o}</option>`).join("");
+      input = `<select class="form-select" name="${field.name}" ${field.required ? "required" : ""}>${opts}</select>`;
+    } else {
+      input = `<input type="${field.type}" class="form-control" name="${field.name}"
+                placeholder="${field.placeholder || ""}"
+                value="${field.default || ""}"
+                ${field.required ? "required" : ""}>`;
+    }
+    col.innerHTML = `
+      <label class="form-label fw-semibold">${field.label}${field.required ? ' <span class="text-danger">*</span>' : ""}</label>
+      ${input}`;
+    container.appendChild(col);
+  });
+}
+
+// ── Preview ─────────────────────────────────────────────────────────────────
+async function generatePreview() {
+  const form = document.getElementById("pipeline-config-form");
+  if (!form.reportValidity()) return;
+  const data = Object.fromEntries(new FormData(form));
+  currentConfig = data;
+  try {
+    const resp = await fetch("/api/pipelines/preview", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({template_id: selectedTemplate, config: data}),
+    });
+    if (!resp.ok) throw new Error(await resp.text());
+    const result  = await resp.json();
+    generatedCode = result.code;
+    document.getElementById("dag-preview").textContent = generatedCode;
+    goStep(3);
+  } catch (e) {
+    alert("Kunne ikke generere forhåndsvisning: " + e.message);
+  }
+}
+
+function copyCode() {
+  navigator.clipboard.writeText(generatedCode);
+}
+
+// ── Deploy ───────────────────────────────────────────────────────────────────
+async function deployPipeline() {
+  goStep(4);
+  document.getElementById("deploy-spinner").classList.remove("d-none");
+  document.getElementById("deploy-success").classList.add("d-none");
+  document.getElementById("deploy-error").classList.add("d-none");
+  try {
+    const resp = await fetch("/api/pipelines", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({template_id: selectedTemplate, config: currentConfig}),
+    });
+    if (!resp.ok) throw new Error((await resp.json()).detail || await resp.text());
+    const result = await resp.json();
+    const dagId  = result.dag_id;
+    document.getElementById("deploy-spinner").classList.add("d-none");
+    document.getElementById("deploy-success").classList.remove("d-none");
+    document.getElementById("deploy-dag-id").textContent = "DAG-ID: " + dagId;
+    document.getElementById("airflow-dag-link").href = "http://localhost:8081/dags/" + dagId + "/grid";
+    // Poll status
+    pollStatus(dagId);
+  } catch (e) {
+    document.getElementById("deploy-spinner").classList.add("d-none");
+    document.getElementById("deploy-error").classList.remove("d-none");
+    document.getElementById("deploy-error-msg").textContent = e.message;
+  }
+}
+
+async function pollStatus(dagId) {
+  let attempts = 0;
+  const poll = async () => {
+    if (attempts++ > 20) return;
+    const resp   = await fetch(`/api/pipelines/${dagId}/status`);
+    const status = await resp.json();
+    if (status.status === "not_found") {
+      setTimeout(poll, 3000);
+    }
+  };
+  poll();
+}
+
+goStep(1);
+</script>
+{% endblock %}

@@ -1,0 +1,165 @@
+{
+  "id": "folkeregister.family_events",
+  "name": "Folkeregister — Familiehendelser (IDP)",
+  "domain": "folkeregister",
+  "owner": "folkeregister-team",
+  "version": "1.0.0",
+  "description": "Input Data Product (IDP) som konsumerer familiehendelser fra Folkeregisteret via Kafka. Inneholder hendelser om relasjoner mellom personer: inngåelse og oppløsning av ekteskap samt fødsel av barn knyttet til et foreldrepar. person_id (UUID) brukes konsekvent for å referere til personer.",
+  "source_path": "s3://bronze/folkeregister/family_events",
+  "format": "delta",
+  "primary_key": "event_id",
+  "dag_id": "folkeregister_idp",
+  "product_type": "source",
+  "access": "restricted",
+  "quality_sla": {
+    "max_null_rate": 0.01,
+    "freshness_hours": 1
+  },
+  "tags": ["folkeregister", "pii", "streaming", "kafka", "idp", "bronze"],
+  "contract": {
+    "slo": {
+      "freshness_hours": 1,
+      "completeness_pct": 99
+    },
+    "schema_compatibility": "BACKWARD",
+    "guaranteed_columns": [
+      "event_id",
+      "event_type",
+      "event_timestamp",
+      "kafka_topic",
+      "kafka_timestamp",
+      "_processed_at"
+    ]
+  },
+  "schema": [
+    {
+      "name": "event_id",
+      "type": "string",
+      "nullable": false,
+      "description": "Unik hendelse-ID (UUID fra kildesystemet)",
+      "pii": false
+    },
+    {
+      "name": "event_type",
+      "type": "string",
+      "nullable": false,
+      "description": "Hendelsestype: EkteskapInngått | EkteskapOppløst | BarnFødt",
+      "pii": false
+    },
+    {
+      "name": "event_timestamp",
+      "type": "string",
+      "nullable": true,
+      "description": "Tidspunkt hendelsen inntraff (ISO 8601, fra kildesystemet)",
+      "pii": false
+    },
+    {
+      "name": "person_id_a",
+      "type": "string",
+      "nullable": true,
+      "description": "person_id for første part — til stede ved EkteskapInngått og EkteskapOppløst",
+      "pii": false
+    },
+    {
+      "name": "person_id_b",
+      "type": "string",
+      "nullable": true,
+      "description": "person_id for andre part — til stede ved EkteskapInngått og EkteskapOppløst",
+      "pii": false
+    },
+    {
+      "name": "marriage_date",
+      "type": "string",
+      "nullable": true,
+      "description": "Dato for vielse (ISO 8601) — kun til stede ved EkteskapInngått",
+      "pii": false,
+      "sensitivity": "low"
+    },
+    {
+      "name": "divorce_date",
+      "type": "string",
+      "nullable": true,
+      "description": "Dato for skilsmisse (ISO 8601) — kun til stede ved EkteskapOppløst",
+      "pii": false,
+      "sensitivity": "medium"
+    },
+    {
+      "name": "child_id",
+      "type": "string",
+      "nullable": true,
+      "description": "person_id for barnet — kun til stede ved BarnFødt",
+      "pii": false
+    },
+    {
+      "name": "mother_id",
+      "type": "string",
+      "nullable": true,
+      "description": "person_id for mor — kun til stede ved BarnFødt",
+      "pii": false
+    },
+    {
+      "name": "father_id",
+      "type": "string",
+      "nullable": true,
+      "description": "person_id for far — kun til stede ved BarnFødt",
+      "pii": false
+    },
+    {
+      "name": "birth_date",
+      "type": "string",
+      "nullable": true,
+      "description": "Barnets fødselsdato (ISO 8601) — kun til stede ved BarnFødt",
+      "pii": false,
+      "sensitivity": "low"
+    },
+    {
+      "name": "kafka_topic",
+      "type": "string",
+      "nullable": false,
+      "description": "Kafka-topic meldingen kom fra (family.married | family.divorced | family.child_born)",
+      "pii": false
+    },
+    {
+      "name": "kafka_partition",
+      "type": "integer",
+      "nullable": false,
+      "description": "Kafka-partisjon (for debugging og replay)",
+      "pii": false
+    },
+    {
+      "name": "kafka_offset",
+      "type": "long",
+      "nullable": false,
+      "description": "Kafka-offset (for eksakt reprosessering)",
+      "pii": false
+    },
+    {
+      "name": "kafka_timestamp",
+      "type": "timestamp",
+      "nullable": false,
+      "description": "Kafka broker-tidsstempel for meldingen",
+      "pii": false
+    },
+    {
+      "name": "_processed_at",
+      "type": "timestamp",
+      "nullable": false,
+      "description": "Tidspunkt Spark-jobben prosesserte og skrev hendelsen til Bronze",
+      "pii": false
+    },
+    {
+      "name": "_source_topics",
+      "type": "string",
+      "nullable": false,
+      "description": "Kommaseparert liste over topics jobben abonnerte på",
+      "pii": false
+    },
+    {
+      "name": "event_date",
+      "type": "date",
+      "nullable": true,
+      "description": "Dato-partisjoneringskolonne (avledet fra event_timestamp eller kafka_timestamp)",
+      "pii": false
+    }
+  ]
+}

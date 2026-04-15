@@ -1,0 +1,54 @@
+# Helm values for Kubeflow Spark Operator — slettix-analytics
+#
+# Installer / oppgrader:
+#   helm repo add spark-operator https://kubeflow.github.io/spark-operator
+#   helm repo update
+#   helm upgrade --install spark-operator spark-operator/spark-operator \
+#     --namespace slettix-analytics \
+#     --values k8s/helm/spark-operator/values.yaml
+
+# ── Operatorbilde ─────────────────────────────────────────────────────────────
+image:
+  pullPolicy: IfNotPresent
+
+# ── Controller ────────────────────────────────────────────────────────────────
+controller:
+  replicas: 1
+  leaderElection:
+    enable: false   # deaktivert — unngår "leader election lost" ved API-ustabilitet
+  resources:
+    requests:
+      cpu: 100m
+      memory: 300Mi
+    limits:
+      cpu: 500m
+      memory: 1Gi   # økt: 3 samtidige spark-submit-JVMer bruker ~400MB alene
+
+# ── Webhook ───────────────────────────────────────────────────────────────────
+webhook:
+  enable: true
+  failurePolicy: Ignore   # Ignore = ikke-Spark-pods blokkeres ikke ved webhook-nedetid
+  leaderElection:
+    enable: false
+  resources:
+    requests:
+      cpu: 100m
+      memory: 200Mi
+    limits:
+      cpu: 300m
+      memory: 400Mi
+
+# ── Namespaces operatoren overvåker ──────────────────────────────────────────
+spark:
+  jobNamespaces:
+    - slettix-analytics
+
+# ── ServiceAccount for operatoren ─────────────────────────────────────────────
+serviceAccounts:
+  sparkoperator:
+    create: true
+    name: spark-operator
+
+# ── Labels ────────────────────────────────────────────────────────────────────
+commonLabels:
+  app.kubernetes.io/part-of: slettix-analytics

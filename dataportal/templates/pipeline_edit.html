@@ -1,0 +1,210 @@
+{% extends "base.html" %}
+{% block title %}Rediger pipeline — {{ dag_id }} — Slettix Analytics{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb" class="mb-3">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="/pipelines">Pipelines</a></li>
+    <li class="breadcrumb-item active">{{ dag_id }}</li>
+  </ol>
+</nav>
+
+<div class="d-flex align-items-center justify-content-between mb-4">
+  <div>
+    <h1 class="h3 mb-0">Rediger pipeline</h1>
+    <p class="text-muted mb-0"><code>{{ dag_id }}</code></p>
+  </div>
+  {% if last_run %}
+  <div>
+    {% if last_run.status == "success" %}
+    <span class="badge bg-success"><i class="bi bi-check-circle me-1"></i>Siste kjøring: vellykket</span>
+    {% elif last_run.status == "failed" %}
+    <span class="badge bg-danger"><i class="bi bi-x-circle me-1"></i>Siste kjøring: feilet</span>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+{% if hint %}
+<div class="alert alert-warning d-flex align-items-start gap-2 mb-4">
+  <i class="bi bi-lightbulb-fill flex-shrink-0 mt-1"></i>
+  <div>
+    <strong>Diagnostikk-hint:</strong> {{ hint }}
+  </div>
+</div>
+{% endif %}
+
+{% if not stored %}
+<div class="alert alert-info">
+  <i class="bi bi-info-circle me-2"></i>
+  Ingen lagret konfigurasjon funnet for denne pipeline. Denne DAGen ble ikke opprettet via Pipeline Builder.
+  <a href="/pipeline-builder" class="alert-link">Opprett en ny pipeline</a>.
+</div>
+{% else %}
+
+<div class="row g-4">
+  <div class="col-lg-8">
+    <div class="card mb-4">
+      <div class="card-header bg-white fw-semibold">
+        <i class="bi bi-sliders me-2"></i>Konfigurasjon
+        <span class="badge bg-secondary ms-2">{{ stored.template_id }}</span>
+      </div>
+      <div class="card-body">
+        <form id="edit-form">
+          <div id="edit-fields" class="row g-3"></div>
+        </form>
+      </div>
+      <div class="card-footer bg-white d-flex gap-2">
+        <button class="btn btn-outline-secondary" onclick="previewDag()">
+          <i class="bi bi-eye me-1"></i>Forhåndsvisning
+        </button>
+        <button class="btn btn-success ms-auto" onclick="redeploy()">
+          <i class="bi bi-rocket-takeoff me-1"></i>Regenerer og deploy
+        </button>
+      </div>
+    </div>
+
+    <div class="card d-none" id="preview-card">
+      <div class="card-header bg-white fw-semibold">
+        <i class="bi bi-code-slash me-2"></i>Forhåndsvisning av DAG-kode
+      </div>
+      <div class="card-body p-0">
+        <pre id="edit-preview" class="code-block m-3" style="max-height:350px;overflow-y:auto;"></pre>
+      </div>
+    </div>
+  </div>
+
+  <div class="col-lg-4">
+    {# Versjonshistorikk #}
+    {% if history and history | length > 1 %}
+    <div class="card mb-4">
+      <div class="card-header bg-white fw-semibold">
+        <i class="bi bi-clock-history me-2"></i>Versjonshistorikk
+      </div>
+      <div class="list-group list-group-flush">
+        {% for version in history %}
+        <div class="list-group-item d-flex justify-content-between align-items-center">
+          <div>
+            <div class="small fw-semibold">{{ version.saved_at[:19].replace("T", " ") }}</div>
+            <div class="text-muted" style="font-size:.75rem;">{{ version.template_id }}</div>
+          </div>
+          {% if not loop.first %}
+          <button class="btn btn-sm btn-outline-secondary"
+                  onclick="rollback({{ loop.index0 }})">
+            <i class="bi bi-arrow-counterclockwise me-1"></i>Gjenopprett
+          </button>
+          {% else %}
+          <span class="badge bg-primary">Gjeldende</span>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="card">
+      <div class="card-header bg-white fw-semibold">
+        <i class="bi bi-info-circle me-2"></i>Info
+      </div>
+      <ul class="list-group list-group-flush">
+        <li class="list-group-item d-flex justify-content-between">
+          <span class="text-muted small">Mal</span>
+          <code class="small">{{ stored.template_id }}</code>
+        </li>
+        <li class="list-group-item d-flex justify-content-between">
+          <span class="text-muted small">Sist lagret</span>
+          <span class="small">{{ stored.saved_at[:10] }}</span>
+        </li>
+        <li class="list-group-item d-flex justify-content-between">
+          <span class="text-muted small">Versjoner</span>
+          <span class="small">{{ history | length }}</span>
+        </li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+{% endif %}
+{% endblock %}
+
+{% block scripts %}
+<script>
+const TEMPLATES    = {{ templates | tojson }};
+const STORED       = {{ stored | tojson if stored else 'null' }};
+const HISTORY      = {{ history | tojson }};
+const DAG_ID       = "{{ dag_id }}";
+let currentConfig  = STORED ? {...STORED.config} : {};
+const templateId   = STORED ? STORED.template_id : null;
+
+function buildForm(config) {
+  if (!templateId || !TEMPLATES[templateId]) return;
+  const container = document.getElementById("edit-fields");
+  container.innerHTML = "";
+  TEMPLATES[templateId].fields.forEach(field => {
+    const col = document.createElement("div");
+    col.className = "col-md-6";
+    const val = config[field.name] !== undefined ? config[field.name] : (field.default || "");
+    let input = "";
+    if (field.type === "select") {
+      const opts = field.options.map(o =>
+        `<option value="${o}" ${o === val ? "selected" : ""}>${o}</option>`
+      ).join("");
+      input = `<select class="form-select" name="${field.name}">${opts}</select>`;
+    } else {
+      input = `<input type="${field.type}" class="form-control" name="${field.name}"
+                value="${val}" placeholder="${field.placeholder || ""}">`;
+    }
+    col.innerHTML = `<label class="form-label fw-semibold">${field.label}</label>${input}`;
+    container.appendChild(col);
+  });
+}
+
+function getFormData() {
+  const form = document.getElementById("edit-form");
+  return Object.fromEntries(new FormData(form));
+}
+
+async function previewDag() {
+  const data = getFormData();
+  const resp = await fetch("/api/pipelines/preview", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({template_id: templateId, config: data}),
+  });
+  if (!resp.ok) { alert("Forhåndsvisning feilet"); return; }
+  const result = await resp.json();
+  document.getElementById("edit-preview").textContent = result.code;
+  document.getElementById("preview-card").classList.remove("d-none");
+}
+
+async function redeploy() {
+  const data = getFormData();
+  const btn  = document.querySelector("[onclick='redeploy()']");
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Deployer…';
+  try {
+    const resp = await fetch(`/api/pipelines/${DAG_ID}`, {
+      method: "PUT",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({template_id: templateId, config: data}),
+    });
+    if (!resp.ok) throw new Error((await resp.json()).detail);
+    location.reload();
+  } catch (e) {
+    alert("Deploy feilet: " + e.message);
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-rocket-takeoff me-1"></i>Regenerer og deploy';
+  }
+}
+
+function rollback(historyIndex) {
+  if (!confirm("Gjenopprett denne konfigurasjonen og redeploy?")) return;
+  const version = HISTORY[historyIndex];
+  buildForm(version.config);
+  currentConfig = {...version.config};
+  redeploy();
+}
+
+if (STORED) buildForm(currentConfig);
+</script>
+{% endblock %}

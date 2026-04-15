@@ -71,6 +71,7 @@
           <th>Brukernavn</th>
           <th>E-post</th>
           <th>Rolle</th>
+          <th>Domener</th>
           <th>Opprettet</th>
           <th></th>
         </tr>
@@ -88,8 +89,19 @@
           <td>
             {% if u.role == "admin" %}
             <span class="badge bg-dark">admin</span>
+            {% elif u.role == "pii_access" %}
+            <span class="badge bg-warning text-dark">pii_access</span>
             {% else %}
             <span class="badge bg-light text-dark border">user</span>
+            {% endif %}
+          </td>
+          <td>
+            {% if u.domains %}
+              {% for d in u.domains %}
+              <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle me-1">{{ d }}</span>
+              {% endfor %}
+            {% else %}
+            <span class="text-muted small">—</span>
             {% endif %}
           </td>
           <td class="text-muted small">{{ u.created_at[:10] }}</td>
@@ -110,6 +122,14 @@
                 </button>
               </form>
               <button type="button"
+                      class="btn btn-sm btn-outline-info manage-domains"
+                      data-user-id="{{ u.id }}"
+                      data-username="{{ u.username }}"
+                      data-domains="{{ u.domains | join(',') }}"
+                      title="Administrer domeneprivilegier">
+                <i class="bi bi-diagram-2"></i>
+              </button>
+              <button type="button"
                       class="btn btn-sm btn-outline-danger delete-user"
                       data-user-id="{{ u.id }}"
                       data-username="{{ u.username }}">
@@ -125,7 +145,123 @@
   </div>
 </div>
 
+{# ── topp-produkter ── #}
+{% if top_products %}
+<div class="card mb-4">
+  <div class="card-header bg-white fw-semibold">
+    <i class="bi bi-bar-chart me-2"></i>Mest brukte produkter (siste 30 dager)
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm mb-0 align-middle">
+      <thead class="table-light">
+        <tr><th>Produkt-ID</th><th>Visninger</th><th></th></tr>
+      </thead>
+      <tbody>
+        {% for p in top_products %}
+        <tr>
+          <td class="font-monospace">{{ p.product_id }}</td>
+          <td>
+            <div class="d-flex align-items-center gap-2">
+              <div class="progress flex-grow-1" style="height:6px;">
+                <div class="progress-bar bg-primary"
+                     style="width:{{ ((p.views / top_products[0].views) * 100) | int }}%"></div>
+              </div>
+              <span class="text-muted small">{{ p.views }}</span>
+            </div>
+          </td>
+          <td><a href="/products/{{ p.product_id }}" class="btn btn-sm btn-outline-secondary">Åpne</a></td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+{% endif %}
+
 {# ── behandlede forespørsler ── #}
+{# ── domeneprivilegier ── #}
+<div class="card mb-4">
+  <div class="card-header bg-white fw-semibold d-flex justify-content-between align-items-center">
+    <span><i class="bi bi-diagram-2 me-2"></i>Domeneprivilegier</span>
+  </div>
+  <div class="card-body">
+    <p class="text-muted small mb-3">
+      Brukere må ha domeneprivilegier for å publisere dataprodukter i et bestemt domene.
+      Admin-brukere kan alltid publisere i alle domener.
+    </p>
+    <div class="row g-3">
+      <div class="col-md-6">
+        <label class="form-label fw-semibold">Legg til domeneprivilegium</label>
+        <div class="d-flex gap-2">
+          <select id="domain-user-select" class="form-select form-select-sm">
+            <option value="">Velg bruker…</option>
+            {% for u in users %}
+            {% if u.id != current_user.id %}
+            <option value="{{ u.id }}">{{ u.username }}</option>
+            {% endif %}
+            {% endfor %}
+          </select>
+          <select id="domain-select" class="form-select form-select-sm">
+            <option value="">Velg domene…</option>
+            {% for d in all_domains %}
+            <option value="{{ d }}">{{ d }}</option>
+            {% endfor %}
+          </select>
+          <button id="add-domain-btn" class="btn btn-sm btn-primary text-nowrap">
+            <i class="bi bi-plus-lg me-1"></i>Legg til
+          </button>
+        </div>
+      </div>
+      {% if all_domains %}
+      <div class="col-md-6">
+        <label class="form-label fw-semibold">Domeneoversikt</label>
+        {% for d in all_domains %}
+        <div class="d-flex align-items-center gap-2 mb-1">
+          <span class="badge bg-light text-dark border">{{ d }}</span>
+          {% set ns = namespace(members=[]) %}
+          {% for u in users %}
+            {% if d in u.domains %}{% set ns.members = ns.members + [u.username] %}{% endif %}
+          {% endfor %}
+          {% if ns.members %}
+          <span class="text-muted small">{{ ns.members | join(', ') }}</span>
+          {% else %}
+          <span class="text-muted small fst-italic">Ingen tilordnede</span>
+          {% endif %}
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+    </div>
+  </div>
+</div>
+
+{# Modal: domeneprivilegier per bruker #}
+<div class="modal fade" id="domainModal" tabindex="-1">
+  <div class="modal-dialog modal-sm">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-diagram-2 me-2"></i>Domeneprivilegier</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="small text-muted mb-2">Bruker: <strong id="modal-username"></strong></p>
+        <div id="modal-domains-list" class="mb-3"></div>
+        <div class="d-flex gap-2">
+          <select id="modal-domain-select" class="form-select form-select-sm">
+            <option value="">Velg domene…</option>
+            {% for d in all_domains %}
+            <option value="{{ d }}">{{ d }}</option>
+            {% endfor %}
+          </select>
+          <button id="modal-add-domain-btn" class="btn btn-sm btn-primary">
+            <i class="bi bi-plus-lg"></i>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
 {% set resolved = access_requests | rejectattr("status", "equalto", "pending") | list %}
 {% if resolved %}
 <div class="card mb-4">
@@ -185,6 +321,70 @@
       if (resp.ok) location.reload();
       else alert("Kunne ikke slette brukeren.");
     });
+  });
+
+  // Legg til domene (fra hovdeskjema)
+  document.getElementById("add-domain-btn")?.addEventListener("click", async () => {
+    const userId = document.getElementById("domain-user-select").value;
+    const domain = document.getElementById("domain-select").value;
+    if (!userId || !domain) { alert("Velg bruker og domene."); return; }
+    const resp = await fetch(`/api/admin/users/${userId}/domains`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({domain}),
+    });
+    if (resp.ok) location.reload();
+    else alert("Kunne ikke legge til domeneprivilegium.");
+  });
+
+  // Administrer domeneprivilegier (modal)
+  let _modalUserId = null;
+
+  function renderModalDomains(domains) {
+    const list = document.getElementById("modal-domains-list");
+    if (!domains || domains.length === 0) {
+      list.innerHTML = '<p class="text-muted small fst-italic">Ingen domener tilordnet.</p>';
+      return;
+    }
+    list.innerHTML = domains.map(d => `
+      <div class="d-flex align-items-center justify-content-between mb-1">
+        <span class="badge bg-info-subtle text-info-emphasis border border-info-subtle">${d}</span>
+        <button class="btn btn-sm btn-link text-danger p-0 remove-modal-domain" data-domain="${d}">
+          <i class="bi bi-x-circle"></i>
+        </button>
+      </div>`).join("");
+    list.querySelectorAll(".remove-modal-domain").forEach(btn => {
+      btn.addEventListener("click", async () => {
+        const domain = btn.dataset.domain;
+        const resp = await fetch(`/api/admin/users/${_modalUserId}/domains/${domain}`, {method: "DELETE"});
+        if (resp.ok) location.reload();
+        else alert("Kunne ikke fjerne domeneprivilegium.");
+      });
+    });
+  }
+
+  document.querySelectorAll(".manage-domains").forEach(btn => {
+    btn.addEventListener("click", async () => {
+      _modalUserId = btn.dataset.userId;
+      document.getElementById("modal-username").textContent = btn.dataset.username;
+      const domStr = btn.dataset.domains;
+      const domains = domStr ? domStr.split(",").filter(d => d) : [];
+      renderModalDomains(domains);
+      const modal = new bootstrap.Modal(document.getElementById("domainModal"));
+      modal.show();
+    });
+  });
+
+  document.getElementById("modal-add-domain-btn")?.addEventListener("click", async () => {
+    const domain = document.getElementById("modal-domain-select").value;
+    if (!domain) { alert("Velg domene."); return; }
+    const resp = await fetch(`/api/admin/users/${_modalUserId}/domains`, {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({domain}),
+    });
+    if (resp.ok) location.reload();
+    else alert("Kunne ikke legge til domeneprivilegium.");
   });
 </script>
 {% endblock %}

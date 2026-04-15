@@ -1,0 +1,182 @@
+{% extends "base.html" %}
+{% block title %}Plattformoversikt — Slettix Analytics{% endblock %}
+
+{% block content %}
+
+<div class="d-flex align-items-center justify-content-between mb-4">
+  <div>
+    <h1 class="h3 mb-0">Plattformoversikt</h1>
+    <p class="text-muted mb-0">Alle tjenester og ressurser i Slettix Analytics</p>
+  </div>
+</div>
+
+{# ── Hurtigstatistikk ── #}
+<div class="row g-3 mb-5">
+  <div class="col-6 col-md-3">
+    <div class="card text-center p-3">
+      <div class="display-5 fw-bold text-primary">{{ product_count }}</div>
+      <div class="text-muted small mt-1">Dataprodukter</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card text-center p-3">
+      <div class="display-5 fw-bold text-success">
+        {{ services | selectattr("online") | list | length }}
+      </div>
+      <div class="text-muted small mt-1">Tjenester online</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card text-center p-3">
+      <div class="display-5 fw-bold text-warning">5</div>
+      <div class="text-muted small mt-1">Medallion-lag</div>
+    </div>
+  </div>
+  <div class="col-6 col-md-3">
+    <div class="card text-center p-3">
+      <div class="display-5 fw-bold text-info">Delta</div>
+      <div class="text-muted small mt-1">Lagringsformat</div>
+    </div>
+  </div>
+</div>
+
+{# ── Tjenestekort ── #}
+<h5 class="fw-semibold mb-3"><i class="bi bi-hdd-network me-2"></i>Tjenester</h5>
+<div class="row g-4 mb-5">
+  {% for svc in services %}
+  <div class="col-md-6 col-lg-3">
+    <div class="card h-100">
+      <div class="card-body d-flex flex-column">
+        <div class="d-flex align-items-center mb-3">
+          <div class="rounded-3 p-2 me-3 flex-shrink-0" style="background:{{ svc.bg }}">
+            <i class="bi {{ svc.icon }} fs-4" style="color:{{ svc.color }}"></i>
+          </div>
+          <div>
+            <h6 class="mb-1 fw-bold">{{ svc.name }}</h6>
+            {% if svc.online %}
+            <span class="badge bg-success-subtle text-success-emphasis border border-success-subtle"
+                  style="font-size:.65rem;">
+              <i class="bi bi-circle-fill me-1" style="font-size:.5rem;"></i>Online
+            </span>
+            {% else %}
+            <span class="badge bg-danger-subtle text-danger-emphasis border border-danger-subtle"
+                  style="font-size:.65rem;">
+              <i class="bi bi-circle me-1" style="font-size:.5rem;"></i>Offline
+            </span>
+            {% endif %}
+          </div>
+        </div>
+        <p class="text-muted small flex-grow-1">{{ svc.desc }}</p>
+        <div class="d-flex align-items-center justify-content-between mt-2">
+          <code class="small text-muted">:{{ svc.port }}</code>
+          <a href="{{ svc.ext_url }}" target="_blank"
+             class="btn btn-sm btn-outline-secondary">
+            <i class="bi bi-box-arrow-up-right me-1"></i>Åpne
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+  {% endfor %}
+</div>
+
+{# ── Medallion-arkitektur ── #}
+<h5 class="fw-semibold mb-3"><i class="bi bi-layers me-2"></i>Medallion-arkitektur</h5>
+<div class="card mb-5">
+  <div class="card-body">
+    <div class="d-flex align-items-stretch gap-0 overflow-auto">
+      {% for layer in medallion %}
+      <div class="flex-fill text-center px-3 py-3 {% if not loop.last %}border-end{% endif %}">
+        <i class="bi {{ layer.icon }} fs-3 mb-2 d-block
+          {% if layer.layer == 'raw' %}text-secondary
+          {% elif layer.layer == 'bronze' %}text-warning
+          {% elif layer.layer == 'silver' %}text-primary
+          {% elif layer.layer == 'gold' %}text-warning
+          {% else %}text-success{% endif %}"></i>
+        <div class="fw-bold text-uppercase small letter-spacing-1">{{ layer.layer }}</div>
+        <div class="text-muted" style="font-size:.75rem;">{{ layer.desc }}</div>
+      </div>
+      {% if not loop.last %}
+      {% endif %}
+      {% endfor %}
+    </div>
+    <div class="text-center mt-3">
+      <div class="d-inline-flex align-items-center gap-3 text-muted small">
+        <span><i class="bi bi-database me-1"></i>MinIO (S3)</span>
+        <span>·</span>
+        <span><i class="bi bi-lightning me-1"></i>Apache Spark</span>
+        <span>·</span>
+        <span><i class="bi bi-triangle me-1"></i>Delta Lake</span>
+        <span>·</span>
+        <span><i class="bi bi-diagram-3 me-1"></i>Apache Airflow</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ── Hurtiglenker ── #}
+<h5 class="fw-semibold mb-3"><i class="bi bi-lightning me-2"></i>Hurtigstart</h5>
+<div class="row g-3">
+  <div class="col-md-4">
+    <div class="card h-100">
+      <div class="card-body">
+        <h6 class="fw-bold mb-2"><i class="bi bi-bar-chart-line text-info me-2"></i>Lag dashboard i Superset</h6>
+        <ol class="text-muted small mb-3 ps-3">
+          <li>Åpne Superset og logg inn (<code>admin / admin</code>)</li>
+          <li>Gå til <strong>SQL Lab</strong></li>
+          <li>Velg database <strong>Slettix Delta Lake</strong></li>
+          <li>Skriv spørring mot Delta-tabell</li>
+          <li>Lagre som dataset og lag chart</li>
+        </ol>
+        <pre class="code-block" style="font-size:.72rem;">SELECT *
+FROM delta_scan('s3://gold/hr/department_stats')
+LIMIT 100</pre>
+        <a href="{{ superset_url }}/sqllab/" target="_blank" class="btn btn-sm btn-outline-info w-100 mt-2">
+          <i class="bi bi-box-arrow-up-right me-1"></i>Åpne SQL Lab
+        </a>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card h-100">
+      <div class="card-body">
+        <h6 class="fw-bold mb-2"><i class="bi bi-journal-code text-warning me-2"></i>Analyser i Jupyter</h6>
+        <ol class="text-muted small mb-3 ps-3">
+          <li>Finn et dataprodukt i katalogen</li>
+          <li>Klikk <strong>Åpne i Jupyter</strong> for å generere notebook</li>
+          <li>Importer <code>slettix_client</code> for enkel datatilgang</li>
+          <li>Publiser resultat med <code>publish_analytical()</code></li>
+        </ol>
+        <pre class="code-block" style="font-size:.72rem;">from slettix_client import get_product
+df = get_product("hr.employees")
+df.head()</pre>
+        <a href="{{ jupyter_url }}/lab" target="_blank" class="btn btn-sm btn-outline-warning w-100 mt-2">
+          <i class="bi bi-box-arrow-up-right me-1"></i>Åpne Jupyter Lab
+        </a>
+      </div>
+    </div>
+  </div>
+  <div class="col-md-4">
+    <div class="card h-100">
+      <div class="card-body">
+        <h6 class="fw-bold mb-2"><i class="bi bi-diagram-3 text-primary me-2"></i>Overvåk pipelines</h6>
+        <ol class="text-muted small mb-3 ps-3">
+          <li>Åpne Pipeline-dashbordet i portalen</li>
+          <li>Se 7-dagers kjørehistorikk per DAG</li>
+          <li>Klikk på en DAG for å se detaljer i Airflow</li>
+          <li>Utløs manuell kjøring fra Airflow UI</li>
+        </ol>
+        <div class="d-flex gap-2 mt-auto">
+          <a href="/pipelines" class="btn btn-sm btn-outline-primary flex-fill">
+            <i class="bi bi-speedometer2 me-1"></i>Dashboard
+          </a>
+          <a href="{{ airflow_ext }}" target="_blank" class="btn btn-sm btn-outline-secondary flex-fill">
+            <i class="bi bi-box-arrow-up-right me-1"></i>Airflow
+          </a>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+{% endblock %}

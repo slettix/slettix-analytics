@@ -1,0 +1,105 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: jupyter
+  namespace: slettix-analytics
+  labels:
+    app: jupyter
+    app.kubernetes.io/part-of: slettix-analytics
+    app.kubernetes.io/component: jupyter
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: jupyter
+  template:
+    metadata:
+      labels:
+        app: jupyter
+        app.kubernetes.io/part-of: slettix-analytics
+    spec:
+      securityContext:
+        fsGroup: 185
+      initContainers:
+        - name: fix-permissions
+          image: busybox
+          command: ["sh", "-c", "chown -R 185:185 /home/spark/notebooks"]
+          securityContext:
+            runAsUser: 0
+          volumeMounts:
+            - name: notebooks
+              mountPath: /home/spark/notebooks
+      containers:
+        - name: jupyter
+          image: slettix-analytics/jupyter:3.5.8
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8888
+          env:
+            - name: MINIO_ENDPOINT
+              value: "http://minio.slettix-analytics.svc.cluster.local:9000"
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: slettix-credentials
+                  key: minio-root-user
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: slettix-credentials
+                  key: minio-root-password
+            - name: PORTAL_URL
+              value: "http://dataportal.slettix-analytics.svc.cluster.local:8090"
+            - name: PORTAL_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: slettix-credentials
+                  key: portal-api-key
+            - name: KAFKA_BOOTSTRAP_SERVERS
+              value: "kafka-bootstrap.customermaster.svc.cluster.local:9092"
+            - name: AWS_EC2_METADATA_DISABLED
+              value: "true"
+            - name: AWS_DEFAULT_REGION
+              value: "us-east-1"
+          command:
+            - jupyter
+            - lab
+            - "--ip=0.0.0.0"
+            - "--port=8888"
+            - "--no-browser"
+            - "--IdentityProvider.token=''"
+            - "--ServerApp.password=''"
+            - "--ServerApp.disable_check_xsrf=True"
+          volumeMounts:
+            - name: spark-defaults
+              mountPath: /opt/spark/conf/spark-defaults.conf
+              subPath: spark-defaults.conf
+              readOnly: true
+            - name: notebooks
+              mountPath: /home/spark/notebooks
+          resources:
+            requests:
+              cpu: 200m
+              memory: 1Gi
+            limits:
+              cpu: 1000m
+              memory: 2Gi
+          livenessProbe:
+            httpGet:
+              path: /api
+              port: 8888
+            initialDelaySeconds: 30
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /api
+              port: 8888
+            initialDelaySeconds: 15
+            periodSeconds: 10
+      volumes:
+        - name: spark-defaults
+          configMap:
+            name: spark-defaults
+        - name: notebooks
+          persistentVolumeClaim:
+            claimName: jupyter-notebooks

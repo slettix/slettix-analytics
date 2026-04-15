@@ -1,0 +1,16 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: spark
+  namespace: slettix-analytics
+  labels:
+    app.kubernetes.io/part-of: slettix-analytics
+    app.kubernetes.io/component: spark
+subjects:
+  - kind: ServiceAccount
+    name: spark
+    namespace: slettix-analytics
+roleRef:
+  kind: Role
+  name: spark
+  apiGroup: rbac.authorization.k8s.io

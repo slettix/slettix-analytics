@@ -1,0 +1,95 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: superset
+  namespace: slettix-analytics
+  labels:
+    app: superset
+    app.kubernetes.io/part-of: slettix-analytics
+    app.kubernetes.io/component: superset
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: superset
+  template:
+    metadata:
+      labels:
+        app: superset
+        app.kubernetes.io/part-of: slettix-analytics
+    spec:
+      containers:
+        - name: superset
+          image: slettix-analytics/superset:4.1.1
+          imagePullPolicy: IfNotPresent
+          command:
+            - superset
+            - run
+            - -h
+            - "0.0.0.0"
+            - -p
+            - "8088"
+            - --with-threads
+          ports:
+            - containerPort: 8088
+          env:
+            - name: SUPERSET_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: slettix-credentials
+                  key: airflow-secret-key
+            - name: MINIO_ENDPOINT
+              value: "http://minio.slettix-analytics.svc.cluster.local:9000"
+            - name: MINIO_ACCESS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: slettix-credentials
+                  key: minio-root-user
+            - name: MINIO_SECRET_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: slettix-credentials
+                  key: minio-root-password
+            - name: SUPERSET_CONFIG_PATH
+              value: /app/pythonpath/superset_config.py
+            - name: PYTHONPATH
+              value: /app/pythonpath
+            - name: AWS_EC2_METADATA_DISABLED
+              value: "true"
+            - name: AWS_DEFAULT_REGION
+              value: "us-east-1"
+          volumeMounts:
+            - name: superset-data
+              mountPath: /var/lib/superset
+            - name: superset-config
+              mountPath: /app/pythonpath/superset_config.py
+              subPath: superset_config.py
+            - name: superset-config
+              mountPath: /app/pythonpath/setup_duckdb.py
+              subPath: setup_duckdb.py
+          resources:
+            requests:
+              cpu: 200m
+              memory: 512Mi
+            limits:
+              cpu: 500m
+              memory: 1Gi
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8088
+            initialDelaySeconds: 60
+            periodSeconds: 30
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8088
+            initialDelaySeconds: 30
+            periodSeconds: 15
+      volumes:
+        - name: superset-data
+          persistentVolumeClaim:
+            claimName: superset-data
+        - name: superset-config
+          configMap:
+            name: superset-config

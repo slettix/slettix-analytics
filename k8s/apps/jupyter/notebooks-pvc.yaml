@@ -1,0 +1,37 @@
+# hostPath PV + PVC for Jupyter-notebooks (lokal utvikling).
+# Peker på notebooks/ i repo-roten — endringer synlige umiddelbart uten restart.
+---
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: jupyter-notebooks-pv
+  labels:
+    app.kubernetes.io/part-of: slettix-analytics
+    app.kubernetes.io/component: jupyter
+spec:
+  capacity:
+    storage: 2Gi
+  accessModes:
+    - ReadWriteOnce
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  hostPath:
+    path: /Users/slettix/projects/slettix-analytics/notebooks
+    type: DirectoryOrCreate
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: jupyter-notebooks
+  namespace: slettix-analytics
+  labels:
+    app.kubernetes.io/part-of: slettix-analytics
+    app.kubernetes.io/component: jupyter
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: ""
+  resources:
+    requests:
+      storage: 2Gi
+  volumeName: jupyter-notebooks-pv

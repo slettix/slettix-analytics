@@ -41,4 +41,5 @@ CMD ["jupyter", "lab", \
      "--port=8888", \
      "--no-browser", \
      "--IdentityProvider.token=''", \
-     "--ServerApp.password=''"]
+     "--ServerApp.password=''", \
+     "--ServerApp.disable_check_xsrf=True"]

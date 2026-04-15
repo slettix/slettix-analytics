@@ -1,4 +1,10 @@
 .env
+# K8s secrets med ekte verdier — bruk credentials.example.yaml som mal
+k8s/secrets/credentials.yaml
+# SQLite-databaser
+*.db
+# Notebook output-katalog
+notebooks/output/
 __pycache__/
 *.pyc
 *.egg-info/

@@ -1,3 +1,35 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║  ARKIVERT — Slettix Analytics er migrert til Kubernetes (K8s-1 til K8s-10) ║
+# ║                                                                              ║
+# ║  Bruk k8s-up.sh for å starte plattformen:                                   ║
+# ║    ./scripts/k8s-up.sh all                                                  ║
+# ║                                                                              ║
+# ║  Denne filen beholdes som referanse og fallback for lokal utvikling          ║
+# ║  uten Kubernetes. Oppdateres ikke lenger aktivt.                             ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+
+x-superset-common:
+  &superset-common
+  build:
+    context: docker/superset
+  image: slettix-analytics/superset:4.1.1
+  environment:
+    &superset-env
+    SUPERSET_SECRET_KEY:        slettix-superset-dev-key
+    SUPERSET_CONFIG_PATH:       /app/pythonpath/superset_config.py
+    PYTHONPATH:                 /app/pythonpath
+    MINIO_ENDPOINT:             http://minio:9000
+    MINIO_ACCESS_KEY:           ${MINIO_ROOT_USER}
+    MINIO_SECRET_KEY:           ${MINIO_ROOT_PASSWORD}
+    # Hindrer DuckDB/DeltaKernel fra å forsøke EC2-metadata for credentials
+    AWS_EC2_METADATA_DISABLED:  true
+    AWS_DEFAULT_REGION:         us-east-1
+  volumes:
+    - superset_data:/var/lib/superset
+  depends_on:
+    minio:
+      condition: service_healthy
+
 x-airflow-common:
   &airflow-common
   build:
@@ -14,10 +46,16 @@ x-airflow-common:
     # Spark connection — host must include spark:// prefix so SparkSubmitOperator
     # builds the correct --master spark://spark-master:7077 argument
     AIRFLOW_CONN_SPARK_DEFAULT: '{"conn_type": "spark", "host": "spark://spark-master", "port": 7077}'
-    PORTAL_URL:        http://dataportal:8090
-    MINIO_ENDPOINT:    http://minio:9000
-    MINIO_ACCESS_KEY:  ${MINIO_ROOT_USER}
-    MINIO_SECRET_KEY:  ${MINIO_ROOT_PASSWORD}
+    PORTAL_URL:               http://dataportal:8090
+    PORTAL_API_KEY:           ${PORTAL_API_KEY:-dev-key-change-me}
+    MINIO_ENDPOINT:           http://minio:9000
+    MINIO_ACCESS_KEY:         ${MINIO_ROOT_USER}
+    MINIO_SECRET_KEY:         ${MINIO_ROOT_PASSWORD}
+    # Kafka — peker på host-maskinens Kafka-broker fra inne i Docker-container.
+    # På Mac/Windows: host.docker.internal løses automatisk.
+    # På Linux: legg til '127.0.0.1 host.docker.internal' i /etc/hosts,
+    #           eller sett KAFKA_BOOTSTRAP_SERVERS til Docker bridge-IP (typisk 172.17.0.1:9092).
+    KAFKA_BOOTSTRAP_SERVERS:  ${KAFKA_BOOTSTRAP_SERVERS:-host.docker.internal:9092}
   volumes:
     - ./airflow/dags:/opt/airflow/dags
     - ./airflow/logs:/opt/airflow/logs
@@ -74,6 +112,9 @@ services:
         mc cp /dev/null local/silver/hr/employees/.domain;
         mc cp /dev/null local/gold/hr/department_stats/.domain;
         mc cp /dev/null local/gold/data_products/.domain;
+        mc cp /dev/null local/bronze/folkeregister/person_events/.domain;
+        mc cp /dev/null local/bronze/folkeregister/family_events/.domain;
+        mc cp /dev/null local/checkpoints/folkeregister/.keep;
         echo 'Buckets and domain structure ready.';
       "
 
@@ -184,6 +225,28 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
+  # ── Apache Superset ────────────────────────────────────────────────────────
+  superset-init:
+    <<: *superset-common
+    container_name: superset-init
+    command: /bin/bash /app/superset-init.sh
+    restart: "no"
+
+  superset:
+    <<: *superset-common
+    container_name: superset
+    ports:
+      - "8088:8088"   # Superset UI
+    command: superset run -h 0.0.0.0 -p 8088 --with-threads
+    depends_on:
+      superset-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8088/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
   # ── Dataportal Backend ─────────────────────────────────────────────────────
   dataportal:
     build:
@@ -196,6 +259,7 @@ services:
       MINIO_ENDPOINT:              http://minio:9000
       MINIO_ACCESS_KEY:            ${MINIO_ROOT_USER}
       MINIO_SECRET_KEY:            ${MINIO_ROOT_PASSWORD}
+      SUPERSET_URL:                http://superset:8088
       AIRFLOW_URL:                 http://airflow-webserver:8080
       AIRFLOW_USER:                admin
       AIRFLOW_PASS:                admin
@@ -205,6 +269,7 @@ services:
       PORTAL_API_KEY:              ${PORTAL_API_KEY:-dev-key-change-me}
       JUPYTER_URL:                 ${JUPYTER_URL:-http://localhost:8888}
       DAGS_DIR:                    /opt/airflow/dags
+      ANTHROPIC_API_KEY:           ${ANTHROPIC_API_KEY:-}
     volumes:
       - ./dataportal:/opt/dataportal
       - ./jobs:/opt/dataportal/jobs
@@ -215,7 +280,10 @@ services:
         condition: service_healthy
       airflow-webserver:
         condition: service_healthy
+      superset:
+        condition: service_healthy
 
 volumes:
   minio_data:
   postgres_data:
+  superset_data:

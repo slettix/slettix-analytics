@@ -131,6 +131,15 @@
           },
           "description": {
             "type": "string"
+          },
+          "pii": {
+            "type": "boolean",
+            "description": "Marker kolonnen som personopplysning (PII)"
+          },
+          "sensitivity": {
+            "type": "string",
+            "enum": ["low", "medium", "high"],
+            "description": "Sensitivitetsnivå for kolonnen"
           }
         },
         "required": [
@@ -139,6 +148,120 @@
         ],
         "additionalProperties": false
       }
+    },
+    "column_lineage": {
+      "type": "array",
+      "description": "Column-level lineage — how each output column is derived from source columns",
+      "items": {
+        "type": "object",
+        "properties": {
+          "column": {
+            "type": "string",
+            "description": "Output column name in this product"
+          },
+          "sources": {
+            "type": "array",
+            "description": "Source columns this output column is derived from",
+            "items": {
+              "type": "object",
+              "properties": {
+                "product_id": {
+                  "type": "string",
+                  "description": "Source product ID (e.g. hr.employees)"
+                },
+                "column": {
+                  "type": "string",
+                  "description": "Source column name"
+                }
+              },
+              "required": ["column"],
+              "additionalProperties": false
+            }
+          },
+          "description": {
+            "type": "string",
+            "description": "Optional description of the transformation"
+          },
+          "transformation": {
+            "type": "string",
+            "description": "Alias for description — human-readable transformation logic"
+          }
+        },
+        "required": ["column", "sources"],
+        "additionalProperties": false
+      }
+    },
+    "retention": {
+      "type": "object",
+      "description": "Dataretensjons-policy for dette produktet",
+      "properties": {
+        "days": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Antall dager data skal beholdes"
+        },
+        "strategy": {
+          "type": "string",
+          "enum": ["delete", "archive"],
+          "default": "delete",
+          "description": "Hva som skjer med gammel data: slett eller arkiver"
+        },
+        "partition_column": {
+          "type": "string",
+          "description": "Kolonnen som brukes for partisjonsbasert sletting (f.eks. event_date)"
+        }
+      },
+      "additionalProperties": false
+    },
+    "contract": {
+      "type": "object",
+      "description": "Formell datakontakt mellom produsent og konsument",
+      "properties": {
+        "slo": {
+          "type": "object",
+          "description": "Service Level Objectives",
+          "properties": {
+            "freshness_hours": {
+              "type": "integer",
+              "minimum": 1,
+              "description": "Maksimal alder på data i timer"
+            },
+            "completeness_pct": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 100,
+              "description": "Minimum andel ikke-null verdier i prosent"
+            }
+          },
+          "additionalProperties": false
+        },
+        "schema_compatibility": {
+          "type": "string",
+          "enum": ["BACKWARD", "FORWARD", "FULL", "NONE"],
+          "default": "NONE",
+          "description": "Schema-kompatibilitetsregel for nye versjoner"
+        },
+        "guaranteed_columns": {
+          "type": "array",
+          "items": {"type": "string"},
+          "description": "Kolonner produsenten garanterer alltid vil finnes"
+        },
+        "deprecation": {
+          "type": "object",
+          "properties": {
+            "sunset_date": {
+              "type": "string",
+              "description": "Dato produktet avvikles (YYYY-MM-DD)"
+            },
+            "successor": {
+              "type": "string",
+              "description": "Produkt-ID som erstatter dette produktet"
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "additionalProperties": false
     }
   }
 }

@@ -1,0 +1,31 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: spark-defaults
+  namespace: slettix-analytics
+  labels:
+    app.kubernetes.io/part-of: slettix-analytics
+    app.kubernetes.io/component: spark
+data:
+  spark-defaults.conf: |
+    # ── Delta Lake ────────────────────────────────────────────────────────────
+    spark.sql.extensions                          io.delta.sql.DeltaSparkSessionExtension
+    spark.sql.catalog.spark_catalog               org.apache.spark.sql.delta.catalog.DeltaCatalog
+
+    # ── S3A / MinIO (K8s service DNS) ────────────────────────────────────────
+    spark.hadoop.fs.s3a.endpoint                  http://minio.slettix-analytics.svc.cluster.local:9000
+    spark.hadoop.fs.s3a.path.style.access         true
+    spark.hadoop.fs.s3a.impl                      org.apache.hadoop.fs.s3a.S3AFileSystem
+    spark.hadoop.fs.s3a.connection.ssl.enabled    false
+    # Credentials injiseres via env-vars (MINIO_ROOT_USER / MINIO_ROOT_PASSWORD)
+    # Spark leser disse automatisk via hadoop-aws når de heter AWS_ACCESS_KEY_ID / AWS_SECRET_ACCESS_KEY,
+    # eller settes eksplisitt i SparkApplication-manifestet.
+
+    # ── Kubernetes ────────────────────────────────────────────────────────────
+    spark.master                                  k8s://https://kubernetes.default.svc
+    spark.kubernetes.namespace                    slettix-analytics
+    spark.kubernetes.authenticate.driver.serviceAccountName  spark
+    spark.kubernetes.container.image.pullPolicy   IfNotPresent
+
+    # ── Performance ───────────────────────────────────────────────────────────
+    spark.sql.shuffle.partitions                  8

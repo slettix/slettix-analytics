@@ -1,0 +1,194 @@
+"""
+Kafka → Bronze: Folkeregister familiehendelser (IDP)
+
+Leser hendelser fra tre Kafka-topics og lander dem som Delta-tabell i Bronze,
+partisjonert på event_type og event_date.
+
+Topics:
+  - folkeregister.event.marriage  (event.marriage)
+  - folkeregister.event.divorce   (event.divorce)
+  - folkeregister.event.birth     (event.birth)
+
+Kjør med spark-submit:
+  spark-submit \\
+    --packages org.apache.spark:spark-sql-kafka-0-10_2.12:3.5.8,\\
+               io.delta:delta-spark_2.12:3.2.0,\\
+               org.apache.hadoop:hadoop-aws:3.3.4,\\
+               com.amazonaws:aws-java-sdk-bundle:1.12.262 \\
+    /opt/spark/jobs/folkeregister_family_idp.py \\
+    [--bootstrap-servers host.docker.internal:9092] \\
+    [--starting-offsets latest|earliest]
+
+Feiltoleranse:
+  Checkpoint lagres i s3a://checkpoints/folkeregister/family_events.
+  Jobben kan restartes uten å miste eller duplisere hendelser.
+"""
+
+import argparse
+import os
+
+from pyspark.sql import SparkSession, functions as F
+from pyspark.sql.types import StringType, StructField, StructType
+
+try:
+    from spark_logger import get_logger
+except ImportError:
+    import logging
+
+    def get_logger(name):
+        logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
+        return logging.getLogger(name)
+
+
+log = get_logger("folkeregister_family_idp")
+
+TOPICS          = "folkeregister.event.marriage,folkeregister.event.divorce,folkeregister.event.birth"
+TARGET_PATH     = "s3a://bronze/folkeregister/family_events"
+CHECKPOINT_PATH = "s3a://checkpoints/folkeregister/family_events"
+CONSUMER_GROUP  = "slettix-folkeregister-family-idp"
+TRIGGER_SECONDS = 5
+
+# CloudEvent-konvolutt-schema (camelCase — serialisert av C# JsonNamingPolicy.CamelCase).
+# payload er en union av MarriagePayload og BirthPayload; ikke-aktuelle felt er NULL.
+CLOUD_EVENT_SCHEMA = StructType([
+    StructField("eventId",    StringType(), nullable=True),
+    StructField("eventType",  StringType(), nullable=True),
+    StructField("occurredAt", StringType(), nullable=True),
+    StructField("source",     StringType(), nullable=True),
+    StructField("version",    StringType(), nullable=True),
+    StructField("payload", StructType([
+        # MarriagePayload — event.marriage, event.divorce
+        StructField("citizen1Id",   StringType(), nullable=True),
+        StructField("citizen1Ssn",  StringType(), nullable=True),
+        StructField("citizen2Id",   StringType(), nullable=True),
+        StructField("citizen2Ssn",  StringType(), nullable=True),
+        StructField("officialDate", StringType(), nullable=True),
+        # BirthPayload — event.birth
+        StructField("childId",   StringType(), nullable=True),
+        StructField("childSsn",  StringType(), nullable=True),
+        StructField("birthDate", StringType(), nullable=True),
+        StructField("parent1Id", StringType(), nullable=True),
+        StructField("parent2Id", StringType(), nullable=True),
+    ]), nullable=True),
+])
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description="Folkeregister — family events IDP (Kafka → Bronze)")
+    p.add_argument(
+        "--bootstrap-servers",
+        default=os.getenv("KAFKA_BOOTSTRAP_SERVERS", "host.docker.internal:9092"),
+        help="Kafka bootstrap servers (kommaseparert). Standard: host.docker.internal:9092",
+    )
+    p.add_argument(
+        "--starting-offsets",
+        default="latest",
+        choices=["latest", "earliest"],
+        help="Kafka startposisjon. 'latest' for produksjon, 'earliest' for replay (standard: latest)",
+    )
+    return p.parse_args()
+
+
+def build_stream(spark: SparkSession, bootstrap_servers: str, starting_offsets: str):
+    """
+    Les råmeldinger fra Kafka, pakk ut CloudEvent-konvolutten og flat ut til
+    kanoniske Bronze-kolonner.
+    """
+    raw_df = (
+        spark.readStream
+        .format("kafka")
+        .option("kafka.bootstrap.servers", bootstrap_servers)
+        .option("subscribe", TOPICS)
+        .option("startingOffsets", starting_offsets)
+        .option("kafka.group.id", CONSUMER_GROUP)
+        .option("failOnDataLoss", "false")
+        .option("kafka.session.timeout.ms", "30000")
+        .option("kafka.request.timeout.ms", "40000")
+        .load()
+    )
+
+    parsed = raw_df.select(
+        F.col("topic").alias("kafka_topic"),
+        F.col("partition").alias("kafka_partition"),
+        F.col("offset").alias("kafka_offset"),
+        F.col("timestamp").alias("kafka_timestamp"),
+        F.from_json(F.col("value").cast("string"), CLOUD_EVENT_SCHEMA).alias("env"),
+    )
+
+    return parsed.select(
+        "kafka_topic", "kafka_partition", "kafka_offset", "kafka_timestamp",
+        F.col("env.eventId").alias("event_id"),
+        F.col("env.eventType").alias("event_type"),
+        F.col("env.occurredAt").alias("event_timestamp"),
+        # Ekteskaps-/skilsmisseparter (kun satt for event.marriage / event.divorce)
+        F.col("env.payload.citizen1Id").alias("person_id_a"),
+        F.col("env.payload.citizen2Id").alias("person_id_b"),
+        # Dato tolkes som ekteskapsdato eller skilsmissedato avhengig av eventType
+        F.when(F.col("env.eventType") == "event.marriage", F.col("env.payload.officialDate"))
+         .alias("marriage_date"),
+        F.when(F.col("env.eventType") == "event.divorce",  F.col("env.payload.officialDate"))
+         .alias("divorce_date"),
+        # Fødselshendelse-felt (kun satt for event.birth)
+        F.col("env.payload.childId").alias("child_id"),
+        F.col("env.payload.parent1Id").alias("mother_id"),
+        F.col("env.payload.parent2Id").alias("father_id"),
+        F.col("env.payload.birthDate").alias("birth_date"),
+    )
+
+
+def enrich(df, source_topics: str):
+    """Berik med prosesseringsmetadata og partisjonskolonner."""
+    return (
+        df
+        .withColumn("_processed_at", F.current_timestamp())
+        .withColumn("_source_topics", F.lit(source_topics))
+        .withColumn("event_date", F.to_date(F.coalesce(
+            F.to_timestamp(F.col("event_timestamp")),
+            F.col("kafka_timestamp"),
+        )))
+    )
+
+
+def main():
+    args = parse_args()
+
+    spark = (
+        SparkSession.builder
+        .appName("folkeregister_family_idp")
+        .getOrCreate()
+    )
+    spark.sparkContext.setLogLevel("WARN")
+
+    log.info("Job startet", extra={
+        "event":             "job_start",
+        "topics":            TOPICS,
+        "target":            TARGET_PATH,
+        "checkpoint":        CHECKPOINT_PATH,
+        "bootstrap_servers": args.bootstrap_servers,
+        "starting_offsets":  args.starting_offsets,
+    })
+
+    stream_df = build_stream(spark, args.bootstrap_servers, args.starting_offsets)
+    enriched  = enrich(stream_df, TOPICS)
+
+    query = (
+        enriched.writeStream
+        .format("delta")
+        .outputMode("append")
+        .option("checkpointLocation", CHECKPOINT_PATH)
+        .partitionBy("event_type", "event_date")
+        .trigger(processingTime=f"{TRIGGER_SECONDS} seconds")
+        .start(TARGET_PATH)
+    )
+
+    log.info("Stream aktiv", extra={
+        "event":     "stream_active",
+        "query_id":  str(query.id),
+        "trigger_s": TRIGGER_SECONDS,
+    })
+
+    query.awaitTermination()
+
+
+if __name__ == "__main__":
+    main()

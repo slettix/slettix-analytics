@@ -78,7 +78,8 @@
         <div class="input-group">
           <span class="input-group-text bg-white"><i class="bi bi-search"></i></span>
           <input id="search-source" type="text" class="form-control tab-search"
-                 data-tab="source" placeholder="Søk etter navn, beskrivelse eller tags…">
+                 data-tab="source" placeholder="Søk etter navn, beskrivelse, kolonner eller tags…">
+          <button class="btn btn-outline-secondary" type="button" id="search-source-btn">Søk</button>
         </div>
       </div>
       <div class="col-md-6 d-flex flex-wrap gap-2 align-items-center">
@@ -105,20 +106,18 @@
         {% endif %}
         <a href="/products/{{ p.id }}" class="text-decoration-none">
           <div class="card h-100 p-3">
-            <div class="d-flex justify-content-between align-items-start mb-2">
-              <h5 class="mb-0 text-dark">{{ p.name }}</h5>
+            <h5 class="mb-2 text-dark pe-3">{{ p.name }}</h5>
+            <div class="mb-2 d-flex align-items-center gap-2">
               {% if pipeline_status == "success" %}
-                <span class="status-dot bg-success" title="Pipeline OK"></span>
+                <span class="status-dot bg-success flex-shrink-0" title="Pipeline OK"></span>
               {% elif pipeline_status == "failed" %}
-                <span class="status-dot bg-danger" title="Pipeline feilet"></span>
+                <span class="status-dot bg-danger flex-shrink-0" title="Pipeline feilet"></span>
               {% elif pipeline_status in ("running", "queued") %}
-                <span class="status-dot bg-primary" title="Pipeline kjører"></span>
+                <span class="status-dot bg-primary flex-shrink-0" title="Pipeline kjører"></span>
               {% else %}
-                <span class="status-dot bg-secondary" title="Ukjent status"></span>
+                <span class="status-dot bg-secondary flex-shrink-0" title="Ukjent status"></span>
               {% endif %}
-            </div>
-            <div class="mb-2">
-              <span class="badge bg-secondary me-1">{{ p.domain }}</span>
+              <span class="badge bg-secondary">{{ p.domain }}</span>
               <span class="text-muted small"><i class="bi bi-person me-1"></i>{{ p.owner }}</span>
             </div>
             {% if p.description %}
@@ -151,6 +150,12 @@
                     <span class="badge bg-danger" style="font-size:.6rem;"
                           title="SLA-brudd: {{ p._sla.hours_since_update }}t siden oppdatering">SLA ✕</span>
                   {% endif %}
+                {% endif %}
+                {% if anomaly_map and anomaly_map.get(p.id) %}
+                <span class="text-warning" title="Anomalier oppdaget"><i class="bi bi-exclamation-triangle-fill"></i></span>
+                {% endif %}
+                {% if view_counts and view_counts.get(p.id) %}
+                <span class="text-muted small"><i class="bi bi-eye me-1"></i>{{ view_counts[p.id] }}</span>
                 {% endif %}
                 <span class="badge bg-light text-dark border">{{ p.format }}</span>
               </div>
@@ -311,6 +316,76 @@
 
   makeFilter("search-source",     "domain-filter-source",     "source-grid",     "no-results-source");
   makeFilter("search-analytical", "domain-filter-analytical", "analytical-grid", "no-results-analytical");
+
+  // ── Aktiver riktig fane fra URL (?tab=analytical) ────────────────────────────
+  if (new URLSearchParams(window.location.search).get("tab") === "analytical") {
+    const btn = document.getElementById("tab-analytical-btn");
+    if (btn) bootstrap.Tab.getOrCreateInstance(btn).show();
+  }
+
+  // ── Serversøk (FTS5) for kildeprodukter ──────────────────────────────────────
+  (function() {
+    const input = document.getElementById("search-source");
+    const btn   = document.getElementById("search-source-btn");
+    const grid  = document.getElementById("source-grid");
+
+    if (!input || !grid) return;
+
+    async function doSearch(q) {
+      if (!q.trim()) {
+        location.reload();
+        return;
+      }
+      let results;
+      try {
+        const resp = await fetch(`/api/search?q=${encodeURIComponent(q)}&limit=50`);
+        if (!resp.ok) return;
+        results = await resp.json();
+      } catch (e) {
+        return;
+      }
+      // Filtrer til kun kildeprodukter
+      const sourceResults = results.filter(r => r.product_type !== "analytical");
+      grid.innerHTML = sourceResults.length === 0
+        ? `<div class="col-12 text-muted py-4 text-center"><i class="bi bi-search fs-1 d-block mb-2"></i>Ingen resultater for «${q}»</div>`
+        : sourceResults.map(r => renderSearchCard(r)).join("");
+    }
+
+    function renderSearchCard(r) {
+      const colHint = r.col_matches && r.col_matches.length
+        ? `<div class="small text-info mt-1"><i class="bi bi-table me-1"></i>Treff i kolonne: ${r.col_matches.map(c => '<code>' + c + '</code>').join(', ')}</div>`
+        : '';
+      const views = r.views ? `<span class="text-muted small"><i class="bi bi-eye me-1"></i>${r.views}</span>` : '';
+      return `
+        <div class="col-md-6 col-lg-4">
+          <a href="/products/${r.id}" class="text-decoration-none">
+            <div class="card h-100 p-3">
+              <div class="d-flex justify-content-between align-items-start mb-2">
+                <h5 class="mb-0 text-dark">${r.name || r.id}</h5>
+              </div>
+              <div class="mb-2">
+                <span class="badge bg-secondary me-1">${r.domain || ''}</span>
+                <span class="text-muted small"><i class="bi bi-person me-1"></i>${r.owner || ''}</span>
+              </div>
+              ${r.description ? `<p class="text-muted small mb-2" style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden">${r.description}</p>` : ''}
+              ${(r.tags || []).map(t => `<span class="badge rounded-pill bg-light text-dark border me-1">${t}</span>`).join('')}
+              ${colHint}
+              <div class="mt-auto pt-2 border-top d-flex justify-content-end">${views}</div>
+            </div>
+          </a>
+        </div>`;
+    }
+
+    if (btn) btn.addEventListener("click", () => doSearch(input.value));
+    input.addEventListener("keydown", e => { if (e.key === "Enter") doSearch(input.value); });
+
+    // Auto-trigger search if ?q= is in URL (from global search bar)
+    const urlQ = new URLSearchParams(window.location.search).get("q");
+    if (urlQ) {
+      input.value = urlQ;
+      doSearch(urlQ);
+    }
+  })();
 
   // ── Avkryssingsbokser og multi-notebook ──────────────────────────────────────
   const newNotebookBtn    = document.getElementById("new-notebook-btn");

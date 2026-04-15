@@ -9,13 +9,16 @@ og er tilgjengelig via GET /api/products/{id}/sla i portalen.
 """
 
 import json
+import os
 import sys
 from datetime import datetime, timedelta, timezone
 
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
-sys.path.insert(0, "/opt/airflow/spark_jobs")
+sys.path.insert(0, "/opt/airflow/jobs")  # hostPath: jobs/ montert i Helm values
+
+_MINIO_ENDPOINT = "http://minio.slettix-analytics.svc.cluster.local:9000"
 
 default_args = {
     "owner":            "slettix",
@@ -40,10 +43,14 @@ def check_sla(**context):
 
     log = context["task_instance"].log
 
+    minio_endpoint   = os.environ.get("MINIO_ENDPOINT", _MINIO_ENDPOINT)
+    minio_access_key = os.environ.get("MINIO_ACCESS_KEY", "admin")
+    minio_secret_key = os.environ.get("MINIO_SECRET_KEY", "changeme")
+
     storage_options = {
-        "AWS_ENDPOINT_URL":           "http://minio:9000",
-        "AWS_ACCESS_KEY_ID":          "admin",
-        "AWS_SECRET_ACCESS_KEY":      "changeme",
+        "AWS_ENDPOINT_URL":           minio_endpoint,
+        "AWS_ACCESS_KEY_ID":          minio_access_key,
+        "AWS_SECRET_ACCESS_KEY":      minio_secret_key,
         "AWS_ALLOW_HTTP":             "true",
         "AWS_S3_ALLOW_UNSAFE_RENAME": "true",
         "AWS_EC2_METADATA_DISABLED":  "true",
@@ -51,9 +58,9 @@ def check_sla(**context):
 
     s3 = boto3.client(
         "s3",
-        endpoint_url="http://minio:9000",
-        aws_access_key_id="admin",
-        aws_secret_access_key="changeme",
+        endpoint_url=minio_endpoint,
+        aws_access_key_id=minio_access_key,
+        aws_secret_access_key=minio_secret_key,
         config=Config(signature_version="s3v4"),
     )
 

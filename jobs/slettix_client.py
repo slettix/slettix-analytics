@@ -167,6 +167,7 @@ def publish_analytical(
     source_products: list[str] | None = None,
     access: str = "public",
     tags: list[str] | None = None,
+    column_lineage: list[dict] | None = None,
     api_key: str | None = None,
 ) -> dict:
     """
@@ -185,6 +186,10 @@ def publish_analytical(
         source_products: Liste av produkt-IDer dette produktet er bygget på.
         access:          'public' eller 'restricted'.
         tags:            Valgfrie søke-tags.
+        column_lineage:  Kolonnelineage — liste av dicts med feltene 'column', 'sources'
+                         og valgfri 'description'. Eksempel:
+                         [{"column": "avg_salary", "sources": [{"product_id": "hr.employees",
+                           "column": "salary"}], "description": "Gjennomsnittlig lønn"}]
         api_key:         API-nøkkel for portalen.
 
     Returns:
@@ -201,6 +206,7 @@ def publish_analytical(
         ...     source_products=["hr.employees", "hr.department_stats"],
         ... )
     """
+    import pyarrow as pa
     from deltalake.writer import write_deltalake
 
     # Utled produktnavn fra ID (del etter punktum)
@@ -208,9 +214,10 @@ def publish_analytical(
     source_path  = f"s3://analytics/{domain}/{product_name}"
 
     print(f"→ Skriver DataFrame ({len(df)} rader, {len(df.columns)} kolonner) til {source_path} ...")
+    arrow_table = pa.Table.from_pandas(df, preserve_index=False)
     write_deltalake(
         source_path,
-        df,
+        arrow_table,
         mode="overwrite",
         storage_options=_STORAGE_OPTIONS,
     )
@@ -247,6 +254,8 @@ def publish_analytical(
         manifest["source_products"] = source_products
     if tags:
         manifest["tags"] = tags
+    if column_lineage:
+        manifest["column_lineage"] = column_lineage
 
     print(f"→ Registrerer '{product_id}' i portalen ...")
     resp = requests.post(

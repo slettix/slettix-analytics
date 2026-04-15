@@ -85,6 +85,46 @@ def init_db() -> None:
                 PRIMARY KEY (user_id, product_id),
                 FOREIGN KEY (user_id) REFERENCES users(id)
             );
+
+            CREATE TABLE IF NOT EXISTS subscriptions (
+                id          TEXT PRIMARY KEY,
+                user_id     TEXT NOT NULL,
+                product_id  TEXT NOT NULL,
+                created_at  TEXT NOT NULL,
+                UNIQUE (user_id, product_id),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS domain_memberships (
+                user_id   TEXT NOT NULL,
+                domain    TEXT NOT NULL,
+                PRIMARY KEY (user_id, domain),
+                FOREIGN KEY (user_id) REFERENCES users(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS incidents (
+                id           TEXT PRIMARY KEY,
+                product_id   TEXT NOT NULL,
+                title        TEXT NOT NULL,
+                description  TEXT,
+                status       TEXT NOT NULL DEFAULT 'open',
+                severity     TEXT NOT NULL DEFAULT 'warning',
+                created_at   TEXT NOT NULL,
+                updated_at   TEXT NOT NULL,
+                resolved_at  TEXT,
+                created_by   TEXT NOT NULL DEFAULT 'system',
+                updated_by   TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS usage_events (
+                id         TEXT PRIMARY KEY,
+                product_id TEXT NOT NULL,
+                action     TEXT NOT NULL,
+                user_id    TEXT,
+                ts         TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_usage_product ON usage_events(product_id);
+            CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_events(ts);
         """)
         # Opprett admin-bruker hvis ingen finnes
         row = conn.execute("SELECT COUNT(*) FROM users").fetchone()
@@ -144,6 +184,7 @@ def delete_user(user_id: str) -> None:
         conn.execute("DELETE FROM refresh_tokens WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM user_products WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM access_requests WHERE user_id = ?", (user_id,))
+        conn.execute("DELETE FROM domain_memberships WHERE user_id = ?", (user_id,))
         conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
 
 
@@ -277,6 +318,54 @@ def list_access_requests(status: Optional[str] = None) -> list[dict]:
         return [dict(r) for r in rows]
 
 
+def subscribe(user_id: str, product_id: str) -> dict:
+    """Registrer bruker som abonnent. INSERT OR IGNORE — idempotent."""
+    sub_id = str(uuid.uuid4())
+    now    = datetime.now(tz=timezone.utc).isoformat()
+    with _db() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO subscriptions (id, user_id, product_id, created_at) VALUES (?,?,?,?)",
+            (sub_id, user_id, product_id, now),
+        )
+        row = conn.execute(
+            "SELECT id, user_id, product_id, created_at FROM subscriptions WHERE user_id = ? AND product_id = ?",
+            (user_id, product_id),
+        ).fetchone()
+        return dict(row)
+
+
+def unsubscribe(user_id: str, product_id: str) -> None:
+    """Fjern bruker fra abonnentlisten."""
+    with _db() as conn:
+        conn.execute(
+            "DELETE FROM subscriptions WHERE user_id = ? AND product_id = ?",
+            (user_id, product_id),
+        )
+
+
+def list_subscribers(product_id: str) -> list[dict]:
+    """Returner alle abonnenter for et produkt med brukerinfo."""
+    with _db() as conn:
+        rows = conn.execute(
+            """SELECT s.user_id, u.username, u.email, s.created_at
+               FROM subscriptions s JOIN users u ON s.user_id = u.id
+               WHERE s.product_id = ?
+               ORDER BY s.created_at""",
+            (product_id,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def is_subscribed(user_id: str, product_id: str) -> bool:
+    """Sjekk om en bruker abonnerer på et produkt."""
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM subscriptions WHERE user_id = ? AND product_id = ?",
+            (user_id, product_id),
+        ).fetchone()
+        return row is not None
+
+
 def resolve_access_request(request_id: str, approved: bool, resolved_by: str) -> Optional[dict]:
     """Godkjenn eller avslå tilgangsforespørsel. Gir tilgang hvis godkjent."""
     with _db() as conn:
@@ -310,3 +399,143 @@ def get_current_user(request) -> Optional[dict]:
     if not payload:
         return None
     return {"id": payload["sub"], "username": payload["username"], "role": payload["role"]}
+
+# ── domeneprivilegier ──────────────────────────────────────────────────────────
+
+def add_domain_membership(user_id: str, domain: str) -> None:
+    with _db() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO domain_memberships (user_id, domain) VALUES (?,?)",
+            (user_id, domain),
+        )
+
+def remove_domain_membership(user_id: str, domain: str) -> None:
+    with _db() as conn:
+        conn.execute(
+            "DELETE FROM domain_memberships WHERE user_id = ? AND domain = ?",
+            (user_id, domain),
+        )
+
+def get_user_domains(user_id: str) -> list[str]:
+    with _db() as conn:
+        rows = conn.execute(
+            "SELECT domain FROM domain_memberships WHERE user_id = ?", (user_id,)
+        ).fetchall()
+        return [r["domain"] for r in rows]
+
+def list_domain_members(domain: str) -> list[dict]:
+    with _db() as conn:
+        rows = conn.execute(
+            """SELECT u.id, u.username, u.email, u.role
+               FROM domain_memberships dm JOIN users u ON dm.user_id = u.id
+               WHERE dm.domain = ?
+               ORDER BY u.username""",
+            (domain,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+def has_pii_access(user: dict | None) -> bool:
+    """Admin-brukere og brukere med pii_access-rolle har tilgang til PII-kolonner."""
+    if not user:
+        return False
+    return user.get("role") in ("admin", "pii_access")
+
+
+# ── incidents ──────────────────────────────────────────────────────────────────
+
+def create_incident(product_id: str, title: str, description: str = "",
+                    severity: str = "warning", created_by: str = "system") -> dict:
+    inc_id = str(uuid.uuid4())
+    now    = datetime.now(tz=timezone.utc).isoformat()
+    with _db() as conn:
+        # Unngå duplikat åpne incidents for samme produkt og tittel
+        existing = conn.execute(
+            "SELECT id FROM incidents WHERE product_id = ? AND title = ? AND status != 'resolved'",
+            (product_id, title),
+        ).fetchone()
+        if existing:
+            return dict(conn.execute("SELECT * FROM incidents WHERE id = ?", (existing["id"],)).fetchone())
+        conn.execute(
+            """INSERT INTO incidents (id, product_id, title, description, status, severity,
+               created_at, updated_at, created_by)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (inc_id, product_id, title, description, "open", severity, now, now, created_by),
+        )
+        return {"id": inc_id, "product_id": product_id, "title": title,
+                "description": description, "status": "open", "severity": severity,
+                "created_at": now, "updated_at": now, "created_by": created_by}
+
+
+def list_incidents(product_id: str | None = None, status: str | None = None) -> list[dict]:
+    with _db() as conn:
+        query  = "SELECT * FROM incidents"
+        params = []
+        where  = []
+        if product_id:
+            where.append("product_id = ?")
+            params.append(product_id)
+        if status:
+            where.append("status = ?")
+            params.append(status)
+        if where:
+            query += " WHERE " + " AND ".join(where)
+        query += " ORDER BY created_at DESC"
+        return [dict(r) for r in conn.execute(query, params).fetchall()]
+
+
+def track_usage(product_id: str, action: str, user_id: str | None = None) -> None:
+    """Logg en brukshendelse for et dataprodukt. Mislykkes stille."""
+    try:
+        event_id = str(uuid.uuid4())
+        now      = datetime.now(tz=timezone.utc).isoformat()
+        with _db() as conn:
+            conn.execute(
+                "INSERT INTO usage_events (id, product_id, action, user_id, ts) VALUES (?,?,?,?,?)",
+                (event_id, product_id, action, user_id, now),
+            )
+    except Exception:
+        pass
+
+
+def get_usage_counts(days: int = 30) -> list[dict]:
+    """Returner topp-10 produkter etter antall visninger siste N dager."""
+    cutoff = (datetime.now(tz=timezone.utc) - timedelta(days=days)).isoformat()
+    with _db() as conn:
+        rows = conn.execute(
+            """SELECT product_id, COUNT(*) AS views
+               FROM usage_events
+               WHERE ts >= ? AND action = 'view'
+               GROUP BY product_id
+               ORDER BY views DESC
+               LIMIT 10""",
+            (cutoff,),
+        ).fetchall()
+        return [dict(r) for r in rows]
+
+
+def get_product_views(product_id: str, days: int = 30) -> int:
+    """Antall visninger for ett produkt siste N dager."""
+    cutoff = (datetime.now(tz=timezone.utc) - timedelta(days=days)).isoformat()
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT COUNT(*) FROM usage_events WHERE product_id = ? AND action = 'view' AND ts >= ?",
+            (product_id, cutoff),
+        ).fetchone()
+        return row[0] if row else 0
+
+
+def update_incident(incident_id: str, status: str, updated_by: str) -> dict | None:
+    valid = {"open", "acknowledged", "resolving", "resolved"}
+    if status not in valid:
+        return None
+    now = datetime.now(tz=timezone.utc).isoformat()
+    with _db() as conn:
+        row = conn.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+        if not row:
+            return None
+        resolved_at = now if status == "resolved" else row["resolved_at"]
+        conn.execute(
+            "UPDATE incidents SET status=?, updated_at=?, updated_by=?, resolved_at=? WHERE id=?",
+            (status, now, updated_by, resolved_at, incident_id),
+        )
+        return dict(conn.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone())
