@@ -2990,9 +2990,6 @@ def page_platform(request: Request):
         services=services,
         product_count=len(products),
         medallion=medallion,
-        airflow_ext=airflow_ext,
-        superset_ext=superset_ext,
-        jupyter_ext=jupyter_ext,
     ))
 
 
