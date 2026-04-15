@@ -61,6 +61,7 @@ spec:
   driver:
     cores: 1
     memory: "512m"
+    memoryOverhead: "128m"
     serviceAccount: spark
     env:
       - name: KAFKA_BOOTSTRAP_SERVERS
@@ -80,6 +81,7 @@ spec:
     instances: 1
     cores: 1
     memory: "512m"
+    memoryOverhead: "128m"
     env:
       - name: KAFKA_BOOTSTRAP_SERVERS
         value: "kafka.customermaster.svc.cluster.local:9092"
