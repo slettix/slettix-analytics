@@ -1,0 +1,41 @@
+{
+  "id":           "folkeregister.cohort_demographics",
+  "name":         "Folkeregister — Demografiprofil per kohort",
+  "domain":       "folkeregister",
+  "owner":        "folkeregister-team",
+  "version":      "1.0.0",
+  "description":  "Kohortbasert demografi gruppert på fødselsdekade og kjønn. Inneholder overlevelsesrate, sivilstandsfordeling og gjennomsnittlig antall kommunebytter per kohort. Ingen PII — kun aggregerte mål.",
+  "source_path":  "s3://gold/folkeregister/cohort_demographics",
+  "format":       "delta",
+  "primary_key":  "birth_decade,gender",
+  "dag_id":       "folkeregister_gold",
+  "product_type": "aggregate",
+  "access":       "public",
+  "quality_sla": {
+    "max_null_rate":   0.05,
+    "freshness_hours": 26
+  },
+  "tags": ["folkeregister", "gold", "kohort", "demografi", "statistikk", "offentlig"],
+  "contract": {
+    "slo": {
+      "freshness_hours":    26,
+      "completeness_pct":   95
+    },
+    "schema_compatibility": "BACKWARD",
+    "guaranteed_columns": [
+      "birth_decade", "gender", "cohort_size", "alive_count", "survival_rate_pct"
+    ]
+  },
+  "schema": [
+    { "name": "birth_decade",               "type": "integer", "nullable": false, "description": "Fødselsdekade (f.eks. 1970 = født 1970–1979)", "pii": false },
+    { "name": "gender",                     "type": "string",  "nullable": false, "description": "Kjønn (M / F / X / UKJENT)", "pii": false },
+    { "name": "cohort_size",                "type": "long",    "nullable": false, "description": "Totalt antall personer i kohorten", "pii": false },
+    { "name": "alive_count",                "type": "long",    "nullable": false, "description": "Antall i live per kjøredato", "pii": false },
+    { "name": "survival_rate_pct",          "type": "double",  "nullable": true,  "description": "Andel i live (alive_count / cohort_size × 100)", "pii": false },
+    { "name": "married_count",              "type": "long",    "nullable": false, "description": "Antall gift (marital_status=GIFT) per kjøredato", "pii": false },
+    { "name": "married_rate_pct",           "type": "double",  "nullable": true,  "description": "Andel gift i kohorten (%)", "pii": false },
+    { "name": "divorced_count",             "type": "long",    "nullable": false, "description": "Antall skilt (marital_status=SKILT) per kjøredato", "pii": false },
+    { "name": "avg_municipality_changes",   "type": "double",  "nullable": true,  "description": "Gjennomsnittlig antall kommunebytter per person i kohorten", "pii": false },
+    { "name": "_updated_at",                "type": "timestamp","nullable": false, "description": "Sist oppdatert av Gold-jobben", "pii": false }
+  ]
+}

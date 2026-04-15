@@ -1,0 +1,37 @@
+{
+  "id":           "folkeregister.marital_status_trends",
+  "name":         "Folkeregister — Sivilstandsfordeling over tid",
+  "domain":       "folkeregister",
+  "owner":        "folkeregister-team",
+  "version":      "1.0.0",
+  "description":  "Sivilstandsfordeling per referanseår og aldersgruppe. Viser andel UGIFT, GIFT, SKILT og ENKE/ENKEMANN innen hver aldersgruppe (0-17, 18-29, 30-44, 45-64, 65+) for hvert år i datasettet. Ingen PII — kun aggregerte tall.",
+  "source_path":  "s3://gold/folkeregister/marital_status_trends",
+  "format":       "delta",
+  "primary_key":  "reference_year,age_group,marital_status",
+  "dag_id":       "folkeregister_gold",
+  "product_type": "aggregate",
+  "access":       "public",
+  "quality_sla": {
+    "max_null_rate":   0.05,
+    "freshness_hours": 26
+  },
+  "tags": ["folkeregister", "gold", "sivilstand", "trend", "statistikk", "offentlig"],
+  "contract": {
+    "slo": {
+      "freshness_hours":    26,
+      "completeness_pct":   95
+    },
+    "schema_compatibility": "BACKWARD",
+    "guaranteed_columns": [
+      "reference_year", "age_group", "marital_status", "count", "pct_of_age_group"
+    ]
+  },
+  "schema": [
+    { "name": "reference_year",     "type": "integer", "nullable": false, "description": "Statistikkår (utledet fra valid_from i SCD2)", "pii": false },
+    { "name": "age_group",          "type": "string",  "nullable": false, "description": "Aldersgruppe: 0-17 | 18-29 | 30-44 | 45-64 | 65+", "pii": false },
+    { "name": "marital_status",     "type": "string",  "nullable": false, "description": "Sivilstatus: UGIFT | GIFT | SKILT | ENKE_ENKEMANN", "pii": false },
+    { "name": "count",              "type": "long",    "nullable": false, "description": "Antall registrert i denne kombinasjonen", "pii": false },
+    { "name": "pct_of_age_group",   "type": "double",  "nullable": true,  "description": "Andel av alle i samme referanseår og aldersgruppe (%)", "pii": false },
+    { "name": "_updated_at",        "type": "timestamp","nullable": false, "description": "Sist oppdatert av Gold-jobben", "pii": false }
+  ]
+}

@@ -1,0 +1,43 @@
+{
+  "id":           "folkeregister.population_stats",
+  "name":         "Folkeregister — Befolkningsstatistikk per kommune og år",
+  "domain":       "folkeregister",
+  "owner":        "folkeregister-team",
+  "version":      "1.0.0",
+  "description":  "Aggregert befolkningsstatistikk per kommune og referanseår uten PII. Viser totalt antall bosatte, kjønnsfordeling, gjennomsnittsalder, fødsler og dødsfall. Basert på SCD2-årssluttsnapshots fra person_registry.",
+  "source_path":  "s3://gold/folkeregister/population_stats",
+  "format":       "delta",
+  "primary_key":  "municipality_code,reference_year",
+  "dag_id":       "folkeregister_gold",
+  "product_type": "aggregate",
+  "access":       "public",
+  "quality_sla": {
+    "max_null_rate":   0.05,
+    "freshness_hours": 26
+  },
+  "tags": ["folkeregister", "gold", "befolkning", "geografi", "statistikk", "offentlig"],
+  "contract": {
+    "slo": {
+      "freshness_hours":    26,
+      "completeness_pct":   95
+    },
+    "schema_compatibility": "BACKWARD",
+    "guaranteed_columns": [
+      "municipality_code", "municipality_name", "county",
+      "reference_year", "population_total", "population_male", "population_female"
+    ]
+  },
+  "schema": [
+    { "name": "municipality_code",   "type": "string",  "nullable": false, "description": "Kommunenummer (SSB 4 siffer)", "pii": false },
+    { "name": "municipality_name",   "type": "string",  "nullable": true,  "description": "Kommunenavn", "pii": false },
+    { "name": "county",              "type": "string",  "nullable": true,  "description": "Fylkesnavn", "pii": false },
+    { "name": "reference_year",      "type": "integer", "nullable": false, "description": "Statistikkår (årslutt-snapshot)", "pii": false },
+    { "name": "population_total",    "type": "long",    "nullable": false, "description": "Totalt antall bosatte ved årslutt", "pii": false },
+    { "name": "population_male",     "type": "long",    "nullable": true,  "description": "Antall menn bosatte", "pii": false },
+    { "name": "population_female",   "type": "long",    "nullable": true,  "description": "Antall kvinner bosatte", "pii": false },
+    { "name": "avg_age",             "type": "double",  "nullable": true,  "description": "Gjennomsnittsalder for bosatte ved årslutt", "pii": false },
+    { "name": "births",              "type": "long",    "nullable": false, "description": "Antall fødte registrert i referanseåret", "pii": false },
+    { "name": "deaths",              "type": "long",    "nullable": false, "description": "Antall døde registrert i referanseåret", "pii": false },
+    { "name": "_updated_at",         "type": "timestamp","nullable": false, "description": "Sist oppdatert av Gold-jobben", "pii": false }
+  ]
+}

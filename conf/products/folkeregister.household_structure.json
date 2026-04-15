@@ -1,0 +1,36 @@
+{
+  "id":           "folkeregister.household_structure",
+  "name":         "Folkeregister — Husstandstyper og familiestørrelser",
+  "domain":       "folkeregister",
+  "owner":        "folkeregister-team",
+  "version":      "1.0.0",
+  "description":  "Fordeling av levende personers husstandstype og familiestørrelse per kjøredato. Husstandstyper: EKTEPAR_MED_BARN, EKTEPAR_UTEN_BARN, ENSLIG_FORSØRGER, ENSLIG. Familiestørrelse basert på partner + direkte barn. Ingen PII.",
+  "source_path":  "s3://gold/folkeregister/household_structure",
+  "format":       "delta",
+  "primary_key":  "household_type,size_category",
+  "dag_id":       "folkeregister_gold",
+  "product_type": "aggregate",
+  "access":       "public",
+  "quality_sla": {
+    "max_null_rate":   0.05,
+    "freshness_hours": 26
+  },
+  "tags": ["folkeregister", "gold", "husstand", "familie", "statistikk", "offentlig"],
+  "contract": {
+    "slo": {
+      "freshness_hours":    26,
+      "completeness_pct":   95
+    },
+    "schema_compatibility": "BACKWARD",
+    "guaranteed_columns": [
+      "household_type", "size_category", "count", "pct_of_total"
+    ]
+  },
+  "schema": [
+    { "name": "household_type",  "type": "string",  "nullable": false, "description": "Husstandstype: EKTEPAR_MED_BARN | EKTEPAR_UTEN_BARN | ENSLIG_FORSØRGER | ENSLIG", "pii": false },
+    { "name": "size_category",   "type": "string",  "nullable": false, "description": "Familiestørrelse: 1 | 2 | 3-4 | 5+", "pii": false },
+    { "name": "count",           "type": "long",    "nullable": false, "description": "Antall levende personer i denne kombinasjonen", "pii": false },
+    { "name": "pct_of_total",    "type": "double",  "nullable": true,  "description": "Andel av alle levende personer (%)", "pii": false },
+    { "name": "_updated_at",     "type": "timestamp","nullable": false, "description": "Sist oppdatert av Gold-jobben", "pii": false }
+  ]
+}

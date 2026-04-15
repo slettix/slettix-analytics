@@ -1,0 +1,43 @@
+{
+  "id":           "folkeregister.migration_flows",
+  "name":         "Folkeregister — Migrasjonsstrømmer mellom kommunepar",
+  "domain":       "folkeregister",
+  "owner":        "folkeregister-team",
+  "version":      "1.0.0",
+  "description":  "Retningbestemte migrasjonsstrømmer mellom alle kommunepar per år. Viser antall personer som har flyttet fra kommune A til kommune B, returstrøm (B→A) og nettoflyt. Egnet for kart-visualisering og regional analyse. Ingen PII.",
+  "source_path":  "s3://gold/folkeregister/migration_flows",
+  "format":       "delta",
+  "primary_key":  "from_municipality_code,to_municipality_code,reference_year",
+  "dag_id":       "folkeregister_gold",
+  "product_type": "aggregate",
+  "access":       "public",
+  "quality_sla": {
+    "max_null_rate":   0.05,
+    "freshness_hours": 26
+  },
+  "tags": ["folkeregister", "gold", "migrasjon", "geografi", "flyt", "offentlig"],
+  "contract": {
+    "slo": {
+      "freshness_hours":    26,
+      "completeness_pct":   95
+    },
+    "schema_compatibility": "BACKWARD",
+    "guaranteed_columns": [
+      "from_municipality_code", "to_municipality_code",
+      "reference_year", "flow_count", "net_flow"
+    ]
+  },
+  "schema": [
+    { "name": "from_municipality_code",  "type": "string",  "nullable": false, "description": "Avreisekommunenummer", "pii": false },
+    { "name": "from_municipality_name",  "type": "string",  "nullable": true,  "description": "Avreisekommunenavn", "pii": false },
+    { "name": "from_county",             "type": "string",  "nullable": true,  "description": "Avreisefylke", "pii": false },
+    { "name": "to_municipality_code",    "type": "string",  "nullable": false, "description": "Ankomstkommunenummer", "pii": false },
+    { "name": "to_municipality_name",    "type": "string",  "nullable": true,  "description": "Ankomstkommunenavn", "pii": false },
+    { "name": "to_county",               "type": "string",  "nullable": true,  "description": "Ankomstfylke", "pii": false },
+    { "name": "reference_year",          "type": "integer", "nullable": false, "description": "Innflyttingsår", "pii": false },
+    { "name": "flow_count",              "type": "long",    "nullable": false, "description": "Antall personer som har gjort flyten A→B i referanseåret", "pii": false },
+    { "name": "return_flow_count",       "type": "long",    "nullable": false, "description": "Antall som har gjort returreisen B→A i referanseåret", "pii": false },
+    { "name": "net_flow",                "type": "long",    "nullable": false, "description": "flow_count − return_flow_count", "pii": false },
+    { "name": "_updated_at",             "type": "timestamp","nullable": false, "description": "Sist oppdatert av Gold-jobben", "pii": false }
+  ]
+}
