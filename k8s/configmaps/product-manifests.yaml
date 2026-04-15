@@ -1,40 +1,720 @@
-# Alle dataprodukters manifest-filer som én ConfigMap.
-# Oppdateres automatisk ved ny manifest via: scripts/k8s-update-manifests.sh
-#
-# Pods som trenger tilgang monterer dette volumet:
-#   volumes:
-#     - name: product-manifests
-#       configMap:
-#         name: product-manifests
-#   volumeMounts:
-#     - name: product-manifests
-#       mountPath: /opt/conf/products
 apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: product-manifests
-  namespace: slettix-analytics
-  labels:
-    app.kubernetes.io/part-of: slettix-analytics
 data:
-  hr_employees.json: |
+  folkeregister.cohort_demographics.json: |
     {
-      "id":          "hr.employees",
-      "name":        "Employees",
-      "domain":      "hr",
-      "owner":       "hr-team",
-      "version":     "1.0.0",
-      "description": "Alle aktive ansatte med stilling, avdeling, lønn og ansettelsesdato. Oppdateres daglig fra kildesystemet via Bronze → Silver pipeline.",
-      "source_path": "s3://silver/hr/employees",
-      "format":      "delta",
-      "primary_key": "id",
-      "dag_id":      "01_slettix_pipeline",
+      "id":           "folkeregister.cohort_demographics",
+      "name":         "Folkeregister — Demografiprofil per kohort",
+      "domain":       "folkeregister",
+      "owner":        "folkeregister-team",
+      "version":      "1.0.0",
+      "description":  "Kohortbasert demografi gruppert på fødselsdekade og kjønn. Inneholder overlevelsesrate, sivilstandsfordeling og gjennomsnittlig antall kommunebytter per kohort. Ingen PII — kun aggregerte mål.",
+      "source_path":  "s3://gold/folkeregister/cohort_demographics",
+      "format":       "delta",
+      "primary_key":  "birth_decade,gender",
+      "dag_id":       "folkeregister_gold",
+      "product_type": "aggregate",
+      "access":       "public",
       "quality_sla": {
-        "max_null_rate":    0.0,
-        "freshness_hours":  25
+        "max_null_rate":   0.05,
+        "freshness_hours": 26
       },
+      "tags": ["folkeregister", "gold", "kohort", "demografi", "statistikk", "offentlig"],
+      "contract": {
+        "slo": {
+          "freshness_hours":    26,
+          "completeness_pct":   95
+        },
+        "schema_compatibility": "BACKWARD",
+        "guaranteed_columns": [
+          "birth_decade", "gender", "cohort_size", "alive_count", "survival_rate_pct"
+        ]
+      },
+      "schema": [
+        { "name": "birth_decade",               "type": "integer", "nullable": false, "description": "Fødselsdekade (f.eks. 1970 = født 1970–1979)", "pii": false },
+        { "name": "gender",                     "type": "string",  "nullable": false, "description": "Kjønn (M / F / X / UKJENT)", "pii": false },
+        { "name": "cohort_size",                "type": "long",    "nullable": false, "description": "Totalt antall personer i kohorten", "pii": false },
+        { "name": "alive_count",                "type": "long",    "nullable": false, "description": "Antall i live per kjøredato", "pii": false },
+        { "name": "survival_rate_pct",          "type": "double",  "nullable": true,  "description": "Andel i live (alive_count / cohort_size × 100)", "pii": false },
+        { "name": "married_count",              "type": "long",    "nullable": false, "description": "Antall gift (marital_status=GIFT) per kjøredato", "pii": false },
+        { "name": "married_rate_pct",           "type": "double",  "nullable": true,  "description": "Andel gift i kohorten (%)", "pii": false },
+        { "name": "divorced_count",             "type": "long",    "nullable": false, "description": "Antall skilt (marital_status=SKILT) per kjøredato", "pii": false },
+        { "name": "avg_municipality_changes",   "type": "double",  "nullable": true,  "description": "Gjennomsnittlig antall kommunebytter per person i kohorten", "pii": false },
+        { "name": "_updated_at",                "type": "timestamp","nullable": false, "description": "Sist oppdatert av Gold-jobben", "pii": false }
+      ]
+    }
+  folkeregister.family_events.json: |
+    {
+      "id": "folkeregister.family_events",
+      "name": "Folkeregister — Familiehendelser (IDP)",
+      "domain": "folkeregister",
+      "owner": "folkeregister-team",
+      "version": "1.0.0",
+      "description": "Input Data Product (IDP) som konsumerer familiehendelser fra Folkeregisteret via Kafka. Inneholder hendelser om relasjoner mellom personer: inngåelse og oppløsning av ekteskap samt fødsel av barn knyttet til et foreldrepar. person_id (UUID) brukes konsekvent for å referere til personer.",
+      "source_path": "s3://bronze/folkeregister/family_events",
+      "format": "delta",
+      "primary_key": "event_id",
+      "dag_id": "folkeregister_idp",
+      "product_type": "source",
       "access": "restricted",
-      "tags": ["hr", "pii", "employees", "salary"]
+      "quality_sla": {
+        "max_null_rate": 0.01,
+        "freshness_hours": 1
+      },
+      "tags": ["folkeregister", "pii", "streaming", "kafka", "idp", "bronze"],
+      "contract": {
+        "slo": {
+          "freshness_hours": 1,
+          "completeness_pct": 99
+        },
+        "schema_compatibility": "BACKWARD",
+        "guaranteed_columns": [
+          "event_id",
+          "event_type",
+          "event_timestamp",
+          "kafka_topic",
+          "kafka_timestamp",
+          "_processed_at"
+        ]
+      },
+      "schema": [
+        {
+          "name": "event_id",
+          "type": "string",
+          "nullable": false,
+          "description": "Unik hendelse-ID (UUID fra kildesystemet)",
+          "pii": false
+        },
+        {
+          "name": "event_type",
+          "type": "string",
+          "nullable": false,
+          "description": "Hendelsestype: EkteskapInngått | EkteskapOppløst | BarnFødt",
+          "pii": false
+        },
+        {
+          "name": "event_timestamp",
+          "type": "string",
+          "nullable": true,
+          "description": "Tidspunkt hendelsen inntraff (ISO 8601, fra kildesystemet)",
+          "pii": false
+        },
+        {
+          "name": "person_id_a",
+          "type": "string",
+          "nullable": true,
+          "description": "person_id for første part — til stede ved EkteskapInngått og EkteskapOppløst",
+          "pii": false
+        },
+        {
+          "name": "person_id_b",
+          "type": "string",
+          "nullable": true,
+          "description": "person_id for andre part — til stede ved EkteskapInngått og EkteskapOppløst",
+          "pii": false
+        },
+        {
+          "name": "marriage_date",
+          "type": "string",
+          "nullable": true,
+          "description": "Dato for vielse (ISO 8601) — kun til stede ved EkteskapInngått",
+          "pii": false,
+          "sensitivity": "low"
+        },
+        {
+          "name": "divorce_date",
+          "type": "string",
+          "nullable": true,
+          "description": "Dato for skilsmisse (ISO 8601) — kun til stede ved EkteskapOppløst",
+          "pii": false,
+          "sensitivity": "medium"
+        },
+        {
+          "name": "child_id",
+          "type": "string",
+          "nullable": true,
+          "description": "person_id for barnet — kun til stede ved BarnFødt",
+          "pii": false
+        },
+        {
+          "name": "mother_id",
+          "type": "string",
+          "nullable": true,
+          "description": "person_id for mor — kun til stede ved BarnFødt",
+          "pii": false
+        },
+        {
+          "name": "father_id",
+          "type": "string",
+          "nullable": true,
+          "description": "person_id for far — kun til stede ved BarnFødt",
+          "pii": false
+        },
+        {
+          "name": "birth_date",
+          "type": "string",
+          "nullable": true,
+          "description": "Barnets fødselsdato (ISO 8601) — kun til stede ved BarnFødt",
+          "pii": false,
+          "sensitivity": "low"
+        },
+        {
+          "name": "kafka_topic",
+          "type": "string",
+          "nullable": false,
+          "description": "Kafka-topic meldingen kom fra (family.married | family.divorced | family.child_born)",
+          "pii": false
+        },
+        {
+          "name": "kafka_partition",
+          "type": "integer",
+          "nullable": false,
+          "description": "Kafka-partisjon (for debugging og replay)",
+          "pii": false
+        },
+        {
+          "name": "kafka_offset",
+          "type": "long",
+          "nullable": false,
+          "description": "Kafka-offset (for eksakt reprosessering)",
+          "pii": false
+        },
+        {
+          "name": "kafka_timestamp",
+          "type": "timestamp",
+          "nullable": false,
+          "description": "Kafka broker-tidsstempel for meldingen",
+          "pii": false
+        },
+        {
+          "name": "_processed_at",
+          "type": "timestamp",
+          "nullable": false,
+          "description": "Tidspunkt Spark-jobben prosesserte og skrev hendelsen til Bronze",
+          "pii": false
+        },
+        {
+          "name": "_source_topics",
+          "type": "string",
+          "nullable": false,
+          "description": "Kommaseparert liste over topics jobben abonnerte på",
+          "pii": false
+        },
+        {
+          "name": "event_date",
+          "type": "date",
+          "nullable": true,
+          "description": "Dato-partisjoneringskolonne (avledet fra event_timestamp eller kafka_timestamp)",
+          "pii": false
+        }
+      ]
+    }
+  folkeregister.family_relations.json: |
+    {
+      "id":           "folkeregister.family_relations",
+      "name":         "Folkeregister — Familierelasjoner",
+      "domain":       "folkeregister",
+      "owner":        "folkeregister-team",
+      "version":      "1.0.0",
+      "description":  "Relasjonsgraf over familiebånd i befolkningen. Kant-liste med ekteskap, skilsmisser og foreldre–barn-relasjoner. Ekteskapskanter er SCD2 (lukkes ved skilsmisse). Foreldre–barn-kanter er permanente. generation_depth=1 for direkte relasjoner.",
+      "source_path":  "s3://silver/folkeregister/family_relations",
+      "format":       "delta",
+      "primary_key":  "relation_id",
+      "dag_id":       "folkeregister_silver",
+      "product_type": "derived",
+      "access":       "restricted",
+      "quality_sla": {
+        "max_null_rate":   0.0,
+        "freshness_hours": 25
+      },
+      "tags": ["folkeregister", "pii", "silver", "relasjoner", "familie", "graf"],
+      "contract": {
+        "slo": {
+          "freshness_hours":    25,
+          "completeness_pct":   99
+        },
+        "schema_compatibility": "BACKWARD",
+        "guaranteed_columns": [
+          "relation_id", "person_id_a", "person_id_b",
+          "relation_type", "valid_from", "is_current"
+        ]
+      },
+      "schema": [
+        { "name": "relation_id",       "type": "string",    "nullable": false, "description": "Unik kant-ID (person_id_a_person_id_b_timestamp)", "pii": false },
+        { "name": "person_id_a",       "type": "string",    "nullable": false, "description": "Første person i relasjonen", "pii": false },
+        { "name": "person_id_b",       "type": "string",    "nullable": false, "description": "Andre person i relasjonen", "pii": false },
+        { "name": "relation_type",     "type": "string",    "nullable": false, "description": "GIFT | SKILT | FORELDER_AV | BARN_AV", "pii": false },
+        { "name": "generation_depth",  "type": "integer",   "nullable": true,  "description": "Generasjonsavstand (1 for direkte foreldre–barn, null for ekteskap)", "pii": false },
+        { "name": "valid_from",        "type": "timestamp", "nullable": false, "description": "Tidspunkt relasjonen ble etablert", "pii": false },
+        { "name": "valid_to",          "type": "timestamp", "nullable": true,  "description": "Tidspunkt relasjonen ble avsluttet (null = aktiv)", "pii": false },
+        { "name": "is_current",        "type": "boolean",   "nullable": false, "description": "True = aktiv relasjon", "pii": false },
+        { "name": "_updated_at",       "type": "timestamp", "nullable": false, "description": "Sist oppdatert av Silver-jobben", "pii": false }
+      ]
+    }
+  folkeregister.household_structure.json: |
+    {
+      "id":           "folkeregister.household_structure",
+      "name":         "Folkeregister — Husstandstyper og familiestørrelser",
+      "domain":       "folkeregister",
+      "owner":        "folkeregister-team",
+      "version":      "1.0.0",
+      "description":  "Fordeling av levende personers husstandstype og familiestørrelse per kjøredato. Husstandstyper: EKTEPAR_MED_BARN, EKTEPAR_UTEN_BARN, ENSLIG_FORSØRGER, ENSLIG. Familiestørrelse basert på partner + direkte barn. Ingen PII.",
+      "source_path":  "s3://gold/folkeregister/household_structure",
+      "format":       "delta",
+      "primary_key":  "household_type,size_category",
+      "dag_id":       "folkeregister_gold",
+      "product_type": "aggregate",
+      "access":       "public",
+      "quality_sla": {
+        "max_null_rate":   0.05,
+        "freshness_hours": 26
+      },
+      "tags": ["folkeregister", "gold", "husstand", "familie", "statistikk", "offentlig"],
+      "contract": {
+        "slo": {
+          "freshness_hours":    26,
+          "completeness_pct":   95
+        },
+        "schema_compatibility": "BACKWARD",
+        "guaranteed_columns": [
+          "household_type", "size_category", "count", "pct_of_total"
+        ]
+      },
+      "schema": [
+        { "name": "household_type",  "type": "string",  "nullable": false, "description": "Husstandstype: EKTEPAR_MED_BARN | EKTEPAR_UTEN_BARN | ENSLIG_FORSØRGER | ENSLIG", "pii": false },
+        { "name": "size_category",   "type": "string",  "nullable": false, "description": "Familiestørrelse: 1 | 2 | 3-4 | 5+", "pii": false },
+        { "name": "count",           "type": "long",    "nullable": false, "description": "Antall levende personer i denne kombinasjonen", "pii": false },
+        { "name": "pct_of_total",    "type": "double",  "nullable": true,  "description": "Andel av alle levende personer (%)", "pii": false },
+        { "name": "_updated_at",     "type": "timestamp","nullable": false, "description": "Sist oppdatert av Gold-jobben", "pii": false }
+      ]
+    }
+  folkeregister.marital_status_trends.json: |
+    {
+      "id":           "folkeregister.marital_status_trends",
+      "name":         "Folkeregister — Sivilstandsfordeling over tid",
+      "domain":       "folkeregister",
+      "owner":        "folkeregister-team",
+      "version":      "1.0.0",
+      "description":  "Sivilstandsfordeling per referanseår og aldersgruppe. Viser andel UGIFT, GIFT, SKILT og ENKE/ENKEMANN innen hver aldersgruppe (0-17, 18-29, 30-44, 45-64, 65+) for hvert år i datasettet. Ingen PII — kun aggregerte tall.",
+      "source_path":  "s3://gold/folkeregister/marital_status_trends",
+      "format":       "delta",
+      "primary_key":  "reference_year,age_group,marital_status",
+      "dag_id":       "folkeregister_gold",
+      "product_type": "aggregate",
+      "access":       "public",
+      "quality_sla": {
+        "max_null_rate":   0.05,
+        "freshness_hours": 26
+      },
+      "tags": ["folkeregister", "gold", "sivilstand", "trend", "statistikk", "offentlig"],
+      "contract": {
+        "slo": {
+          "freshness_hours":    26,
+          "completeness_pct":   95
+        },
+        "schema_compatibility": "BACKWARD",
+        "guaranteed_columns": [
+          "reference_year", "age_group", "marital_status", "count", "pct_of_age_group"
+        ]
+      },
+      "schema": [
+        { "name": "reference_year",     "type": "integer", "nullable": false, "description": "Statistikkår (utledet fra valid_from i SCD2)", "pii": false },
+        { "name": "age_group",          "type": "string",  "nullable": false, "description": "Aldersgruppe: 0-17 | 18-29 | 30-44 | 45-64 | 65+", "pii": false },
+        { "name": "marital_status",     "type": "string",  "nullable": false, "description": "Sivilstatus: UGIFT | GIFT | SKILT | ENKE_ENKEMANN", "pii": false },
+        { "name": "count",              "type": "long",    "nullable": false, "description": "Antall registrert i denne kombinasjonen", "pii": false },
+        { "name": "pct_of_age_group",   "type": "double",  "nullable": true,  "description": "Andel av alle i samme referanseår og aldersgruppe (%)", "pii": false },
+        { "name": "_updated_at",        "type": "timestamp","nullable": false, "description": "Sist oppdatert av Gold-jobben", "pii": false }
+      ]
+    }
+  folkeregister.migration_flows.json: |
+    {
+      "id":           "folkeregister.migration_flows",
+      "name":         "Folkeregister — Migrasjonsstrømmer mellom kommunepar",
+      "domain":       "folkeregister",
+      "owner":        "folkeregister-team",
+      "version":      "1.0.0",
+      "description":  "Retningbestemte migrasjonsstrømmer mellom alle kommunepar per år. Viser antall personer som har flyttet fra kommune A til kommune B, returstrøm (B→A) og nettoflyt. Egnet for kart-visualisering og regional analyse. Ingen PII.",
+      "source_path":  "s3://gold/folkeregister/migration_flows",
+      "format":       "delta",
+      "primary_key":  "from_municipality_code,to_municipality_code,reference_year",
+      "dag_id":       "folkeregister_gold",
+      "product_type": "aggregate",
+      "access":       "public",
+      "quality_sla": {
+        "max_null_rate":   0.05,
+        "freshness_hours": 26
+      },
+      "tags": ["folkeregister", "gold", "migrasjon", "geografi", "flyt", "offentlig"],
+      "contract": {
+        "slo": {
+          "freshness_hours":    26,
+          "completeness_pct":   95
+        },
+        "schema_compatibility": "BACKWARD",
+        "guaranteed_columns": [
+          "from_municipality_code", "to_municipality_code",
+          "reference_year", "flow_count", "net_flow"
+        ]
+      },
+      "schema": [
+        { "name": "from_municipality_code",  "type": "string",  "nullable": false, "description": "Avreisekommunenummer", "pii": false },
+        { "name": "from_municipality_name",  "type": "string",  "nullable": true,  "description": "Avreisekommunenavn", "pii": false },
+        { "name": "from_county",             "type": "string",  "nullable": true,  "description": "Avreisefylke", "pii": false },
+        { "name": "to_municipality_code",    "type": "string",  "nullable": false, "description": "Ankomstkommunenummer", "pii": false },
+        { "name": "to_municipality_name",    "type": "string",  "nullable": true,  "description": "Ankomstkommunenavn", "pii": false },
+        { "name": "to_county",               "type": "string",  "nullable": true,  "description": "Ankomstfylke", "pii": false },
+        { "name": "reference_year",          "type": "integer", "nullable": false, "description": "Innflyttingsår", "pii": false },
+        { "name": "flow_count",              "type": "long",    "nullable": false, "description": "Antall personer som har gjort flyten A→B i referanseåret", "pii": false },
+        { "name": "return_flow_count",       "type": "long",    "nullable": false, "description": "Antall som har gjort returreisen B→A i referanseåret", "pii": false },
+        { "name": "net_flow",                "type": "long",    "nullable": false, "description": "flow_count − return_flow_count", "pii": false },
+        { "name": "_updated_at",             "type": "timestamp","nullable": false, "description": "Sist oppdatert av Gold-jobben", "pii": false }
+      ]
+    }
+  folkeregister.person_events.json: |
+    {
+      "id": "folkeregister.person_events",
+      "name": "Folkeregister — Personhendelser (IDP)",
+      "domain": "folkeregister",
+      "owner": "folkeregister-team",
+      "version": "1.0.0",
+      "description": "Input Data Product (IDP) som konsumerer personhendelser fra Folkeregisteret via Kafka. Inneholder alle livshendelser for enkeltpersoner: registrering, fødsel, død og flytting. fnr er SHA-256-hashet (fnr_hash) — originalt fødselsnummer lagres aldri. Bruk person_id (UUID) som nøkkel nedstrøms.",
+      "source_path": "s3://bronze/folkeregister/person_events",
+      "format": "delta",
+      "primary_key": "event_id",
+      "dag_id": "folkeregister_idp",
+      "product_type": "source",
+      "access": "restricted",
+      "quality_sla": {
+        "max_null_rate": 0.01,
+        "freshness_hours": 1
+      },
+      "tags": ["folkeregister", "pii", "streaming", "kafka", "idp", "bronze"],
+      "contract": {
+        "slo": {
+          "freshness_hours": 1,
+          "completeness_pct": 99
+        },
+        "schema_compatibility": "BACKWARD",
+        "guaranteed_columns": [
+          "event_id",
+          "event_type",
+          "event_timestamp",
+          "person_id",
+          "kafka_topic",
+          "kafka_timestamp",
+          "_processed_at"
+        ]
+      },
+      "schema": [
+        {
+          "name": "event_id",
+          "type": "string",
+          "nullable": false,
+          "description": "Unik hendelse-ID (UUID fra kildesystemet)",
+          "pii": false
+        },
+        {
+          "name": "event_type",
+          "type": "string",
+          "nullable": false,
+          "description": "Hendelsestype: PersonRegistrert | PersonFødt | PersonDød | PersonFlyttet",
+          "pii": false
+        },
+        {
+          "name": "event_timestamp",
+          "type": "string",
+          "nullable": true,
+          "description": "Tidspunkt hendelsen inntraff (ISO 8601, fra kildesystemet)",
+          "pii": false
+        },
+        {
+          "name": "person_id",
+          "type": "string",
+          "nullable": true,
+          "description": "Intern UUID for personen — nøkkel nedstrøms i Silver og Gold",
+          "pii": false
+        },
+        {
+          "name": "fnr_hash",
+          "type": "string",
+          "nullable": true,
+          "description": "SHA-256 hash av fødselsnummer. Original fnr slettes i Bronze-laget og lagres aldri.",
+          "pii": false,
+          "sensitivity": "medium"
+        },
+        {
+          "name": "first_name",
+          "type": "string",
+          "nullable": true,
+          "description": "Fornavn — kun til stede ved PersonRegistrert og PersonFødt",
+          "pii": true,
+          "sensitivity": "high"
+        },
+        {
+          "name": "last_name",
+          "type": "string",
+          "nullable": true,
+          "description": "Etternavn — kun til stede ved PersonRegistrert og PersonFødt",
+          "pii": true,
+          "sensitivity": "high"
+        },
+        {
+          "name": "birth_date",
+          "type": "string",
+          "nullable": true,
+          "description": "Fødselsdato (ISO 8601 dato-streng) — til stede ved PersonRegistrert og PersonFødt",
+          "pii": true,
+          "sensitivity": "high"
+        },
+        {
+          "name": "gender",
+          "type": "string",
+          "nullable": true,
+          "description": "Kjønn (M/F/X) — til stede ved PersonRegistrert og PersonFødt",
+          "pii": false,
+          "sensitivity": "low"
+        },
+        {
+          "name": "mother_id",
+          "type": "string",
+          "nullable": true,
+          "description": "person_id for mor — kun til stede ved PersonFødt",
+          "pii": false
+        },
+        {
+          "name": "father_id",
+          "type": "string",
+          "nullable": true,
+          "description": "person_id for far — kun til stede ved PersonFødt",
+          "pii": false
+        },
+        {
+          "name": "death_date",
+          "type": "string",
+          "nullable": true,
+          "description": "Dødsdato (ISO 8601) — kun til stede ved PersonDød",
+          "pii": false,
+          "sensitivity": "medium"
+        },
+        {
+          "name": "death_cause_category",
+          "type": "string",
+          "nullable": true,
+          "description": "Kategorisert dødsårsak (naturlig/ulykke/sykdom/...) — kun til stede ved PersonDød",
+          "pii": false,
+          "sensitivity": "medium"
+        },
+        {
+          "name": "municipality_code",
+          "type": "string",
+          "nullable": true,
+          "description": "Kommunenummer (4 siffer, SSB-standard) — kun til stede ved PersonFlyttet",
+          "pii": false
+        },
+        {
+          "name": "municipality_name",
+          "type": "string",
+          "nullable": true,
+          "description": "Kommunenavn — kun til stede ved PersonFlyttet",
+          "pii": false
+        },
+        {
+          "name": "county",
+          "type": "string",
+          "nullable": true,
+          "description": "Fylkesnavn — kun til stede ved PersonFlyttet",
+          "pii": false
+        },
+        {
+          "name": "kafka_topic",
+          "type": "string",
+          "nullable": false,
+          "description": "Kafka-topic meldingen kom fra (person.registered | person.born | person.died | person.moved)",
+          "pii": false
+        },
+        {
+          "name": "kafka_partition",
+          "type": "integer",
+          "nullable": false,
+          "description": "Kafka-partisjon (for debugging og replay)",
+          "pii": false
+        },
+        {
+          "name": "kafka_offset",
+          "type": "long",
+          "nullable": false,
+          "description": "Kafka-offset (for eksakt reprosessering)",
+          "pii": false
+        },
+        {
+          "name": "kafka_timestamp",
+          "type": "timestamp",
+          "nullable": false,
+          "description": "Kafka broker-tidsstempel for meldingen",
+          "pii": false
+        },
+        {
+          "name": "_processed_at",
+          "type": "timestamp",
+          "nullable": false,
+          "description": "Tidspunkt Spark-jobben prosesserte og skrev hendelsen til Bronze",
+          "pii": false
+        },
+        {
+          "name": "_source_topics",
+          "type": "string",
+          "nullable": false,
+          "description": "Kommaseparert liste over topics jobben abonnerte på",
+          "pii": false
+        },
+        {
+          "name": "event_date",
+          "type": "date",
+          "nullable": true,
+          "description": "Dato-partisjoneringskolonne (avledet fra event_timestamp eller kafka_timestamp)",
+          "pii": false
+        }
+      ]
+    }
+  folkeregister.person_registry.json: |
+    {
+      "id":           "folkeregister.person_registry",
+      "name":         "Folkeregister — Personregister (SCD2)",
+      "domain":       "folkeregister",
+      "owner":        "folkeregister-team",
+      "version":      "1.0.0",
+      "description":  "Autoritativt personregister med fullstendig historikk via SCD Type 2. Bevarer alle tilstandsendringer for navn, adresse, sivilstatus og vitalstatus. Én gjeldende rad per person (is_current=true) pluss historiske rader. Primærnøkkel nedstrøms: person_id.",
+      "source_path":  "s3://silver/folkeregister/person_registry",
+      "format":       "delta",
+      "primary_key":  "person_id",
+      "dag_id":       "folkeregister_silver",
+      "product_type": "derived",
+      "access":       "restricted",
+      "quality_sla": {
+        "max_null_rate":   0.01,
+        "freshness_hours": 25
+      },
+      "tags": ["folkeregister", "pii", "silver", "scd2", "personregister"],
+      "contract": {
+        "slo": {
+          "freshness_hours":    25,
+          "completeness_pct":   99
+        },
+        "schema_compatibility": "BACKWARD",
+        "guaranteed_columns": [
+          "person_id", "fnr_hash", "first_name", "last_name",
+          "birth_date", "gender", "civil_status", "is_alive",
+          "municipality_code", "municipality_name", "county",
+          "valid_from", "valid_to", "is_current"
+        ]
+      },
+      "schema": [
+        { "name": "person_id",          "type": "string",    "nullable": false, "description": "Intern UUID — nøkkel på tvers av alle folkeregister-produkter", "pii": false },
+        { "name": "fnr_hash",           "type": "string",    "nullable": true,  "description": "SHA-256 hash av fødselsnummer", "pii": false, "sensitivity": "medium" },
+        { "name": "first_name",         "type": "string",    "nullable": true,  "description": "Fornavn", "pii": true, "sensitivity": "high" },
+        { "name": "last_name",          "type": "string",    "nullable": true,  "description": "Etternavn", "pii": true, "sensitivity": "high" },
+        { "name": "birth_date",         "type": "date",      "nullable": true,  "description": "Fødselsdato", "pii": true, "sensitivity": "high" },
+        { "name": "gender",             "type": "string",    "nullable": true,  "description": "Kjønn (M/F/X)", "pii": false, "sensitivity": "low" },
+        { "name": "mother_id",          "type": "string",    "nullable": true,  "description": "person_id for mor", "pii": false },
+        { "name": "father_id",          "type": "string",    "nullable": true,  "description": "person_id for far", "pii": false },
+        { "name": "municipality_code",  "type": "string",    "nullable": true,  "description": "Bostedskommunenummer (SSB 4 siffer)", "pii": false },
+        { "name": "municipality_name",  "type": "string",    "nullable": true,  "description": "Bostedskommunenavn", "pii": false },
+        { "name": "county",             "type": "string",    "nullable": true,  "description": "Bostedsfylke", "pii": false },
+        { "name": "civil_status",       "type": "string",    "nullable": false, "description": "Sivilstatus: UGIFT | GIFT | SKILT | ENKE_ENKEMANN", "pii": false },
+        { "name": "is_alive",           "type": "boolean",   "nullable": false, "description": "True hvis personen er i live", "pii": false },
+        { "name": "death_date",         "type": "date",      "nullable": true,  "description": "Dødsdato (null hvis i live)", "pii": false, "sensitivity": "medium" },
+        { "name": "change_event_type",  "type": "string",    "nullable": false, "description": "Hendelsestype som utløste denne SCD2-raden", "pii": false },
+        { "name": "valid_from",         "type": "timestamp", "nullable": false, "description": "Tidspunkt denne raden ble gyldig", "pii": false },
+        { "name": "valid_to",           "type": "timestamp", "nullable": true,  "description": "Tidspunkt raden ble ugyldig (null = gjeldende)", "pii": false },
+        { "name": "is_current",         "type": "boolean",   "nullable": false, "description": "True = gjeldende tilstand for personen", "pii": false },
+        { "name": "_updated_at",        "type": "timestamp", "nullable": false, "description": "Sist oppdatert av Silver-jobben", "pii": false }
+      ]
+    }
+  folkeregister.population_stats.json: |
+    {
+      "id":           "folkeregister.population_stats",
+      "name":         "Folkeregister — Befolkningsstatistikk per kommune og år",
+      "domain":       "folkeregister",
+      "owner":        "folkeregister-team",
+      "version":      "1.0.0",
+      "description":  "Aggregert befolkningsstatistikk per kommune og referanseår uten PII. Viser totalt antall bosatte, kjønnsfordeling, gjennomsnittsalder, fødsler og dødsfall. Basert på SCD2-årssluttsnapshots fra person_registry.",
+      "source_path":  "s3://gold/folkeregister/population_stats",
+      "format":       "delta",
+      "primary_key":  "municipality_code,reference_year",
+      "dag_id":       "folkeregister_gold",
+      "product_type": "aggregate",
+      "access":       "public",
+      "quality_sla": {
+        "max_null_rate":   0.05,
+        "freshness_hours": 26
+      },
+      "tags": ["folkeregister", "gold", "befolkning", "geografi", "statistikk", "offentlig"],
+      "contract": {
+        "slo": {
+          "freshness_hours":    26,
+          "completeness_pct":   95
+        },
+        "schema_compatibility": "BACKWARD",
+        "guaranteed_columns": [
+          "municipality_code", "municipality_name", "county",
+          "reference_year", "population_total", "population_male", "population_female"
+        ]
+      },
+      "schema": [
+        { "name": "municipality_code",   "type": "string",  "nullable": false, "description": "Kommunenummer (SSB 4 siffer)", "pii": false },
+        { "name": "municipality_name",   "type": "string",  "nullable": true,  "description": "Kommunenavn", "pii": false },
+        { "name": "county",              "type": "string",  "nullable": true,  "description": "Fylkesnavn", "pii": false },
+        { "name": "reference_year",      "type": "integer", "nullable": false, "description": "Statistikkår (årslutt-snapshot)", "pii": false },
+        { "name": "population_total",    "type": "long",    "nullable": false, "description": "Totalt antall bosatte ved årslutt", "pii": false },
+        { "name": "population_male",     "type": "long",    "nullable": true,  "description": "Antall menn bosatte", "pii": false },
+        { "name": "population_female",   "type": "long",    "nullable": true,  "description": "Antall kvinner bosatte", "pii": false },
+        { "name": "avg_age",             "type": "double",  "nullable": true,  "description": "Gjennomsnittsalder for bosatte ved årslutt", "pii": false },
+        { "name": "births",              "type": "long",    "nullable": false, "description": "Antall fødte registrert i referanseåret", "pii": false },
+        { "name": "deaths",              "type": "long",    "nullable": false, "description": "Antall døde registrert i referanseåret", "pii": false },
+        { "name": "_updated_at",         "type": "timestamp","nullable": false, "description": "Sist oppdatert av Gold-jobben", "pii": false }
+      ]
+    }
+  folkeregister.residence_history.json: |
+    {
+      "id":           "folkeregister.residence_history",
+      "name":         "Folkeregister — Bostedshistorikk",
+      "domain":       "folkeregister",
+      "owner":        "folkeregister-team",
+      "version":      "1.0.0",
+      "description":  "Kronologisk bostedshistorikk per person. Én rad per kommuneopphold — fra innflyttingsdato til utflyttingsdato. Gjeldende bosted har moved_out_date=null og is_current=true. Egnet for migrasjonsanalyse, pendlerstatistikk og befolkningsutvikling per kommune.",
+      "source_path":  "s3://silver/folkeregister/residence_history",
+      "format":       "delta",
+      "primary_key":  "person_id",
+      "dag_id":       "folkeregister_silver",
+      "product_type": "derived",
+      "access":       "restricted",
+      "quality_sla": {
+        "max_null_rate":   0.01,
+        "freshness_hours": 25
+      },
+      "tags": ["folkeregister", "pii", "silver", "bosted", "migrasjon", "geografi"],
+      "contract": {
+        "slo": {
+          "freshness_hours":    25,
+          "completeness_pct":   99
+        },
+        "schema_compatibility": "BACKWARD",
+        "guaranteed_columns": [
+          "person_id", "municipality_code", "municipality_name", "county",
+          "moved_in_date", "is_current"
+        ]
+      },
+      "schema": [
+        { "name": "person_id",          "type": "string",  "nullable": false, "description": "Intern UUID — kobler til person_registry", "pii": false },
+        { "name": "municipality_code",  "type": "string",  "nullable": false, "description": "Kommunenummer (SSB 4 siffer)", "pii": false },
+        { "name": "municipality_name",  "type": "string",  "nullable": true,  "description": "Kommunenavn", "pii": false },
+        { "name": "county",             "type": "string",  "nullable": true,  "description": "Fylkesnavn", "pii": false },
+        { "name": "moved_in_date",      "type": "date",    "nullable": false, "description": "Dato personen flyttet til kommunen", "pii": false },
+        { "name": "moved_out_date",     "type": "date",    "nullable": true,  "description": "Dato personen flyttet ut (null = gjeldende bosted)", "pii": false },
+        { "name": "is_current",         "type": "boolean", "nullable": false, "description": "True = gjeldende bosted", "pii": false },
+        { "name": "duration_days",      "type": "integer", "nullable": true,  "description": "Antall dager i kommunen (null for gjeldende bosted)", "pii": false },
+        { "name": "change_event_type",  "type": "string",  "nullable": false, "description": "Kildehendelse: PersonRegistrert | PersonFødt | PersonFlyttet", "pii": false },
+        { "name": "_updated_at",        "type": "timestamp","nullable": false, "description": "Sist oppdatert av Silver-jobben", "pii": false }
+      ]
     }
   hr_department_stats.json: |
     {
@@ -55,37 +735,26 @@ data:
       "access": "public",
       "tags": ["hr", "aggregated", "department", "salary"]
     }
-  folkeregister.person_events.json: |
+  hr_employees.json: |
     {
-      "id": "folkeregister.person_events",
-      "name": "Folkeregister — Personhendelser (IDP)",
-      "domain": "folkeregister",
-      "owner": "folkeregister-team",
-      "version": "1.0.0",
-      "description": "Input Data Product (IDP) som konsumerer personhendelser fra Folkeregisteret via Kafka.",
-      "source_path": "s3://bronze/folkeregister/person_events",
-      "format": "delta",
-      "primary_key": "event_id",
-      "dag_id": "folkeregister_idp",
-      "product_type": "source",
+      "id":          "hr.employees",
+      "name":        "Employees",
+      "domain":      "hr",
+      "owner":       "hr-team",
+      "version":     "1.0.0",
+      "description": "Alle aktive ansatte med stilling, avdeling, lønn og ansettelsesdato. Oppdateres daglig fra kildesystemet via Bronze → Silver pipeline.",
+      "source_path": "s3://silver/hr/employees",
+      "format":      "delta",
+      "primary_key": "id",
+      "dag_id":      "01_slettix_pipeline",
+      "quality_sla": {
+        "max_null_rate":    0.0,
+        "freshness_hours":  25
+      },
       "access": "restricted",
-      "quality_sla": { "max_null_rate": 0.01, "freshness_hours": 1 },
-      "tags": ["folkeregister", "pii", "streaming", "kafka", "idp", "bronze"]
+      "tags": ["hr", "pii", "employees", "salary"]
     }
-  folkeregister.family_events.json: |
-    {
-      "id": "folkeregister.family_events",
-      "name": "Folkeregister — Familiehendelser (IDP)",
-      "domain": "folkeregister",
-      "owner": "folkeregister-team",
-      "version": "1.0.0",
-      "description": "Input Data Product (IDP) som konsumerer familiehendelser fra Folkeregisteret via Kafka.",
-      "source_path": "s3://bronze/folkeregister/family_events",
-      "format": "delta",
-      "primary_key": "event_id",
-      "dag_id": "folkeregister_idp",
-      "product_type": "source",
-      "access": "restricted",
-      "quality_sla": { "max_null_rate": 0.01, "freshness_hours": 1 },
-      "tags": ["folkeregister", "pii", "streaming", "kafka", "idp", "bronze"]
-    }
+kind: ConfigMap
+metadata:
+  name: product-manifests
+  namespace: slettix-analytics

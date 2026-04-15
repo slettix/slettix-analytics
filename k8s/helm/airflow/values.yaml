@@ -159,6 +159,9 @@ webserver:
       mountPath: /opt/airflow/dags/folkeregister_silver.py
       subPath: folkeregister_silver.py
     - name: dags-cm
+      mountPath: /opt/airflow/dags/folkeregister_gold.py
+      subPath: folkeregister_gold.py
+    - name: dags-cm
       mountPath: /opt/airflow/dags/governance_retention.py
       subPath: governance_retention.py
 
@@ -194,6 +197,9 @@ scheduler:
     - name: dags-cm
       mountPath: /opt/airflow/dags/folkeregister_silver.py
       subPath: folkeregister_silver.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/folkeregister_gold.py
+      subPath: folkeregister_gold.py
     - name: dags-cm
       mountPath: /opt/airflow/dags/governance_retention.py
       subPath: governance_retention.py
@@ -233,6 +239,9 @@ workers:
       mountPath: /opt/airflow/dags/folkeregister_silver.py
       subPath: folkeregister_silver.py
     - name: dags-cm
+      mountPath: /opt/airflow/dags/folkeregister_gold.py
+      subPath: folkeregister_gold.py
+    - name: dags-cm
       mountPath: /opt/airflow/dags/governance_retention.py
       subPath: governance_retention.py
     - name: jobs-cm
@@ -269,6 +278,9 @@ triggerer:
     - name: dags-cm
       mountPath: /opt/airflow/dags/folkeregister_silver.py
       subPath: folkeregister_silver.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/folkeregister_gold.py
+      subPath: folkeregister_gold.py
     - name: dags-cm
       mountPath: /opt/airflow/dags/governance_retention.py
       subPath: governance_retention.py
