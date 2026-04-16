@@ -77,6 +77,10 @@ spec:
               readOnly: true
             - name: notebooks
               mountPath: /home/spark/notebooks
+            - name: pylibs
+              mountPath: /usr/local/lib/python3.10/dist-packages/slettix_client.py
+              subPath: slettix_client.py
+              readOnly: true
           resources:
             requests:
               cpu: 200m
@@ -103,3 +107,6 @@ spec:
         - name: notebooks
           persistentVolumeClaim:
             claimName: jupyter-notebooks
+        - name: pylibs
+          configMap:
+            name: jupyter-pylibs

@@ -30,6 +30,9 @@ ENV HOME=/home/spark
 
 RUN mkdir -p /home/spark/notebooks && chown -R spark /home/spark
 
+# Legg slettix_client.py i PYTHONPATH slik at notebooks alltid kan importere den
+COPY jobs/slettix_client.py /usr/local/lib/python3.11/slettix_client.py
+
 EXPOSE 8888
 
 WORKDIR /home/spark/notebooks
