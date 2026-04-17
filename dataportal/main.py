@@ -9,6 +9,7 @@ API (JSON):
   GET  /api/products/{id}/pipeline     — siste DAG-kjøring fra Airflow
   GET  /api/products/{id}/quality      — siste GE-valideringsresultat
   GET  /api/products/{id}/sla          — SLA-ferskhets-status
+  GET  /api/products/{id}/sla/history  — SLA-historikk (siste 30 dager) og MTTR
   GET  /api/products/{id}/versions     — versjonshistorikk med diff
   GET  /api/products/{id}/lineage      — upstream/downstream lineage-graf
   GET  /api/browser                    — naviger MinIO og detekter Delta-tabeller
@@ -205,6 +206,78 @@ def _safe_sla(product_id: str) -> dict | None:
         return json.loads(obj["Body"].read())
     except Exception:
         return None
+
+
+def _safe_sla_history(product_id: str, limit: int = 60) -> list[dict]:
+    """Les tidsserie av SLA-resultater fra MinIO history/-mappe."""
+    try:
+        s3   = _s3_client()
+        resp = s3.list_objects_v2(
+            Bucket="gold",
+            Prefix=f"sla_results/{product_id}/history/",
+        )
+        keys = sorted(
+            [o["Key"] for o in resp.get("Contents", [])],
+            reverse=True,
+        )[:limit]
+        result = []
+        for key in keys:
+            try:
+                obj = s3.get_object(Bucket="gold", Key=key)
+                result.append(json.loads(obj["Body"].read()))
+            except Exception:
+                pass
+        return list(reversed(result))  # kronologisk rekkefølge
+    except Exception:
+        return []
+
+
+def _sla_compliance_pct(product_id: str, days: int = 30) -> float | None:
+    """Beregn SLA-overholdelse i prosent siste N dager fra historikk."""
+    history = _safe_sla_history(product_id, limit=days * 48)  # maks 48 sjekker/dag
+    if not history:
+        return None
+    cutoff = datetime.now(tz=timezone.utc) - timedelta(days=days)
+    relevant = []
+    for entry in history:
+        try:
+            checked_at = datetime.fromisoformat(entry["checked_at"])
+            if checked_at >= cutoff:
+                relevant.append(entry)
+        except Exception:
+            pass
+    if not relevant:
+        return None
+    compliant_count = sum(1 for e in relevant if e.get("compliant") is True)
+    return round(compliant_count / len(relevant) * 100, 1)
+
+
+def _mttr(product_id: str) -> float | None:
+    """Beregn Mean Time To Resolve (timer) for løste incidents på produktet."""
+    incidents = auth.list_incidents(product_id=product_id)
+    resolved = [
+        i for i in incidents
+        if i.get("status") == "resolved"
+        and i.get("created_at")
+        and i.get("resolved_at")
+    ]
+    if not resolved:
+        return None
+    total_hours = 0.0
+    count = 0
+    for inc in resolved:
+        try:
+            created  = datetime.fromisoformat(inc["created_at"])
+            resolved_at = datetime.fromisoformat(inc["resolved_at"])
+            hours = (resolved_at - created).total_seconds() / 3600
+            if hours >= 0:
+                total_hours += hours
+                count += 1
+        except Exception:
+            pass
+    if count == 0:
+        return None
+    return round(total_hours / count, 1)
 
 
 def _compute_sla_live(manifest: dict) -> dict:
@@ -2159,6 +2232,22 @@ def api_get_sla(product_id: str, request: Request, api_key: str | None = Securit
     return result
 
 
+@app.get("/api/products/{product_id}/sla/history", tags=["products"], summary="SLA-historikk og MTTR")
+def api_get_sla_history(product_id: str, request: Request, api_key: str | None = Security(_api_key_scheme)):
+    manifest = _resolve_product(product_id)
+    user     = auth.get_current_user(request)
+    _require_access(manifest, user, api_key)
+    history        = _safe_sla_history(product_id)
+    compliance_pct = _sla_compliance_pct(product_id)
+    mttr           = _mttr(product_id)
+    return {
+        "product_id":     product_id,
+        "history":        history,
+        "compliance_pct": compliance_pct,
+        "mttr_hours":     mttr,
+    }
+
+
 @app.get("/api/products/{product_id}/lineage", tags=["products"], summary="Datalineage — upstream og downstream")
 def api_get_lineage(product_id: str, request: Request, api_key: str | None = Security(_api_key_scheme)):
     """
@@ -2835,6 +2924,8 @@ def page_product(request: Request, product_id: str):
     quality_history = _safe_quality_history(product_id) if has_access else []
     pipeline = _safe_pipeline(manifest.get("dag_id"))
     sla      = (_safe_sla(product_id) or _compute_sla_live(manifest)) if has_access else None
+    sla_compliance_pct = _sla_compliance_pct(product_id) if has_access else None
+    mttr_hours         = _mttr(product_id) if has_access else None
 
     # Sjekk om brukeren allerede har en pending forespørsel
     pending_request = False
@@ -2901,6 +2992,8 @@ def page_product(request: Request, product_id: str):
         quality_history=quality_history,
         related=related,
         views=views,
+        sla_compliance_pct=sla_compliance_pct,
+        mttr_hours=mttr_hours,
     ))
 
 

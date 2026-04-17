@@ -649,14 +649,33 @@ FROM delta_scan('{{ manifest.source_path }}');</pre>
           </p>
           {% endif %}
           {% if sla.freshness_hours %}
-          <p class="mb-0 small"><span class="text-muted">Krav:</span>
+          <p class="mb-1 small"><span class="text-muted">Krav:</span>
             maks {{ sla.freshness_hours }}t siden oppdatering
           </p>
           {% endif %}
         {% elif manifest.quality_sla %}
-          <p class="text-muted mb-0 small"><i class="bi bi-hourglass me-1"></i>SLA-sjekk ikke kjørt ennå.</p>
+          <p class="text-muted mb-1 small"><i class="bi bi-hourglass me-1"></i>SLA-sjekk ikke kjørt ennå.</p>
         {% else %}
           <p class="text-muted mb-0 small">Ingen SLA definert for dette produktet.</p>
+        {% endif %}
+        {% if sla_compliance_pct is not none or mttr_hours is not none %}
+        <hr class="my-2">
+        <div class="row g-2 text-center">
+          {% if sla_compliance_pct is not none %}
+          <div class="col-6">
+            <div class="small text-muted">Overholdelse (30 dager)</div>
+            <div class="fw-semibold {% if sla_compliance_pct >= 99 %}text-success{% elif sla_compliance_pct >= 90 %}text-warning{% else %}text-danger{% endif %}">
+              {{ sla_compliance_pct }}%
+            </div>
+          </div>
+          {% endif %}
+          {% if mttr_hours is not none %}
+          <div class="col-6">
+            <div class="small text-muted">MTTR</div>
+            <div class="fw-semibold">{{ mttr_hours }}t</div>
+          </div>
+          {% endif %}
+        </div>
         {% endif %}
       </div>
     </div>

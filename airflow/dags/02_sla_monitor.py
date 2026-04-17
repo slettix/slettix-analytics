@@ -124,11 +124,19 @@ def check_sla(**context):
         else:
             log.info(f"  ✓ {product_id}: {hours_since:.1f}t siden oppdatering (SLA: {freshness_hours}t)")
 
+        ts_key = now.strftime("%Y%m%dT%H%M%S")
         try:
+            body = json.dumps(result, indent=2).encode()
             s3.put_object(
                 Bucket="gold",
                 Key=f"sla_results/{product_id}/latest.json",
-                Body=json.dumps(result, indent=2).encode(),
+                Body=body,
+                ContentType="application/json",
+            )
+            s3.put_object(
+                Bucket="gold",
+                Key=f"sla_results/{product_id}/history/{ts_key}.json",
+                Body=body,
                 ContentType="application/json",
             )
         except Exception as exc:
