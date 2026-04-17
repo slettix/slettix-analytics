@@ -132,6 +132,7 @@ def get_sla(product_id: str, api_key: str | None = None) -> dict:
 
     Returns:
         Dict med feltene: compliant, last_updated, hours_since_update, freshness_hours.
+        Returnerer {} hvis ingen SLA-sjekk er kjørt ennå.
     """
     resp = requests.get(
         f"{PORTAL_URL}/api/products/{product_id}/sla",
@@ -140,12 +141,19 @@ def get_sla(product_id: str, api_key: str | None = None) -> dict:
     )
     if resp.status_code == 403:
         raise PermissionError(f"Ingen tilgang til '{product_id}'.")
+    if resp.status_code == 404:
+        return {}
     resp.raise_for_status()
     return resp.json()
 
 
 def get_quality(product_id: str, api_key: str | None = None) -> dict:
-    """Hent siste GE-valideringsresultat for et dataprodukt."""
+    """
+    Hent siste GE-valideringsresultat for et dataprodukt.
+
+    Returns:
+        Dict med kvalitetsresultat, eller {} hvis ingen sjekk er kjørt ennå.
+    """
     resp = requests.get(
         f"{PORTAL_URL}/api/products/{product_id}/quality",
         headers=_headers(api_key),
@@ -153,6 +161,8 @@ def get_quality(product_id: str, api_key: str | None = None) -> dict:
     )
     if resp.status_code == 403:
         raise PermissionError(f"Ingen tilgang til '{product_id}'.")
+    if resp.status_code == 404:
+        return {}
     resp.raise_for_status()
     return resp.json()
 
