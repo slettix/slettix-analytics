@@ -164,6 +164,9 @@ webserver:
     - name: dags-cm
       mountPath: /opt/airflow/dags/governance_retention.py
       subPath: governance_retention.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/folkeregister_seed.py
+      subPath: folkeregister_seed.py
 
 # ── Scheduler ─────────────────────────────────────────────────────────────────
 scheduler:
@@ -203,6 +206,9 @@ scheduler:
     - name: dags-cm
       mountPath: /opt/airflow/dags/governance_retention.py
       subPath: governance_retention.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/folkeregister_seed.py
+      subPath: folkeregister_seed.py
     - name: jobs-cm
       mountPath: /opt/airflow/jobs
       readOnly: true
@@ -244,6 +250,9 @@ workers:
     - name: dags-cm
       mountPath: /opt/airflow/dags/governance_retention.py
       subPath: governance_retention.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/folkeregister_seed.py
+      subPath: folkeregister_seed.py
     - name: jobs-cm
       mountPath: /opt/airflow/jobs
       readOnly: true
@@ -284,6 +293,9 @@ triggerer:
     - name: dags-cm
       mountPath: /opt/airflow/dags/governance_retention.py
       subPath: governance_retention.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/folkeregister_seed.py
+      subPath: folkeregister_seed.py
 
 # ── Labels ────────────────────────────────────────────────────────────────────
 labels:

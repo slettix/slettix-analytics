@@ -9,7 +9,7 @@
   "format":       "delta",
   "primary_key":  "birth_decade,gender",
   "dag_id":       "folkeregister_gold",
-  "product_type": "aggregate",
+  "product_type": "analytical",
   "access":       "public",
   "quality_sla": {
     "max_null_rate":   0.05,
@@ -26,6 +26,7 @@
       "birth_decade", "gender", "cohort_size", "alive_count", "survival_rate_pct"
     ]
   },
+  "source_products": ["folkeregister.person_registry", "folkeregister.residence_history"],
   "schema": [
     { "name": "birth_decade",               "type": "integer", "nullable": false, "description": "Fødselsdekade (f.eks. 1970 = født 1970–1979)", "pii": false },
     { "name": "gender",                     "type": "string",  "nullable": false, "description": "Kjønn (M / F / X / UKJENT)", "pii": false },
@@ -37,5 +38,49 @@
     { "name": "divorced_count",             "type": "long",    "nullable": false, "description": "Antall skilt (marital_status=SKILT) per kjøredato", "pii": false },
     { "name": "avg_municipality_changes",   "type": "double",  "nullable": true,  "description": "Gjennomsnittlig antall kommunebytter per person i kohorten", "pii": false },
     { "name": "_updated_at",                "type": "timestamp","nullable": false, "description": "Sist oppdatert av Gold-jobben", "pii": false }
+  ],
+  "column_lineage": [
+    {
+      "column": "birth_decade",
+      "sources": [{"product_id": "folkeregister.person_registry", "column": "birth_date"}],
+      "transformation": "FLOOR(YEAR(birth_date) / 10) * 10"
+    },
+    {
+      "column": "gender",
+      "sources": [{"product_id": "folkeregister.person_registry", "column": "gender"}]
+    },
+    {
+      "column": "cohort_size",
+      "sources": [{"product_id": "folkeregister.person_registry", "column": "person_id"}],
+      "transformation": "COUNT(*) per (birth_decade, gender)"
+    },
+    {
+      "column": "alive_count",
+      "sources": [{"product_id": "folkeregister.person_registry", "column": "is_alive"}],
+      "transformation": "COUNT(*) WHERE is_alive=true per (birth_decade, gender)"
+    },
+    {
+      "column": "survival_rate_pct",
+      "sources": [
+        {"product_id": "folkeregister.person_registry", "column": "is_alive"},
+        {"product_id": "folkeregister.person_registry", "column": "person_id"}
+      ],
+      "transformation": "alive_count / cohort_size * 100"
+    },
+    {
+      "column": "married_count",
+      "sources": [{"product_id": "folkeregister.person_registry", "column": "civil_status"}],
+      "transformation": "COUNT(*) WHERE civil_status='GIFT' AND is_alive=true"
+    },
+    {
+      "column": "divorced_count",
+      "sources": [{"product_id": "folkeregister.person_registry", "column": "civil_status"}],
+      "transformation": "COUNT(*) WHERE civil_status='SKILT' AND is_alive=true"
+    },
+    {
+      "column": "avg_municipality_changes",
+      "sources": [{"product_id": "folkeregister.residence_history", "column": "person_id"}],
+      "transformation": "AVG(COUNT(distinct municipality_code) - 1) per person i kohorten"
+    }
   ]
 }

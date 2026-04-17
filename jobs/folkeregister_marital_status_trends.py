@@ -46,16 +46,15 @@ log = get_logger("folkeregister_marital_status_trends")
 PERSON_REGISTRY_PATH = "s3a://silver/folkeregister/person_registry"
 TARGET_PATH          = "s3a://gold/folkeregister/marital_status_trends"
 
-AGE_GROUP_EXPR = (
-    F.when(F.col("age") < 18,  F.lit("0-17"))
-     .when(F.col("age") < 30,  F.lit("18-29"))
-     .when(F.col("age") < 45,  F.lit("30-44"))
-     .when(F.col("age") < 65,  F.lit("45-64"))
-     .otherwise(F.lit("65+"))
-)
-
-
 def build_marital_status_trends(spark: SparkSession) -> None:
+
+    age_group_expr = (
+        F.when(F.col("age") < 18,  F.lit("0-17"))
+         .when(F.col("age") < 30,  F.lit("18-29"))
+         .when(F.col("age") < 45,  F.lit("30-44"))
+         .when(F.col("age") < 65,  F.lit("45-64"))
+         .otherwise(F.lit("65+"))
+    )
 
     log.info("Leser Silver person_registry (alle rader) …")
     registry = spark.read.format("delta").load(PERSON_REGISTRY_PATH)
@@ -67,7 +66,7 @@ def build_marital_status_trends(spark: SparkSession) -> None:
         .withColumn("age", F.col("reference_year") - F.year("birth_date"))
         .filter(F.col("age") >= 0)          # fjern rader uten birth_date
         .filter(F.col("reference_year").isNotNull())
-        .withColumn("age_group", AGE_GROUP_EXPR)
+        .withColumn("age_group", age_group_expr)
         .withColumn("marital_status", F.coalesce(F.col("marital_status"), F.lit("UGIFT")))
     )
 

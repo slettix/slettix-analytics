@@ -116,7 +116,7 @@
       "name": "kafka_topic",
       "type": "string",
       "nullable": false,
-      "description": "Kafka-topic meldingen kom fra (family.married | family.divorced | family.child_born)",
+      "description": "Kafka-topic meldingen kom fra (folkeregister.family.married | folkeregister.family.divorced | folkeregister.family.child_born)",
       "pii": false
     },
     {
@@ -160,6 +160,66 @@
       "nullable": true,
       "description": "Dato-partisjoneringskolonne (avledet fra event_timestamp eller kafka_timestamp)",
       "pii": false
+    }
+  ],
+  "column_lineage": [
+    {
+      "column": "event_id",
+      "sources": [{"column": "eventId"}],
+      "transformation": "CloudEvent-konvolutt felt eventId. Kafka-topics: folkeregister.family.married, folkeregister.family.divorced, folkeregister.family.child_born"
+    },
+    {
+      "column": "event_type",
+      "sources": [{"column": "eventType"}],
+      "transformation": "CloudEvent-konvolutt felt eventType"
+    },
+    {
+      "column": "event_timestamp",
+      "sources": [{"column": "occurredAt"}],
+      "transformation": "CloudEvent-konvolutt felt occurredAt"
+    },
+    {
+      "column": "person_id_a",
+      "sources": [{"column": "payload.personId1"}],
+      "transformation": "Første part i relasjonen — til stede ved EkteskapInngått og EkteskapOppløst"
+    },
+    {
+      "column": "person_id_b",
+      "sources": [{"column": "payload.personId2"}],
+      "transformation": "Andre part i relasjonen — til stede ved EkteskapInngått og EkteskapOppløst"
+    },
+    {
+      "column": "child_id",
+      "sources": [{"column": "payload.childId"}],
+      "transformation": "Barnets person_id — til stede ved BarnFødt"
+    },
+    {
+      "column": "mother_id",
+      "sources": [{"column": "payload.parent1Id"}],
+      "transformation": "Mors person_id — til stede ved BarnFødt"
+    },
+    {
+      "column": "father_id",
+      "sources": [{"column": "payload.parent2Id"}],
+      "transformation": "Fars person_id — til stede ved BarnFødt"
+    },
+    {
+      "column": "marriage_date",
+      "sources": [{"column": "payload.marriageDate"}]
+    },
+    {
+      "column": "divorce_date",
+      "sources": [{"column": "payload.divorceDate"}]
+    },
+    {
+      "column": "kafka_topic",
+      "sources": [{"column": "kafka.topic"}],
+      "transformation": "Kafka-metadata, direkte fra Spark readStream"
+    },
+    {
+      "column": "kafka_timestamp",
+      "sources": [{"column": "kafka.timestamp"}],
+      "transformation": "Kafka broker-tidsstempel, direkte fra Spark readStream"
     }
   ]
 }

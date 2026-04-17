@@ -59,7 +59,7 @@ def _person_state_events(person_df: DataFrame) -> DataFrame:
         "person_id", "event_ts", "event_type",
         "fnr_hash", "first_name", "last_name",
         "birth_date", "gender", "mother_id", "father_id",
-        "municipality_code", "municipality_name", "county",
+        "street_address", "municipality_code", "municipality_name", "county",
         "death_date",
         F.lit(None).cast("string").alias("civil_status_change"),
     )
@@ -70,7 +70,7 @@ def _civil_status_events(family_df: DataFrame) -> DataFrame:
     _static = _nulls(
         "fnr_hash", "first_name", "last_name", "birth_date",
         "gender", "mother_id", "father_id",
-        "municipality_code", "municipality_name", "county", "death_date",
+        "street_address", "municipality_code", "municipality_name", "county", "death_date",
     )
 
     frames = []
@@ -105,6 +105,10 @@ def build_registry(spark: SparkSession) -> None:
             F.to_timestamp("event_timestamp"), F.col("kafka_timestamp"),
         ))
     )
+    # Bakoverkompatibel: legg til street_address som null hvis kolonnen mangler
+    # (Bronze-tabellen har gammelt skjema inntil IDP re-kjøres med ny kode)
+    if "street_address" not in person_df.columns:
+        person_df = person_df.withColumn("street_address", F.lit(None).cast("string"))
 
     try:
         log.info("Leser Bronze family_events …")
@@ -139,6 +143,7 @@ def build_registry(spark: SparkSession) -> None:
         ("gender",             "gender"),
         ("mother_id",          "mother_id"),
         ("father_id",          "father_id"),
+        ("street_address",     "street_address"),
         ("municipality_code",  "municipality_code"),
         ("municipality_name",  "municipality_name"),
         ("county",             "county"),
@@ -176,6 +181,7 @@ def build_registry(spark: SparkSession) -> None:
         F.col("_s_gender").alias("gender"),
         F.col("_s_mother_id").alias("mother_id"),
         F.col("_s_father_id").alias("father_id"),
+        F.col("_s_street_address").alias("street_address"),
         F.col("_s_municipality_code").alias("municipality_code"),
         F.col("_s_municipality_name").alias("municipality_name"),
         F.col("_s_county").alias("county"),
@@ -222,7 +228,7 @@ def build_registry(spark: SparkSession) -> None:
             )
             .whenMatchedUpdateAll()
             .whenNotMatchedInsertAll()
-            .whenNotMatchedBySourceDeleteAll()
+            .whenNotMatchedBySourceDelete()
             .execute()
         )
     log.info("Done.")

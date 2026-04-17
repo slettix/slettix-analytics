@@ -118,6 +118,12 @@
                 <span class="status-dot bg-secondary flex-shrink-0" title="Ukjent status"></span>
               {% endif %}
               <span class="badge bg-secondary">{{ p.domain }}</span>
+              {% if p.access == "restricted" %}
+              <span class="badge bg-warning text-dark" title="Begrenset tilgang — krever API-nøkkel"><i class="bi bi-lock-fill me-1"></i>Begrenset</span>
+              {% endif %}
+              {% if "pii" in (p.tags or []) %}
+              <span class="badge bg-danger" title="Inneholder personopplysninger (PII)"><i class="bi bi-person-fill-exclamation me-1"></i>PII</span>
+              {% endif %}
               <span class="text-muted small"><i class="bi bi-person me-1"></i>{{ p.owner }}</span>
             </div>
             {% if p.description %}
@@ -218,6 +224,12 @@
             </div>
             <div class="mb-2">
               <span class="badge bg-secondary me-1">{{ p.domain }}</span>
+              {% if p.access == "restricted" %}
+              <span class="badge bg-warning text-dark" title="Begrenset tilgang — krever API-nøkkel"><i class="bi bi-lock-fill me-1"></i>Begrenset</span>
+              {% endif %}
+              {% if "pii" in (p.tags or []) %}
+              <span class="badge bg-danger" title="Inneholder personopplysninger (PII)"><i class="bi bi-person-fill-exclamation me-1"></i>PII</span>
+              {% endif %}
               <span class="text-muted small"><i class="bi bi-person me-1"></i>{{ p.owner }}</span>
             </div>
             {% if p.description %}

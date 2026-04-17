@@ -9,7 +9,7 @@
   "format":       "delta",
   "primary_key":  "relation_id",
   "dag_id":       "folkeregister_silver",
-  "product_type": "derived",
+  "product_type": "analytical",
   "access":       "restricted",
   "quality_sla": {
     "max_null_rate":   0.0,
@@ -27,6 +27,7 @@
       "relation_type", "valid_from", "is_current"
     ]
   },
+  "source_products": ["folkeregister.family_events"],
   "schema": [
     { "name": "relation_id",       "type": "string",    "nullable": false, "description": "Unik kant-ID (person_id_a_person_id_b_timestamp)", "pii": false },
     { "name": "person_id_a",       "type": "string",    "nullable": false, "description": "Første person i relasjonen", "pii": false },
@@ -37,5 +38,44 @@
     { "name": "valid_to",          "type": "timestamp", "nullable": true,  "description": "Tidspunkt relasjonen ble avsluttet (null = aktiv)", "pii": false },
     { "name": "is_current",        "type": "boolean",   "nullable": false, "description": "True = aktiv relasjon", "pii": false },
     { "name": "_updated_at",       "type": "timestamp", "nullable": false, "description": "Sist oppdatert av Silver-jobben", "pii": false }
+  ],
+  "column_lineage": [
+    {
+      "column": "relation_id",
+      "sources": [
+        {"product_id": "folkeregister.family_events", "column": "event_id"}
+      ],
+      "transformation": "Syntetisk nøkkel: CONCAT(person_id_a, '_', person_id_b, '_', event_timestamp)"
+    },
+    {
+      "column": "person_id_a",
+      "sources": [
+        {"product_id": "folkeregister.family_events", "column": "person_id_a"},
+        {"product_id": "folkeregister.family_events", "column": "mother_id"}
+      ],
+      "transformation": "person_id_a ved EkteskapInngått/EkteskapOppløst; mother_id ved BarnFødt"
+    },
+    {
+      "column": "person_id_b",
+      "sources": [
+        {"product_id": "folkeregister.family_events", "column": "person_id_b"},
+        {"product_id": "folkeregister.family_events", "column": "child_id"}
+      ],
+      "transformation": "person_id_b ved EkteskapInngått/EkteskapOppløst; child_id ved BarnFødt"
+    },
+    {
+      "column": "relation_type",
+      "sources": [{"product_id": "folkeregister.family_events", "column": "event_type"}],
+      "transformation": "EkteskapInngått→GIFT; EkteskapOppløst→SKILT; BarnFødt→FORELDER_AV (mor) og BARN_AV (barn)"
+    },
+    {
+      "column": "valid_from",
+      "sources": [{"product_id": "folkeregister.family_events", "column": "event_timestamp"}]
+    },
+    {
+      "column": "valid_to",
+      "sources": [{"product_id": "folkeregister.family_events", "column": "event_timestamp"}],
+      "transformation": "Satt til event_timestamp for tilhørende EkteskapOppløst-hendelse; null for aktive og permanente relasjoner"
+    }
   ]
 }

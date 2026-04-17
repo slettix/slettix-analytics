@@ -9,7 +9,7 @@
   "format":       "delta",
   "primary_key":  "household_type,size_category",
   "dag_id":       "folkeregister_gold",
-  "product_type": "aggregate",
+  "product_type": "analytical",
   "access":       "public",
   "quality_sla": {
     "max_null_rate":   0.05,
@@ -26,11 +26,40 @@
       "household_type", "size_category", "count", "pct_of_total"
     ]
   },
+  "source_products": ["folkeregister.person_registry", "folkeregister.family_relations"],
   "schema": [
     { "name": "household_type",  "type": "string",  "nullable": false, "description": "Husstandstype: EKTEPAR_MED_BARN | EKTEPAR_UTEN_BARN | ENSLIG_FORSØRGER | ENSLIG", "pii": false },
     { "name": "size_category",   "type": "string",  "nullable": false, "description": "Familiestørrelse: 1 | 2 | 3-4 | 5+", "pii": false },
     { "name": "count",           "type": "long",    "nullable": false, "description": "Antall levende personer i denne kombinasjonen", "pii": false },
     { "name": "pct_of_total",    "type": "double",  "nullable": true,  "description": "Andel av alle levende personer (%)", "pii": false },
     { "name": "_updated_at",     "type": "timestamp","nullable": false, "description": "Sist oppdatert av Gold-jobben", "pii": false }
+  ],
+  "column_lineage": [
+    {
+      "column": "household_type",
+      "sources": [
+        {"product_id": "folkeregister.family_relations", "column": "relation_type"},
+        {"product_id": "folkeregister.person_registry",  "column": "is_alive"}
+      ],
+      "transformation": "Avledet: EKTEPAR_MED_BARN hvis GIFT og har FORELDER_AV-relasjon; EKTEPAR_UTEN_BARN hvis GIFT uten barn; ENSLIG_FORSØRGER hvis ugift/skilt med barn; ellers ENSLIG"
+    },
+    {
+      "column": "size_category",
+      "sources": [
+        {"product_id": "folkeregister.family_relations", "column": "person_id_b"},
+        {"product_id": "folkeregister.person_registry",  "column": "is_alive"}
+      ],
+      "transformation": "COUNT(levende familiemedlemmer inkl. person selv) → kategorisert som 1 | 2 | 3-4 | 5+"
+    },
+    {
+      "column": "count",
+      "sources": [{"product_id": "folkeregister.person_registry", "column": "person_id"}],
+      "transformation": "COUNT(*) per (household_type, size_category)"
+    },
+    {
+      "column": "pct_of_total",
+      "sources": [{"product_id": "folkeregister.person_registry", "column": "person_id"}],
+      "transformation": "count / SUM(count) OVER () * 100"
+    }
   ]
 }

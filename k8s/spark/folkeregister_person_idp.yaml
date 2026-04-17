@@ -35,7 +35,7 @@ spec:
   mainApplicationFile: "local:///opt/spark/jobs/folkeregister_person_idp.py"
   arguments:
     - "--starting-offsets"
-    - "earliest"
+    - "{\"folkeregister.citizen.created\":{\"0\":331,\"1\":335,\"2\":334},\"folkeregister.event.birth\":{\"0\":-2,\"1\":-2,\"2\":-2},\"folkeregister.citizen.died\":{\"0\":-2,\"1\":-2,\"2\":-2},\"folkeregister.event.relocation\":{\"0\":-2,\"1\":-2,\"2\":-2}}"
   sparkVersion: "3.5.8"
 
   # Streaming-jobb: restart alltid ved feil

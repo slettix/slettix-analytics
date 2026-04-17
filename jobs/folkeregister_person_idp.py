@@ -73,6 +73,10 @@ CLOUD_EVENT_SCHEMA = StructType([
         StructField("birthDate",  StringType(), nullable=True),
         StructField("country",    StringType(), nullable=True),
         StructField("status",     StringType(), nullable=True),
+        # Adresse ved registrering (citizen.created fra v2)
+        StructField("address",    StringType(), nullable=True),
+        StructField("postalCode", StringType(), nullable=True),
+        StructField("city",       StringType(), nullable=True),
         # AddressChangedPayload — event.relocation
         StructField("newPostalCode", StringType(), nullable=True),
         StructField("newCity",       StringType(), nullable=True),
@@ -95,8 +99,11 @@ def parse_args():
     p.add_argument(
         "--starting-offsets",
         default="latest",
-        choices=["latest", "earliest"],
-        help="Kafka startposisjon. 'latest' for produksjon, 'earliest' for replay (standard: latest)",
+        help=(
+            "Kafka startposisjon. 'latest' for produksjon, 'earliest' for full replay, "
+            "eller JSON-streng med per-partisjon offset, f.eks. "
+            '{\"topic\":{\"0\":100,\"1\":200}} (standard: latest)'
+        ),
     )
     return p.parse_args()
 
@@ -146,9 +153,16 @@ def build_stream(spark: SparkSession, bootstrap_servers: str, starting_offsets: 
         # Dødsdato: utled fra occurredAt når eventType = citizen.died
         F.when(F.col("env.eventType") == "citizen.died", F.col("env.occurredAt"))
          .cast("string").alias("death_date"),
-        # Adresse (kun satt for event.relocation)
-        F.col("env.payload.newPostalCode").alias("municipality_code"),
-        F.col("env.payload.newCity").alias("municipality_name"),
+        # Adresse: citizen.created (v2: address/postalCode/city) eller event.relocation (newPostalCode/newCity)
+        F.col("env.payload.address").alias("street_address"),
+        F.coalesce(
+            F.col("env.payload.newPostalCode"),
+            F.col("env.payload.postalCode"),
+        ).alias("municipality_code"),
+        F.coalesce(
+            F.col("env.payload.newCity"),
+            F.col("env.payload.city"),
+        ).alias("municipality_name"),
         F.lit(None).cast("string").alias("county"),
     )
 
@@ -180,6 +194,7 @@ def main():
     spark = (
         SparkSession.builder
         .appName("folkeregister_person_idp")
+        .config("spark.databricks.delta.schema.autoMerge.enabled", "true")
         .getOrCreate()
     )
     spark.sparkContext.setLogLevel("WARN")

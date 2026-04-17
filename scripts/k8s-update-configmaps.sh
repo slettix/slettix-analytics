@@ -30,12 +30,18 @@ update_dags() {
 }
 
 update_jobs() {
-  echo "→ Oppdaterer airflow-jobs ConfigMap (jobs/) …"
+  echo "→ Oppdaterer airflow-jobs ConfigMap (jobs/ + conf/products/*.json) …"
+  # Kombiner Python-jobber og manifest-JSON i én midlertidig mappe
+  # slik at DAG-kode kan lese manifester fra /opt/airflow/jobs/<product_id>.json
+  _tmpdir=$(mktemp -d)
+  cp jobs/*.py "$_tmpdir/"
+  cp conf/products/*.json "$_tmpdir/"
   kubectl create configmap airflow-jobs \
     --namespace "$NS" \
-    --from-file=jobs/ \
+    --from-file="$_tmpdir/" \
     --dry-run=client -o yaml | kubectl apply -f -
-  echo "  (Spark-pods laster fra ConfigMap ved kjøretid — ingen restart nødvendig)"
+  rm -rf "$_tmpdir"
+  echo "  (Spark-pods og Airflow-pods laster fra ConfigMap ved kjøretid — ingen restart nødvendig)"
 }
 
 update_products() {

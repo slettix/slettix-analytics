@@ -132,31 +132,39 @@
       "sensitivity": "medium"
     },
     {
+      "name": "street_address",
+      "type": "string",
+      "nullable": true,
+      "description": "Gateadresse — til stede ved PersonRegistrert (citizen.created v2)",
+      "pii": true,
+      "sensitivity": "high"
+    },
+    {
       "name": "municipality_code",
       "type": "string",
       "nullable": true,
-      "description": "Kommunenummer (4 siffer, SSB-standard) — kun til stede ved PersonFlyttet",
+      "description": "Kommunenummer (4 siffer, SSB-standard) — til stede ved PersonRegistrert (v2) og PersonFlyttet",
       "pii": false
     },
     {
       "name": "municipality_name",
       "type": "string",
       "nullable": true,
-      "description": "Kommunenavn — kun til stede ved PersonFlyttet",
+      "description": "Kommunenavn — til stede ved PersonRegistrert (v2) og PersonFlyttet",
       "pii": false
     },
     {
       "name": "county",
       "type": "string",
       "nullable": true,
-      "description": "Fylkesnavn — kun til stede ved PersonFlyttet",
+      "description": "Fylkesnavn — til stede ved PersonFlyttet",
       "pii": false
     },
     {
       "name": "kafka_topic",
       "type": "string",
       "nullable": false,
-      "description": "Kafka-topic meldingen kom fra (person.registered | person.born | person.died | person.moved)",
+      "description": "Kafka-topic meldingen kom fra (folkeregister.citizen.created | folkeregister.event.birth | folkeregister.citizen.died | folkeregister.event.relocation)",
       "pii": false
     },
     {
@@ -200,6 +208,91 @@
       "nullable": true,
       "description": "Dato-partisjoneringskolonne (avledet fra event_timestamp eller kafka_timestamp)",
       "pii": false
+    }
+  ],
+  "column_lineage": [
+    {
+      "column": "event_id",
+      "sources": [{"column": "eventId"}],
+      "transformation": "CloudEvent-konvolutt felt eventId. Kafka-topics: folkeregister.citizen.created, folkeregister.event.birth, folkeregister.citizen.died, folkeregister.event.relocation"
+    },
+    {
+      "column": "event_type",
+      "sources": [{"column": "eventType"}],
+      "transformation": "CloudEvent-konvolutt felt eventType"
+    },
+    {
+      "column": "event_timestamp",
+      "sources": [{"column": "occurredAt"}],
+      "transformation": "CloudEvent-konvolutt felt occurredAt"
+    },
+    {
+      "column": "person_id",
+      "sources": [
+        {"column": "payload.citizenId"},
+        {"column": "payload.childId"}
+      ],
+      "transformation": "COALESCE(payload.citizenId, payload.childId) — citizenId for person-topics, childId for event.birth"
+    },
+    {
+      "column": "fnr_hash",
+      "sources": [
+        {"column": "payload.ssn"},
+        {"column": "payload.childSsn"}
+      ],
+      "transformation": "SHA-256(COALESCE(payload.ssn, payload.childSsn)) — original fnr lagres aldri"
+    },
+    {
+      "column": "first_name",
+      "sources": [{"column": "payload.firstName"}]
+    },
+    {
+      "column": "last_name",
+      "sources": [{"column": "payload.lastName"}]
+    },
+    {
+      "column": "birth_date",
+      "sources": [{"column": "payload.birthDate"}]
+    },
+    {
+      "column": "gender",
+      "sources": [{"column": "payload.sex"}]
+    },
+    {
+      "column": "street_address",
+      "sources": [{"column": "payload.address"}],
+      "transformation": "payload.address — gateadresse, kun satt ved citizen.created (v2)"
+    },
+    {
+      "column": "municipality_code",
+      "sources": [
+        {"column": "payload.newPostalCode"},
+        {"column": "payload.postalCode"}
+      ],
+      "transformation": "COALESCE(payload.newPostalCode, payload.postalCode) — newPostalCode fra event.relocation, postalCode fra citizen.created v2"
+    },
+    {
+      "column": "municipality_name",
+      "sources": [
+        {"column": "payload.newCity"},
+        {"column": "payload.city"}
+      ],
+      "transformation": "COALESCE(payload.newCity, payload.city)"
+    },
+    {
+      "column": "death_date",
+      "sources": [{"column": "occurredAt"}],
+      "transformation": "occurredAt når eventType='citizen.died', ellers null"
+    },
+    {
+      "column": "kafka_topic",
+      "sources": [{"column": "kafka.topic"}],
+      "transformation": "Kafka-metadata, direkte fra Spark readStream"
+    },
+    {
+      "column": "kafka_timestamp",
+      "sources": [{"column": "kafka.timestamp"}],
+      "transformation": "Kafka broker-tidsstempel, direkte fra Spark readStream"
     }
   ]
 }

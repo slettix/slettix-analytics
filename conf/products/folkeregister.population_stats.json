@@ -9,7 +9,7 @@
   "format":       "delta",
   "primary_key":  "municipality_code,reference_year",
   "dag_id":       "folkeregister_gold",
-  "product_type": "aggregate",
+  "product_type": "analytical",
   "access":       "public",
   "quality_sla": {
     "max_null_rate":   0.05,
@@ -27,6 +27,7 @@
       "reference_year", "population_total", "population_male", "population_female"
     ]
   },
+  "source_products": ["folkeregister.person_registry"],
   "schema": [
     { "name": "municipality_code",   "type": "string",  "nullable": false, "description": "Kommunenummer (SSB 4 siffer)", "pii": false },
     { "name": "municipality_name",   "type": "string",  "nullable": true,  "description": "Kommunenavn", "pii": false },
@@ -39,5 +40,54 @@
     { "name": "births",              "type": "long",    "nullable": false, "description": "Antall fødte registrert i referanseåret", "pii": false },
     { "name": "deaths",              "type": "long",    "nullable": false, "description": "Antall døde registrert i referanseåret", "pii": false },
     { "name": "_updated_at",         "type": "timestamp","nullable": false, "description": "Sist oppdatert av Gold-jobben", "pii": false }
+  ],
+  "column_lineage": [
+    {
+      "column": "municipality_code",
+      "sources": [{"product_id": "folkeregister.person_registry", "column": "municipality_code"}]
+    },
+    {
+      "column": "municipality_name",
+      "sources": [{"product_id": "folkeregister.person_registry", "column": "municipality_name"}]
+    },
+    {
+      "column": "county",
+      "sources": [{"product_id": "folkeregister.person_registry", "column": "county"}]
+    },
+    {
+      "column": "reference_year",
+      "sources": [{"product_id": "folkeregister.person_registry", "column": "valid_from"}],
+      "transformation": "YEAR(valid_from) — årslutt-snapshot fra SCD2-historikk"
+    },
+    {
+      "column": "population_total",
+      "sources": [{"product_id": "folkeregister.person_registry", "column": "person_id"}],
+      "transformation": "COUNT(*) WHERE is_alive=true AND is_current=true, gruppert på municipality_code og reference_year"
+    },
+    {
+      "column": "population_male",
+      "sources": [{"product_id": "folkeregister.person_registry", "column": "gender"}],
+      "transformation": "COUNT(*) WHERE gender='M' AND is_alive=true AND is_current=true"
+    },
+    {
+      "column": "population_female",
+      "sources": [{"product_id": "folkeregister.person_registry", "column": "gender"}],
+      "transformation": "COUNT(*) WHERE gender='F' AND is_alive=true AND is_current=true"
+    },
+    {
+      "column": "avg_age",
+      "sources": [{"product_id": "folkeregister.person_registry", "column": "birth_date"}],
+      "transformation": "AVG(YEAR(kjøredato) - YEAR(birth_date)) for levende bosatte per kommune"
+    },
+    {
+      "column": "births",
+      "sources": [{"product_id": "folkeregister.person_events", "column": "event_type"}],
+      "transformation": "COUNT(*) WHERE event_type='event.birth' og YEAR(event_date)=reference_year"
+    },
+    {
+      "column": "deaths",
+      "sources": [{"product_id": "folkeregister.person_events", "column": "event_type"}],
+      "transformation": "COUNT(*) WHERE event_type='citizen.died' og YEAR(event_date)=reference_year"
+    }
   ]
 }

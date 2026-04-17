@@ -67,7 +67,8 @@ spec:
     "spark.sql.shuffle.partitions": "8"
   driver:
     cores: 1
-    memory: "512m"
+    memory: "1g"
+    memoryOverhead: "256m"
     serviceAccount: spark
     labels:
       version: "3.5.8"
@@ -90,6 +91,7 @@ spec:
     instances: 1
     cores: 1
     memory: "512m"
+    memoryOverhead: "128m"
     env:
       - name: AWS_ACCESS_KEY_ID
         valueFrom:
@@ -280,11 +282,18 @@ def validate_quality(**context):
 # ── Registrer DAG-lenker ───────────────────────────────────────────────────
 
 def register_dag_links(**context):
+    import json
+    import os
+    import sys
+
     import requests
 
     dag_id  = context["dag"].dag_id
     log     = context["task_instance"].log
     headers = {"X-API-Key": PORTAL_API_KEY}
+
+    MANIFEST_DIR = "/opt/airflow/jobs"
+    sys.path.insert(0, MANIFEST_DIR)
 
     products = [
         "folkeregister.person_registry",
@@ -292,6 +301,22 @@ def register_dag_links(**context):
         "folkeregister.residence_history",
     ]
     for product_id in products:
+        # 1. Registrer fullstendig manifest (inkl. column_lineage) i Delta-registeret
+        manifest_path = os.path.join(MANIFEST_DIR, f"{product_id}.json")
+        if os.path.exists(manifest_path):
+            try:
+                from registry import register
+                with open(manifest_path) as f:
+                    manifest = json.load(f)
+                manifest["dag_id"] = dag_id
+                register(manifest)
+                log.info(f"Manifest registrert i Delta-registeret for '{product_id}'")
+            except Exception as exc:
+                log.warning(f"Kunne ikke registrere manifest for '{product_id}': {exc}")
+        else:
+            log.warning(f"Manifest-fil ikke funnet: {manifest_path} — hopper over register()")
+
+        # 2. Patch dag_id i portalen via API
         try:
             resp = requests.patch(
                 f"{PORTAL_URL}/api/products/{product_id}",
@@ -300,7 +325,7 @@ def register_dag_links(**context):
                 timeout=10,
             )
             resp.raise_for_status()
-            log.info(f"Registrert dag_id='{dag_id}' på produkt '{product_id}'")
+            log.info(f"Registrert dag_id='{dag_id}' på produkt '{product_id}' via API")
         except Exception as exc:
             log.warning(f"Kunne ikke registrere dag_id på '{product_id}': {exc}")
 

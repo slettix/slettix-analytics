@@ -9,7 +9,7 @@
   "format":       "delta",
   "primary_key":  "person_id",
   "dag_id":       "folkeregister_silver",
-  "product_type": "derived",
+  "product_type": "analytical",
   "access":       "restricted",
   "quality_sla": {
     "max_null_rate":   0.01,
@@ -25,10 +25,11 @@
     "guaranteed_columns": [
       "person_id", "fnr_hash", "first_name", "last_name",
       "birth_date", "gender", "civil_status", "is_alive",
-      "municipality_code", "municipality_name", "county",
+      "street_address", "municipality_code", "municipality_name", "county",
       "valid_from", "valid_to", "is_current"
     ]
   },
+  "source_products": ["folkeregister.person_events"],
   "schema": [
     { "name": "person_id",          "type": "string",    "nullable": false, "description": "Intern UUID — nøkkel på tvers av alle folkeregister-produkter", "pii": false },
     { "name": "fnr_hash",           "type": "string",    "nullable": true,  "description": "SHA-256 hash av fødselsnummer", "pii": false, "sensitivity": "medium" },
@@ -38,6 +39,7 @@
     { "name": "gender",             "type": "string",    "nullable": true,  "description": "Kjønn (M/F/X)", "pii": false, "sensitivity": "low" },
     { "name": "mother_id",          "type": "string",    "nullable": true,  "description": "person_id for mor", "pii": false },
     { "name": "father_id",          "type": "string",    "nullable": true,  "description": "person_id for far", "pii": false },
+    { "name": "street_address",      "type": "string",    "nullable": true,  "description": "Gateadresse — siste kjente verdi via SCD2", "pii": true, "sensitivity": "high" },
     { "name": "municipality_code",  "type": "string",    "nullable": true,  "description": "Bostedskommunenummer (SSB 4 siffer)", "pii": false },
     { "name": "municipality_name",  "type": "string",    "nullable": true,  "description": "Bostedskommunenavn", "pii": false },
     { "name": "county",             "type": "string",    "nullable": true,  "description": "Bostedsfylke", "pii": false },
@@ -49,5 +51,86 @@
     { "name": "valid_to",           "type": "timestamp", "nullable": true,  "description": "Tidspunkt raden ble ugyldig (null = gjeldende)", "pii": false },
     { "name": "is_current",         "type": "boolean",   "nullable": false, "description": "True = gjeldende tilstand for personen", "pii": false },
     { "name": "_updated_at",        "type": "timestamp", "nullable": false, "description": "Sist oppdatert av Silver-jobben", "pii": false }
+  ],
+  "column_lineage": [
+    {
+      "column": "person_id",
+      "sources": [{"product_id": "folkeregister.person_events", "column": "person_id"}]
+    },
+    {
+      "column": "fnr_hash",
+      "sources": [{"product_id": "folkeregister.person_events", "column": "fnr_hash"}]
+    },
+    {
+      "column": "first_name",
+      "sources": [{"product_id": "folkeregister.person_events", "column": "first_name"}],
+      "transformation": "LAST(first_name IGNORE NULLS) OVER (PARTITION BY person_id ORDER BY event_timestamp) — siste kjente verdi via SCD2"
+    },
+    {
+      "column": "last_name",
+      "sources": [{"product_id": "folkeregister.person_events", "column": "last_name"}],
+      "transformation": "LAST(last_name IGNORE NULLS) OVER (PARTITION BY person_id ORDER BY event_timestamp)"
+    },
+    {
+      "column": "birth_date",
+      "sources": [{"product_id": "folkeregister.person_events", "column": "birth_date"}],
+      "transformation": "LAST(birth_date IGNORE NULLS) OVER (PARTITION BY person_id ORDER BY event_timestamp)"
+    },
+    {
+      "column": "gender",
+      "sources": [{"product_id": "folkeregister.person_events", "column": "gender"}],
+      "transformation": "LAST(gender IGNORE NULLS) OVER (PARTITION BY person_id ORDER BY event_timestamp)"
+    },
+    {
+      "column": "mother_id",
+      "sources": [{"product_id": "folkeregister.person_events", "column": "mother_id"}]
+    },
+    {
+      "column": "father_id",
+      "sources": [{"product_id": "folkeregister.person_events", "column": "father_id"}]
+    },
+    {
+      "column": "street_address",
+      "sources": [{"product_id": "folkeregister.person_events", "column": "street_address"}],
+      "transformation": "LAST(street_address IGNORE NULLS) OVER (PARTITION BY person_id ORDER BY event_timestamp) — siste kjente gateadresse via SCD2"
+    },
+    {
+      "column": "municipality_code",
+      "sources": [{"product_id": "folkeregister.person_events", "column": "municipality_code"}],
+      "transformation": "LAST(municipality_code IGNORE NULLS) OVER (PARTITION BY person_id ORDER BY event_timestamp) — akkumulert adresse"
+    },
+    {
+      "column": "municipality_name",
+      "sources": [{"product_id": "folkeregister.person_events", "column": "municipality_name"}],
+      "transformation": "LAST(municipality_name IGNORE NULLS) OVER (PARTITION BY person_id ORDER BY event_timestamp)"
+    },
+    {
+      "column": "civil_status",
+      "sources": [{"product_id": "folkeregister.person_events", "column": "event_type"}],
+      "transformation": "Default UGIFT; oppdateres til GIFT/SKILT/ENKE_ENKEMANN basert på familiehendelser fra family_events"
+    },
+    {
+      "column": "is_alive",
+      "sources": [{"product_id": "folkeregister.person_events", "column": "event_type"}],
+      "transformation": "false WHEN event_type='citizen.died', ellers true"
+    },
+    {
+      "column": "death_date",
+      "sources": [{"product_id": "folkeregister.person_events", "column": "death_date"}]
+    },
+    {
+      "column": "change_event_type",
+      "sources": [{"product_id": "folkeregister.person_events", "column": "event_type"}]
+    },
+    {
+      "column": "valid_from",
+      "sources": [{"product_id": "folkeregister.person_events", "column": "event_timestamp"}],
+      "transformation": "event_timestamp for hendelsen som utløste denne SCD2-raden"
+    },
+    {
+      "column": "valid_to",
+      "sources": [{"product_id": "folkeregister.person_events", "column": "event_timestamp"}],
+      "transformation": "valid_from for neste rad for samme person (LEAD-funksjon), null for gjeldende rad"
+    }
   ]
 }

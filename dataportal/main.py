@@ -712,6 +712,9 @@ def _merge_schema(delta_schema: list[dict] | None, manifest_schema: list[dict] |
     """
     Slå sammen Delta-tabellens schema (type, nullable) med manifestets schema-metadata
     (pii, sensitivity, description). Manifestet er kilden til sannhet for metadata.
+
+    Kolonner som er i manifestet men ikke ennå i Delta-tabellen vises med pending=True
+    (f.eks. nye felter dokumentert i manifest før første pipeline-kjøring).
     """
     if not delta_schema and not manifest_schema:
         return None
@@ -720,6 +723,7 @@ def _merge_schema(delta_schema: list[dict] | None, manifest_schema: list[dict] |
     base = delta_schema or [{"name": c["name"], "type": c.get("type", ""), "nullable": True}
                              for c in (manifest_schema or [])]
     result = []
+    seen: set[str] = set()
     for field in base:
         m = meta.get(field["name"], {})
         merged = {**field}
@@ -730,6 +734,23 @@ def _merge_schema(delta_schema: list[dict] | None, manifest_schema: list[dict] |
         if m.get("description"):
             merged["description"] = m["description"]
         result.append(merged)
+        seen.add(field["name"])
+    # Legg til kolonner dokumentert i manifest men ikke ennå i Delta-tabellen
+    for col in (manifest_schema or []):
+        if col["name"] not in seen:
+            merged = {
+                "name":     col["name"],
+                "type":     col.get("type", ""),
+                "nullable": col.get("nullable", True),
+                "pending":  True,
+            }
+            if col.get("pii"):
+                merged["pii"] = True
+            if col.get("sensitivity"):
+                merged["sensitivity"] = col["sensitivity"]
+            if col.get("description"):
+                merged["description"] = col["description"]
+            result.append(merged)
     return result or None
 
 
@@ -2749,6 +2770,11 @@ async def page_publish_post(request: Request):
         )
 
     return RedirectResponse(f"/products/{product_id}", status_code=303)
+
+
+@app.get("/health", include_in_schema=False)
+def health_check():
+    return {"status": "ok"}
 
 
 @app.get("/", response_class=HTMLResponse, include_in_schema=False)

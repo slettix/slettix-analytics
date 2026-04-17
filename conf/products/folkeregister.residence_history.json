@@ -9,7 +9,7 @@
   "format":       "delta",
   "primary_key":  "person_id",
   "dag_id":       "folkeregister_silver",
-  "product_type": "derived",
+  "product_type": "analytical",
   "access":       "restricted",
   "quality_sla": {
     "max_null_rate":   0.01,
@@ -27,6 +27,7 @@
       "moved_in_date", "is_current"
     ]
   },
+  "source_products": ["folkeregister.person_events"],
   "schema": [
     { "name": "person_id",          "type": "string",  "nullable": false, "description": "Intern UUID — kobler til person_registry", "pii": false },
     { "name": "municipality_code",  "type": "string",  "nullable": false, "description": "Kommunenummer (SSB 4 siffer)", "pii": false },
@@ -38,5 +39,41 @@
     { "name": "duration_days",      "type": "integer", "nullable": true,  "description": "Antall dager i kommunen (null for gjeldende bosted)", "pii": false },
     { "name": "change_event_type",  "type": "string",  "nullable": false, "description": "Kildehendelse: PersonRegistrert | PersonFødt | PersonFlyttet", "pii": false },
     { "name": "_updated_at",        "type": "timestamp","nullable": false, "description": "Sist oppdatert av Silver-jobben", "pii": false }
+  ],
+  "column_lineage": [
+    {
+      "column": "person_id",
+      "sources": [{"product_id": "folkeregister.person_events", "column": "person_id"}]
+    },
+    {
+      "column": "municipality_code",
+      "sources": [{"product_id": "folkeregister.person_events", "column": "municipality_code"}],
+      "transformation": "Filtrert på hendelser med municipality_code IS NOT NULL (citizen.created v2 og event.relocation)"
+    },
+    {
+      "column": "municipality_name",
+      "sources": [{"product_id": "folkeregister.person_events", "column": "municipality_name"}]
+    },
+    {
+      "column": "moved_in_date",
+      "sources": [{"product_id": "folkeregister.person_events", "column": "event_date"}],
+      "transformation": "event_date for hendelsen som registrerte dette bostedet"
+    },
+    {
+      "column": "moved_out_date",
+      "sources": [{"product_id": "folkeregister.person_events", "column": "event_date"}],
+      "transformation": "moved_in_date for neste bostedshendelse per person (LEAD-funksjon), null for gjeldende"
+    },
+    {
+      "column": "duration_days",
+      "sources": [
+        {"product_id": "folkeregister.person_events", "column": "event_date"}
+      ],
+      "transformation": "DATEDIFF(moved_out_date, moved_in_date), null når moved_out_date er null"
+    },
+    {
+      "column": "change_event_type",
+      "sources": [{"product_id": "folkeregister.person_events", "column": "event_type"}]
+    }
   ]
 }

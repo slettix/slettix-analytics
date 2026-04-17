@@ -16,15 +16,16 @@ controller:
   replicas: 1
   leaderElection:
     enable: false   # deaktivert — unngår "leader election lost" ved API-ustabilitet
-  # Rydd opp fullførte/feilede SparkApplications automatisk etter 5 minutter
-  sparkApplicationTTL: 300
+  # Rydd opp fullførte/feilede SparkApplications automatisk etter 30 minutter
+  # (SparkKubernetesOperator trenger tid til å lese COMPLETED-status før cleanup)
+  sparkApplicationTTL: 1800
   resources:
     requests:
       cpu: 100m
-      memory: 300Mi
-    limits:
-      cpu: 500m
       memory: 512Mi
+    limits:
+      cpu: 1000m
+      memory: 1500Mi
 
 # ── Webhook ───────────────────────────────────────────────────────────────────
 webhook:

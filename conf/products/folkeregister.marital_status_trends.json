@@ -9,7 +9,7 @@
   "format":       "delta",
   "primary_key":  "reference_year,age_group,marital_status",
   "dag_id":       "folkeregister_gold",
-  "product_type": "aggregate",
+  "product_type": "analytical",
   "access":       "public",
   "quality_sla": {
     "max_null_rate":   0.05,
@@ -26,6 +26,7 @@
       "reference_year", "age_group", "marital_status", "count", "pct_of_age_group"
     ]
   },
+  "source_products": ["folkeregister.person_registry"],
   "schema": [
     { "name": "reference_year",     "type": "integer", "nullable": false, "description": "Statistikkår (utledet fra valid_from i SCD2)", "pii": false },
     { "name": "age_group",          "type": "string",  "nullable": false, "description": "Aldersgruppe: 0-17 | 18-29 | 30-44 | 45-64 | 65+", "pii": false },
@@ -33,5 +34,31 @@
     { "name": "count",              "type": "long",    "nullable": false, "description": "Antall registrert i denne kombinasjonen", "pii": false },
     { "name": "pct_of_age_group",   "type": "double",  "nullable": true,  "description": "Andel av alle i samme referanseår og aldersgruppe (%)", "pii": false },
     { "name": "_updated_at",        "type": "timestamp","nullable": false, "description": "Sist oppdatert av Gold-jobben", "pii": false }
+  ],
+  "column_lineage": [
+    {
+      "column": "reference_year",
+      "sources": [{"product_id": "folkeregister.person_registry", "column": "valid_from"}],
+      "transformation": "YEAR(valid_from) — årstall for SCD2-raden"
+    },
+    {
+      "column": "age_group",
+      "sources": [{"product_id": "folkeregister.person_registry", "column": "birth_date"}],
+      "transformation": "Aldersgruppe beregnet som (reference_year - YEAR(birth_date)): 0-17 | 18-29 | 30-44 | 45-64 | 65+"
+    },
+    {
+      "column": "marital_status",
+      "sources": [{"product_id": "folkeregister.person_registry", "column": "civil_status"}]
+    },
+    {
+      "column": "count",
+      "sources": [{"product_id": "folkeregister.person_registry", "column": "person_id"}],
+      "transformation": "COUNT(*) per (reference_year, age_group, marital_status)"
+    },
+    {
+      "column": "pct_of_age_group",
+      "sources": [{"product_id": "folkeregister.person_registry", "column": "person_id"}],
+      "transformation": "count / SUM(count) OVER (PARTITION BY reference_year, age_group) * 100"
+    }
   ]
 }

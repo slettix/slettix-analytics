@@ -118,10 +118,13 @@
           <tbody>
             {% for field in schema %}
             <tr>
-              <td class="font-monospace">
+              <td class="font-monospace{% if field.pending %} text-muted{% endif %}">
                 {{ field.name }}
                 {% if field.pii %}
                 <span class="badge bg-danger ms-1" style="font-size:.6rem;">PII</span>
+                {% endif %}
+                {% if field.pending %}
+                <span class="badge bg-secondary ms-1" style="font-size:.6rem;" title="Dokumentert i manifest — ikke ennå i Delta-tabellen">venter</span>
                 {% endif %}
               </td>
               <td>

@@ -9,7 +9,7 @@
   "format":       "delta",
   "primary_key":  "from_municipality_code,to_municipality_code,reference_year",
   "dag_id":       "folkeregister_gold",
-  "product_type": "aggregate",
+  "product_type": "analytical",
   "access":       "public",
   "quality_sla": {
     "max_null_rate":   0.05,
@@ -27,6 +27,7 @@
       "reference_year", "flow_count", "net_flow"
     ]
   },
+  "source_products": ["folkeregister.residence_history"],
   "schema": [
     { "name": "from_municipality_code",  "type": "string",  "nullable": false, "description": "Avreisekommunenummer", "pii": false },
     { "name": "from_municipality_name",  "type": "string",  "nullable": true,  "description": "Avreisekommunenavn", "pii": false },
@@ -39,5 +40,49 @@
     { "name": "return_flow_count",       "type": "long",    "nullable": false, "description": "Antall som har gjort returreisen B→A i referanseåret", "pii": false },
     { "name": "net_flow",                "type": "long",    "nullable": false, "description": "flow_count − return_flow_count", "pii": false },
     { "name": "_updated_at",             "type": "timestamp","nullable": false, "description": "Sist oppdatert av Gold-jobben", "pii": false }
+  ],
+  "column_lineage": [
+    {
+      "column": "from_municipality_code",
+      "sources": [{"product_id": "folkeregister.residence_history", "column": "municipality_code"}],
+      "transformation": "Forrige rad per person sortert på moved_in_date (LAG-funksjon)"
+    },
+    {
+      "column": "from_municipality_name",
+      "sources": [{"product_id": "folkeregister.residence_history", "column": "municipality_name"}],
+      "transformation": "Forrige rad per person sortert på moved_in_date"
+    },
+    {
+      "column": "to_municipality_code",
+      "sources": [{"product_id": "folkeregister.residence_history", "column": "municipality_code"}],
+      "transformation": "Gjeldende rad per person (nyeste moved_in_date)"
+    },
+    {
+      "column": "to_municipality_name",
+      "sources": [{"product_id": "folkeregister.residence_history", "column": "municipality_name"}],
+      "transformation": "Gjeldende rad per person"
+    },
+    {
+      "column": "reference_year",
+      "sources": [{"product_id": "folkeregister.residence_history", "column": "moved_in_date"}],
+      "transformation": "YEAR(moved_in_date)"
+    },
+    {
+      "column": "flow_count",
+      "sources": [{"product_id": "folkeregister.residence_history", "column": "person_id"}],
+      "transformation": "COUNT(*) for bevegelser from_code→to_code i reference_year"
+    },
+    {
+      "column": "return_flow_count",
+      "sources": [{"product_id": "folkeregister.residence_history", "column": "person_id"}],
+      "transformation": "flow_count for returruten to_code→from_code i reference_year (self-join)"
+    },
+    {
+      "column": "net_flow",
+      "sources": [
+        {"product_id": "folkeregister.residence_history", "column": "person_id"}
+      ],
+      "transformation": "flow_count - return_flow_count"
+    }
   ]
 }
