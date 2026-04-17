@@ -90,15 +90,18 @@ def create_dataset(host, headers, db_id, table_name, sql):
     return None
 
 
-def create_chart(host, headers, name, ds_id, viz_type, params: dict) -> int | None:
+def create_chart(host, headers, name, ds_id, viz_type, params: dict, dashboard_id: int | None = None) -> int | None:
     params_str = json.dumps({**params, "datasource": f"{ds_id}__table", "viz_type": viz_type})
-    result = _post(host, "/api/v1/chart/", headers, {
+    payload = {
         "slice_name":      name,
         "datasource_id":   ds_id,
         "datasource_type": "table",
         "viz_type":        viz_type,
         "params":          params_str,
-    })
+    }
+    if dashboard_id:
+        payload["dashboards"] = [dashboard_id]
+    result = _post(host, "/api/v1/chart/", headers, payload)
     if result:
         chart_id = result["id"]
         print(f"  Opprettet chart '{name}' (id={chart_id})")
@@ -192,95 +195,65 @@ def main():
         print("Kunne ikke opprette datasett — avbryter.")
         sys.exit(1)
 
-    # ── Charts ─────────────────────────────────────────────────────────────
-    print("\n[2/3] Oppretter charts …")
+    # ── Dashboard opprettes først (tomt) ───────────────────────────────────
+    print("\n[2/3] Oppretter dashboard …")
+    dash_id = create_dashboard(host, headers, "Folkeregister Oversikt", [])
+    if not dash_id:
+        print("Kunne ikke opprette dashboard — avbryter.")
+        sys.exit(1)
+
+    # ── Charts opprettes med dashboard_id slik at slices-relasjonen settes ─
+    print("\n[3/3] Oppretter charts og knytter til dashboard …")
     chart_ids = []
 
-    # KPI 1: Total befolkning
-    c = create_chart(host, headers, "Total befolkning", ds_pop, "big_number_total", {
-        "metric": {
-            "expressionType": "SIMPLE",
-            "column": {"column_name": "population_total"},
-            "aggregate": "SUM",
-            "label": "Total befolkning",
-        },
+    def _chart(name, ds_id, viz_type, params):
+        c = create_chart(host, headers, name, ds_id, viz_type, params, dashboard_id=dash_id)
+        if c:
+            chart_ids.append(c)
+
+    _chart("Total befolkning", ds_pop, "big_number_total", {
+        "metric": {"expressionType": "SIMPLE", "column": {"column_name": "population_total"},
+                   "aggregate": "SUM", "label": "Total befolkning"},
         "subheader": "Totalt antall registrerte personer",
         "time_range": "No filter",
     })
-    if c: chart_ids.append(c)
-
-    # KPI 2: Fødsler siste år
-    c = create_chart(host, headers, "Fødsler (siste år)", ds_pop, "big_number_total", {
-        "metric": {
-            "expressionType": "SIMPLE",
-            "column": {"column_name": "births"},
-            "aggregate": "SUM",
-            "label": "Fødsler",
-        },
+    _chart("Fødsler (siste år)", ds_pop, "big_number_total", {
+        "metric": {"expressionType": "SIMPLE", "column": {"column_name": "births"},
+                   "aggregate": "SUM", "label": "Fødsler"},
         "subheader": "Registrerte fødsler siste år",
         "time_range": "No filter",
     })
-    if c: chart_ids.append(c)
-
-    # KPI 3: Dødsfall siste år
-    c = create_chart(host, headers, "Dødsfall (siste år)", ds_pop, "big_number_total", {
-        "metric": {
-            "expressionType": "SIMPLE",
-            "column": {"column_name": "deaths"},
-            "aggregate": "SUM",
-            "label": "Dødsfall",
-        },
+    _chart("Dødsfall (siste år)", ds_pop, "big_number_total", {
+        "metric": {"expressionType": "SIMPLE", "column": {"column_name": "deaths"},
+                   "aggregate": "SUM", "label": "Dødsfall"},
         "subheader": "Registrerte dødsfall siste år",
         "time_range": "No filter",
     })
-    if c: chart_ids.append(c)
-
-    # Tidsserie: befolkningsutvikling
-    c = create_chart(host, headers, "Befolkningsutvikling over tid", ds_pop, "echarts_timeseries_line", {
+    _chart("Befolkningsutvikling over tid", ds_pop, "echarts_timeseries_line", {
         "x_axis": "reference_year",
-        "metrics": [{
-            "expressionType": "SIMPLE",
-            "column": {"column_name": "population_total"},
-            "aggregate": "SUM",
-            "label": "Total befolkning",
-        }],
-        "groupby": [],
-        "time_range": "No filter",
-        "x_axis_title": "År",
-        "y_axis_title": "Befolkning",
+        "metrics": [{"expressionType": "SIMPLE", "column": {"column_name": "population_total"},
+                     "aggregate": "SUM", "label": "Total befolkning"}],
+        "groupby": [], "time_range": "No filter",
+        "x_axis_title": "År", "y_axis_title": "Befolkning",
         "color_scheme": "supersetColors",
     })
-    if c: chart_ids.append(c)
-
-    # Søylediagram: sivilstandsfordeling per år
-    c = create_chart(host, headers, "Sivilstandsfordeling per år", ds_mar, "echarts_timeseries_bar", {
+    _chart("Sivilstandsfordeling per år", ds_mar, "echarts_timeseries_bar", {
         "x_axis": "reference_year",
-        "metrics": [{
-            "expressionType": "SIMPLE",
-            "column": {"column_name": "count"},
-            "aggregate": "SUM",
-            "label": "Antall",
-        }],
-        "groupby": ["marital_status"],
-        "time_range": "No filter",
-        "stack": True,
-        "color_scheme": "supersetColors",
+        "metrics": [{"expressionType": "SIMPLE", "column": {"column_name": "count"},
+                     "aggregate": "SUM", "label": "Antall"}],
+        "groupby": ["marital_status"], "time_range": "No filter",
+        "stack": True, "color_scheme": "supersetColors",
     })
-    if c: chart_ids.append(c)
 
-    # ── Dashboard ──────────────────────────────────────────────────────────
-    print("\n[3/3] Oppretter dashboard …")
-    dash_id = create_dashboard(
-        host, headers,
-        "Folkeregister Oversikt",
-        chart_ids,
-    )
+    # Oppdater layout med de faktiske chart-IDene
+    if chart_ids:
+        csrf = _get_csrf(host, headers["Authorization"].split(" ")[1])
+        h2 = {**headers, "X-CSRFToken": csrf}
+        requests.put(f"{host}/api/v1/dashboard/{dash_id}", headers=h2,
+                     json={"position_json": json.dumps(_build_layout(chart_ids))})
+        print(f"  Layout oppdatert med {len(chart_ids)} charts")
 
-    if dash_id:
-        print(f"\nDashboard tilgjengelig på: {host}/superset/dashboard/{dash_id}/")
-    else:
-        print("\n[ADVARSEL] Dashboard ble ikke opprettet — opprett manuelt i Superset UI.")
-        print(f"Chart-IDer: {chart_ids}")
+    print(f"\nDashboard tilgjengelig på: {host}/superset/dashboard/{dash_id}/")
 
 
 if __name__ == "__main__":
