@@ -66,6 +66,7 @@ import os
 import pathlib
 import re
 import sys
+import urllib.parse
 from datetime import date, datetime, timedelta, timezone
 
 import boto3
@@ -106,6 +107,7 @@ SUPERSET_URL    = os.environ.get("SUPERSET_URL",   "http://superset.slettix-anal
 AIRFLOW_EXTERNAL_URL  = os.environ.get("AIRFLOW_EXTERNAL_URL",  "http://localhost:8080")
 JUPYTER_EXTERNAL_URL  = os.environ.get("JUPYTER_EXTERNAL_URL",  "http://localhost:8888")
 SUPERSET_EXTERNAL_URL = os.environ.get("SUPERSET_EXTERNAL_URL", "http://localhost:8088")
+SUPERSET_DB_ID        = int(os.environ.get("SUPERSET_DB_ID", "1"))
 MINIO_EXTERNAL_URL    = os.environ.get("MINIO_EXTERNAL_URL",    "http://localhost:9001")
 NOTEBOOKS_DIR   = os.environ.get("NOTEBOOKS_DIR",  "/opt/dataportal/notebooks")
 DAGS_DIR        = os.environ.get("DAGS_DIR",       "/opt/airflow/dags")
@@ -2834,6 +2836,21 @@ def _check_service(url: str, timeout: float = 2.0) -> bool:
         return False
 
 
+def _superset_sqllab_url(manifest: dict, schema: list[dict] | None = None) -> str:
+    """Bygg Superset SQL Lab URL med forhåndsutfylt spørring for dette dataproduktet."""
+    source_path = manifest.get("source_path", "")
+    if not source_path:
+        return f"{SUPERSET_EXTERNAL_URL}/sqllab/"
+    cols = schema or manifest.get("schema") or []
+    if cols:
+        col_names = [c["name"] for c in cols if c.get("name")]
+        select_clause = "  " + ",\n  ".join(col_names)
+    else:
+        select_clause = "  *"
+    sql = f"SELECT\n{select_clause}\nFROM delta_scan('{source_path}')\nLIMIT 100;"
+    return f"{SUPERSET_EXTERNAL_URL}/sqllab/?sql={urllib.parse.quote(sql)}&dbId={SUPERSET_DB_ID}"
+
+
 def _template_ctx(request: Request, **kwargs) -> dict:
     """Felles malkontekst med innlogget bruker og globale URL-er."""
     return {
@@ -3272,6 +3289,7 @@ def page_product(request: Request, product_id: str):
         manifest=manifest,
         history=versioned_history,
         schema=schema,
+        superset_sqllab_url=_superset_sqllab_url(manifest, schema),
         quality=quality,
         pipeline=pipeline,
         sla=sla,
