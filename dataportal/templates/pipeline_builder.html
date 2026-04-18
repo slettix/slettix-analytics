@@ -25,12 +25,15 @@
   <div class="row g-4">
     {% for tid, tmpl in templates.items() %}
     <div class="col-md-6 col-lg-4">
-      <div class="card h-100 template-card" data-template="{{ tid }}" style="cursor:pointer;">
+      <div class="card h-100 template-card {% if tmpl.streaming %}border-warning{% endif %}" data-template="{{ tid }}" style="cursor:pointer;">
         <div class="card-body">
           <div class="d-flex align-items-center mb-3">
-            <i class="bi {{ tmpl.icon }} fs-3 me-3 text-primary"></i>
+            <i class="bi {{ tmpl.icon }} fs-3 me-3 {% if tmpl.streaming %}text-warning{% else %}text-primary{% endif %}"></i>
             <div>
               <h6 class="mb-0 fw-bold">{{ tmpl.label }}</h6>
+              {% if tmpl.streaming %}
+              <span class="badge bg-warning text-dark me-1" style="font-size:.6rem;"><i class="bi bi-broadcast me-1"></i>Streaming</span>
+              {% endif %}
               {% for tag in tmpl.tags %}
               <span class="badge bg-light text-dark border me-1" style="font-size:.6rem;">{{ tag }}</span>
               {% endfor %}
@@ -39,7 +42,7 @@
           <p class="text-muted small mb-0">{{ tmpl.description }}</p>
         </div>
         <div class="card-footer bg-white border-top-0">
-          <button class="btn btn-sm btn-primary w-100 select-template-btn" data-template="{{ tid }}">
+          <button class="btn btn-sm {% if tmpl.streaming %}btn-warning{% else %}btn-primary{% endif %} w-100 select-template-btn" data-template="{{ tid }}">
             <i class="bi bi-arrow-right me-1"></i>Velg denne malen
           </button>
         </div>
@@ -85,11 +88,17 @@
       <pre id="dag-preview" class="code-block m-3" style="max-height:400px;overflow-y:auto;"></pre>
     </div>
   </div>
+  <div id="streaming-notice" class="alert alert-warning d-none mb-3">
+    <i class="bi bi-broadcast me-2"></i>
+    <strong>Streaming IDP:</strong> Deploy oppretter en Airflow DAG og en langkjørende
+    SparkApplication i Kubernetes. Spark Operator holder jobben i live automatisk.
+    Klikk «Trigger» i Airflow etter deploy for å starte streaming-jobben.
+  </div>
   <div class="d-flex gap-2">
     <button class="btn btn-outline-secondary" onclick="goStep(2)">
       <i class="bi bi-arrow-left me-1"></i>Tilbake
     </button>
-    <button class="btn btn-success ms-auto" onclick="deployPipeline()">
+    <button class="btn btn-success ms-auto" id="deploy-btn" onclick="deployPipeline()">
       <i class="bi bi-rocket-takeoff me-1"></i>Deploy pipeline
     </button>
   </div>
@@ -101,12 +110,17 @@
     <div class="card-body text-center py-5">
       <div id="deploy-spinner" class="mb-3">
         <div class="spinner-border text-primary" style="width:3rem;height:3rem;"></div>
-        <p class="mt-3 text-muted">Deployer pipeline til Airflow…</p>
+        <p class="mt-3 text-muted" id="deploy-spinner-msg">Deployer pipeline til Airflow…</p>
       </div>
       <div id="deploy-success" class="d-none">
         <i class="bi bi-check-circle-fill text-success" style="font-size:3rem;"></i>
-        <h4 class="mt-3">Pipeline deployed!</h4>
+        <h4 class="mt-3" id="deploy-success-title">Pipeline deployed!</h4>
         <p class="text-muted" id="deploy-dag-id"></p>
+        <div id="streaming-success-note" class="alert alert-info text-start d-none mt-3 mb-0">
+          <i class="bi bi-info-circle me-1"></i>
+          <strong>Neste steg:</strong> Gå til Airflow og trigger DAGen én gang for å starte Spark Streaming-jobben.
+          Deretter kjører den kontinuerlig og vil restartes automatisk ved feil.
+        </div>
         <div class="d-flex gap-2 justify-content-center mt-3">
           <a id="airflow-dag-link" href="#" target="_blank" class="btn btn-outline-primary">
             <i class="bi bi-diagram-3 me-1"></i>Åpne i Airflow
@@ -221,6 +235,17 @@ async function generatePreview() {
     const result  = await resp.json();
     generatedCode = result.code;
     document.getElementById("dag-preview").textContent = generatedCode;
+    // Vis streaming-notice hvis malen er av streaming-type
+    const isStreaming = TEMPLATES[selectedTemplate]?.streaming === true;
+    document.getElementById("streaming-notice").classList.toggle("d-none", !isStreaming);
+    const deployBtn = document.getElementById("deploy-btn");
+    if (isStreaming) {
+      deployBtn.className = "btn btn-warning ms-auto";
+      deployBtn.innerHTML = '<i class="bi bi-broadcast me-1"></i>Deploy streaming IDP';
+    } else {
+      deployBtn.className = "btn btn-success ms-auto";
+      deployBtn.innerHTML = '<i class="bi bi-rocket-takeoff me-1"></i>Deploy pipeline';
+    }
     goStep(3);
   } catch (e) {
     alert("Kunne ikke generere forhåndsvisning: " + e.message);
@@ -249,7 +274,12 @@ async function deployPipeline() {
     document.getElementById("deploy-spinner").classList.add("d-none");
     document.getElementById("deploy-success").classList.remove("d-none");
     document.getElementById("deploy-dag-id").textContent = "DAG-ID: " + dagId;
-    document.getElementById("airflow-dag-link").href = "http://localhost:8081/dags/" + dagId + "/grid";
+    document.getElementById("airflow-dag-link").href = "http://localhost:8080/dags/" + dagId + "/grid";
+    const isStreaming = TEMPLATES[selectedTemplate]?.streaming === true;
+    document.getElementById("streaming-success-note").classList.toggle("d-none", !isStreaming);
+    if (isStreaming) {
+      document.getElementById("deploy-success-title").textContent = "Streaming IDP deployed!";
+    }
     // Poll status
     pollStatus(dagId);
   } catch (e) {

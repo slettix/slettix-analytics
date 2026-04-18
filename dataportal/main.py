@@ -1280,6 +1280,30 @@ _PIPELINE_TEMPLATES = {
             {"name": "retries",        "label": "Antall forsøk",    "type": "number", "default": "2"},
         ],
     },
+    "kafka_idp": {
+        "label":       "Kafka → Bronze (IDP Streaming)",
+        "icon":        "bi-lightning-charge",
+        "description": "Real-time streaming fra Kafka-topics til Bronze Delta-tabell. "
+                       "CloudEvent-konvolutten pakkes ut automatisk; payload lagres som JSON "
+                       "slik at Silver-jobber kan transformere domenespesifikke felt. "
+                       "Spinner opp en kontinuerlig Spark Streaming-pod via Kubernetes.",
+        "tags":        ["kafka", "streaming", "bronze", "idp"],
+        "streaming":   True,
+        "fields": [
+            {"name": "dag_id",          "label": "DAG-ID",                    "type": "text",   "placeholder": "mitt_domene_kafka_idp",                   "required": True},
+            {"name": "kafka_topics",    "label": "Kafka Topics",              "type": "text",   "placeholder": "mitt.domene.created,mitt.domene.updated",  "required": True},
+            {"name": "target_path",     "label": "Mål Bronze (S3-sti)",       "type": "text",   "placeholder": "s3a://bronze/domene/events",              "required": True},
+            {"name": "consumer_group",  "label": "Consumer Group",            "type": "text",   "placeholder": "domene-events-idp",                       "required": True},
+            {"name": "product_id",      "label": "Produkt-ID",                "type": "text",   "placeholder": "domene.events",                           "required": True},
+            {"name": "product_name",    "label": "Produktnavn",               "type": "text",   "placeholder": "Domene — Events (IDP)",                   "required": True},
+            {"name": "description",     "label": "Beskrivelse",               "type": "text",   "placeholder": "IDP som konsumerer hendelser fra ...",     "required": False},
+            {"name": "domain",          "label": "Domene",                    "type": "text",   "placeholder": "hr",                                       "required": True},
+            {"name": "owner",           "label": "Eier",                      "type": "text",   "placeholder": "teamet-ditt",                              "required": True},
+            {"name": "trigger_seconds", "label": "Trigger-intervall (sek)",   "type": "number", "default": "5"},
+            {"name": "freshness_hours", "label": "SLA: Ferskhet (timer)",     "type": "number", "default": "1"},
+            {"name": "partition_by",    "label": "Partisjonér på",            "type": "text",   "placeholder": "event_type,event_date",                    "required": False},
+        ],
+    },
 }
 
 
@@ -1462,6 +1486,284 @@ def _fetch_api(**context):
         execution_timeout=timedelta(minutes=30),
     )
 '''
+    elif template_id == "kafka_idp":
+        kafka_topics    = config.get("kafka_topics", "mitt.domene.events")
+        target_path     = config.get("target_path", "s3a://bronze/domene/events")
+        consumer_group  = config.get("consumer_group", f"{dag_id}-cg")
+        product_id      = config.get("product_id", dag_id.replace("_", "."))
+        product_name    = config.get("product_name", dag_id)
+        description     = config.get("description", f"IDP for {kafka_topics}")
+        trigger_seconds = int(config.get("trigger_seconds", 5))
+        freshness_hours = int(config.get("freshness_hours", 1))
+        partition_by    = config.get("partition_by", "event_type,event_date")
+        checkpoint_path = f"s3a://checkpoints/{dag_id}"
+        spark_app_name  = re.sub(r"[^a-z0-9-]", "-", dag_id.lower())
+
+        body = f'''"""
+Airflow DAG — Kafka IDP: {dag_id}
+Mal: kafka_idp
+Domene: {domain}
+Eier: {owner}
+Topics: {kafka_topics}
+Target: {target_path}
+Auto-generert av Slettix Analytics Portal
+"""
+import os
+import sys
+from datetime import datetime, timedelta
+
+from airflow import DAG
+from airflow.operators.python import PythonOperator
+
+KAFKA_BOOTSTRAP_SERVERS = os.environ.get(
+    "KAFKA_BOOTSTRAP_SERVERS",
+    "kafka.customermaster.svc.cluster.local:9092",
+)
+MINIO_ENDPOINT   = os.environ.get("MINIO_ENDPOINT",   "http://minio.slettix-analytics.svc.cluster.local:9000")
+MINIO_ACCESS_KEY = os.environ.get("MINIO_ACCESS_KEY", "admin")
+MINIO_SECRET_KEY = os.environ.get("MINIO_SECRET_KEY", "changeme")
+PORTAL_URL       = os.environ.get("PORTAL_URL",       "http://dataportal.slettix-analytics.svc.cluster.local:8090")
+PORTAL_API_KEY   = os.environ.get("PORTAL_API_KEY",   "dev-key-change-me")
+
+KAFKA_TOPICS    = "{kafka_topics}"
+TARGET_PATH     = "{target_path}"
+CHECKPOINT_PATH = "{checkpoint_path}"
+CONSUMER_GROUP  = "{consumer_group}"
+PRODUCT_ID      = "{product_id}"
+PRODUCT_NAME    = "{product_name}"
+DOMAIN          = "{domain}"
+OWNER           = "{owner}"
+TRIGGER_SECONDS = {trigger_seconds}
+FRESHNESS_HOURS = {freshness_hours}
+PARTITION_BY    = "{partition_by}"
+
+SPARK_APP_NAME  = "{spark_app_name}-streaming"
+SPARK_NAMESPACE = "slettix-analytics"
+SPARK_NS        = SPARK_NAMESPACE
+
+
+def deploy_streaming_job(**context):
+    """
+    Oppretter eller oppdaterer SparkApplication-ressursen i Kubernetes.
+    Spark Operator holder jobben i live med restartPolicy: Always.
+    Idempotent — trygt å kjøre gjentatte ganger.
+    """
+    log = context["task_instance"].log
+
+    manifest = {{
+        "apiVersion": "sparkoperator.k8s.io/v1beta2",
+        "kind": "SparkApplication",
+        "metadata": {{
+            "name": SPARK_APP_NAME,
+            "namespace": SPARK_NAMESPACE,
+            "labels": {{
+                "app": SPARK_APP_NAME,
+                "app.kubernetes.io/part-of": "slettix-analytics",
+                "app.kubernetes.io/component": "idp-streaming",
+                "app.kubernetes.io/managed-by": "pipeline-builder",
+            }},
+            "annotations": {{
+                "slettix.io/product-id": PRODUCT_ID,
+                "slettix.io/kafka-topics": KAFKA_TOPICS,
+            }},
+        }},
+        "spec": {{
+            "type": "Python",
+            "mode": "cluster",
+            "image": "slettix-analytics/spark:3.5.8",
+            "imagePullPolicy": "IfNotPresent",
+            "mainApplicationFile": "local:///opt/spark/jobs/kafka_to_bronze.py",
+            "arguments": [
+                "--topics",         KAFKA_TOPICS,
+                "--target-path",    TARGET_PATH,
+                "--checkpoint-path",CHECKPOINT_PATH,
+                "--consumer-group", CONSUMER_GROUP,
+                "--trigger-seconds",str(TRIGGER_SECONDS),
+                "--partition-by",   PARTITION_BY,
+                "--starting-offsets","latest",
+            ],
+            "sparkVersion": "3.5.8",
+            "restartPolicy": {{
+                "type": "Always",
+                "onFailureRetries": 10,
+                "onFailureRetryInterval": 30,
+                "onSubmissionFailureRetries": 5,
+                "onSubmissionFailureRetryInterval": 20,
+            }},
+            "sparkConf": {{
+                "spark.sql.extensions":                       "io.delta.sql.DeltaSparkSessionExtension",
+                "spark.sql.catalog.spark_catalog":            "org.apache.spark.sql.delta.catalog.DeltaCatalog",
+                "spark.hadoop.fs.s3a.endpoint":               MINIO_ENDPOINT,
+                "spark.hadoop.fs.s3a.path.style.access":      "true",
+                "spark.hadoop.fs.s3a.impl":                   "org.apache.hadoop.fs.s3a.S3AFileSystem",
+                "spark.hadoop.fs.s3a.connection.ssl.enabled": "false",
+                "spark.hadoop.fs.s3a.aws.credentials.provider": "com.amazonaws.auth.DefaultAWSCredentialsProviderChain",
+                "spark.sql.shuffle.partitions":               "4",
+                "spark.databricks.delta.schema.autoMerge.enabled": "true",
+            }},
+            "driver": {{
+                "cores": 1,
+                "memory": "512m",
+                "memoryOverhead": "128m",
+                "serviceAccount": "spark",
+                "env": [
+                    {{"name": "KAFKA_BOOTSTRAP_SERVERS", "value": KAFKA_BOOTSTRAP_SERVERS}},
+                    {{"name": "AWS_ACCESS_KEY_ID",
+                      "valueFrom": {{"secretKeyRef": {{"name": "slettix-credentials", "key": "minio-root-user"}}}}}},
+                    {{"name": "AWS_SECRET_ACCESS_KEY",
+                      "valueFrom": {{"secretKeyRef": {{"name": "slettix-credentials", "key": "minio-root-password"}}}}}},
+                ],
+            }},
+            "executor": {{
+                "instances": 1,
+                "cores": 1,
+                "memory": "512m",
+                "memoryOverhead": "128m",
+                "env": [
+                    {{"name": "KAFKA_BOOTSTRAP_SERVERS", "value": KAFKA_BOOTSTRAP_SERVERS}},
+                    {{"name": "AWS_ACCESS_KEY_ID",
+                      "valueFrom": {{"secretKeyRef": {{"name": "slettix-credentials", "key": "minio-root-user"}}}}}},
+                    {{"name": "AWS_SECRET_ACCESS_KEY",
+                      "valueFrom": {{"secretKeyRef": {{"name": "slettix-credentials", "key": "minio-root-password"}}}}}},
+                ],
+            }},
+        }},
+    }}
+
+    try:
+        from kubernetes import client as k8s, config as k8s_config
+        try:
+            k8s_config.load_incluster_config()
+        except Exception:
+            k8s_config.load_kube_config()
+
+        custom_api = k8s.CustomObjectsApi()
+        grp, ver, plural = "sparkoperator.k8s.io", "v1beta2", "sparkapplications"
+
+        try:
+            existing = custom_api.get_namespaced_custom_object(
+                group=grp, version=ver, namespace=SPARK_NAMESPACE,
+                plural=plural, name=SPARK_APP_NAME,
+            )
+            manifest["metadata"]["resourceVersion"] = existing["metadata"]["resourceVersion"]
+            custom_api.replace_namespaced_custom_object(
+                group=grp, version=ver, namespace=SPARK_NAMESPACE,
+                plural=plural, name=SPARK_APP_NAME, body=manifest,
+            )
+            log.info(f"SparkApplication {{SPARK_APP_NAME}} oppdatert")
+        except k8s.ApiException as exc:
+            if exc.status == 404:
+                custom_api.create_namespaced_custom_object(
+                    group=grp, version=ver, namespace=SPARK_NAMESPACE,
+                    plural=plural, body=manifest,
+                )
+                log.info(f"SparkApplication {{SPARK_APP_NAME}} opprettet")
+            else:
+                raise
+    except Exception as exc:
+        log.error(f"Kunne ikke deploye SparkApplication: {{exc}}")
+        raise
+
+
+def register_product(**context):
+    """
+    Registrerer dataprodukt-manifestet i Delta-registeret.
+    Idempotent — oppdaterer hvis produktet allerede finnes.
+    """
+    import json
+    log = context["task_instance"].log
+    sys.path.insert(0, "/opt/airflow/jobs")
+
+    manifest = {{
+        "id":          PRODUCT_ID,
+        "name":        PRODUCT_NAME,
+        "domain":      DOMAIN,
+        "owner":       OWNER,
+        "version":     "1.0.0",
+        "description": "{description}",
+        "source_path": TARGET_PATH.replace("s3a://", "s3://"),
+        "format":      "delta",
+        "dag_id":      "{dag_id}",
+        "product_type":"source",
+        "access":      "restricted",
+        "quality_sla": {{"freshness_hours": FRESHNESS_HOURS}},
+        "tags":        ["kafka", "streaming", "idp", "bronze", DOMAIN],
+        "contract": {{
+            "slo": {{"freshness_hours": FRESHNESS_HOURS}},
+            "schema_compatibility": "FORWARD",
+        }},
+        "schema": [
+            {{"name": "event_id",       "type": "string", "nullable": True,  "pii": False, "description": "CloudEvent eventId"}},
+            {{"name": "event_type",     "type": "string", "nullable": True,  "pii": False, "description": "CloudEvent eventType"}},
+            {{"name": "event_timestamp","type": "string", "nullable": True,  "pii": False, "description": "CloudEvent occurredAt"}},
+            {{"name": "event_source",   "type": "string", "nullable": True,  "pii": False, "description": "CloudEvent source"}},
+            {{"name": "event_version",  "type": "string", "nullable": True,  "pii": False, "description": "CloudEvent version"}},
+            {{"name": "payload_json",   "type": "string", "nullable": True,  "pii": True,  "sensitivity": "high",
+              "description": "Rå JSON-payload — domenespesifikke felt transformeres i Silver"}},
+            {{"name": "kafka_topic",    "type": "string", "nullable": False, "pii": False, "description": "Kafka-topic meldingen ble lest fra"}},
+            {{"name": "kafka_partition","type": "integer","nullable": False, "pii": False}},
+            {{"name": "kafka_offset",   "type": "long",   "nullable": False, "pii": False}},
+            {{"name": "kafka_timestamp","type": "timestamp","nullable": True,"pii": False}},
+            {{"name": "_processed_at",  "type": "timestamp","nullable": False,"pii": False, "description": "Prosesseringstidspunkt (IDP)"}},
+            {{"name": "_raw_value",     "type": "string", "nullable": True,  "pii": True,  "sensitivity": "high",
+              "description": "Rå Kafka-meldingsverdi (JSON-streng)"}},
+            {{"name": "event_date",     "type": "date",   "nullable": True,  "pii": False, "description": "Partisjoneringskolonne (avledet av event_timestamp)"}},
+        ],
+    }}
+
+    try:
+        from registry import register
+        register(manifest)
+        log.info(f"Produkt {{PRODUCT_ID}} registrert i Delta-registeret")
+    except Exception as exc:
+        log.warning(f"Registrering i Delta-registeret feilet: {{exc}}")
+
+    # Patch dag_id i portalen
+    try:
+        import requests
+        requests.patch(
+            f"{{PORTAL_URL}}/api/products/{{PRODUCT_ID}}",
+            json={{"dag_id": "{dag_id}"}},
+            headers={{"X-API-Key": PORTAL_API_KEY}},
+            timeout=10,
+        )
+        log.info(f"dag_id patchet i portalen for {{PRODUCT_ID}}")
+    except Exception as exc:
+        log.warning(f"Kunne ikke patche dag_id i portalen: {{exc}}")
+
+
+default_args = {{
+    "owner":       "{owner}",
+    "retries":     1,
+    "retry_delay": timedelta(minutes=2),
+}}
+
+with DAG(
+    dag_id="{dag_id}",
+    description="Kafka IDP: {kafka_topics} → {target_path}",
+    schedule="@once",
+    start_date=datetime(2024, 1, 1),
+    catchup=False,
+    default_args=default_args,
+    tags={repr(["generated", "kafka", "streaming", "idp", domain])},
+    doc_md=__doc__,
+) as dag:
+
+    deploy = PythonOperator(
+        task_id="deploy_streaming_job",
+        python_callable=deploy_streaming_job,
+        execution_timeout=timedelta(minutes=5),
+    )
+
+    register = PythonOperator(
+        task_id="register_product",
+        python_callable=register_product,
+        execution_timeout=timedelta(minutes=5),
+    )
+
+    deploy >> register
+'''
+
     else:
         raise ValueError(f"Ukjent mal: {template_id}")
 
