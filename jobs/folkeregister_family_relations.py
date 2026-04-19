@@ -42,11 +42,34 @@ TARGET_PATH         = "s3a://silver/folkeregister/family_relations"
 MAX_ANCESTOR_DEPTH  = 5
 
 
+def _extract_family_fields(df: DataFrame) -> DataFrame:
+    """
+    Trekker ut domenespesifikke felt fra payload_json.
+
+    event.marriage / event.divorce:
+      citizen1Id → person_id_a, citizen2Id → person_id_b
+    event.birth:
+      childId → child_id, parent1Id → mother_id, parent2Id → father_id
+    """
+    p = "payload_json"
+    return df.select(
+        F.col("event_type"),
+        F.col("event_timestamp"),
+        F.col("kafka_timestamp"),
+        F.get_json_object(p, "$.citizen1Id").alias("person_id_a"),
+        F.get_json_object(p, "$.citizen2Id").alias("person_id_b"),
+        F.get_json_object(p, "$.childId").alias("child_id"),
+        F.get_json_object(p, "$.parent1Id").alias("mother_id"),
+        F.get_json_object(p, "$.parent2Id").alias("father_id"),
+    )
+
+
 def build_relations(spark: SparkSession) -> None:
 
     log.info("Leser Bronze family_events …")
+    raw_family = spark.read.format("delta").load(FAMILY_EVENTS_PATH)
     family_df = (
-        spark.read.format("delta").load(FAMILY_EVENTS_PATH)
+        _extract_family_fields(raw_family)
         .withColumn("event_ts", F.coalesce(
             F.to_timestamp("event_timestamp"), F.col("kafka_timestamp"),
         ))

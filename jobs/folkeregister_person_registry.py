@@ -6,24 +6,29 @@ med fullstendig historikk via SCD Type 2.  Tabellen bevarer alle tilstandsendrin
 for navn, adresse, vitalstatus og sivilstatus.
 
 SCD2-triggere per person_id (sortert på event_ts):
-  PersonRegistrert / PersonFødt   → oppretter initiell rad
-  PersonFlyttet                   → ny rad med oppdatert adresse
-  PersonDød                       → ny rad med is_alive=false, death_date satt
-  EkteskapInngått / EkteskapOppløst → ny rad med oppdatert sivilstatus
+  citizen.created / event.birth  → oppretter initiell rad
+  event.relocation               → ny rad med oppdatert adresse
+  citizen.died                   → ny rad med is_alive=false, death_date satt
+  event.marriage / event.divorce → ny rad med oppdatert sivilstatus (via family_events)
 
 PII-tiltak:
-  Tabellen er «restricted».  Kun fnr_hash lagres — original fnr lagres aldri.
+  Tabellen er «restricted».  Kun fnr_hash lagres — original fnr/ssn lagres aldri.
+
+Bronze-skjema (ny, Pipeline Builder):
+  Felter leses fra payload_json (generisk kafka_to_bronze.py-format).
 
 Kjøring:
   spark-submit /opt/spark/jobs/folkeregister_person_registry.py
 """
 
 import argparse
+import hashlib
 import os
 from functools import reduce
 
 from pyspark.sql import DataFrame, SparkSession, Window
 from pyspark.sql import functions as F
+from pyspark.sql.types import StringType
 
 try:
     from spark_logger import get_logger
@@ -43,14 +48,92 @@ TARGET_PATH        = "s3a://silver/folkeregister/person_registry"
 
 STATE_EVENTS = {"citizen.created", "event.birth", "citizen.died", "event.relocation"}
 
+_sha256_udf = F.udf(
+    lambda v: hashlib.sha256(v.encode()).hexdigest() if v else None,
+    StringType(),
+)
 
-# ── Hjelpefunksjon: null-literal-kolonner ───────────────────────────────────
 
 def _nulls(*cols: str):
     return [F.lit(None).cast("string").alias(c) for c in cols]
 
 
-# ── Bygge en unified state-change event-tabell ─────────────────────────────
+def _extract_person_fields(df: DataFrame) -> DataFrame:
+    """
+    Trekker ut domenespesifikke felt fra payload_json.
+
+    Støttede event-typer og payload-felter:
+      citizen.created / citizen.died:
+        citizenId, ssn, firstName, lastName, sex, birthDate, country, status
+      event.birth:
+        childId, childSsn, birthDate, parent1Id, parent2Id
+      event.relocation:
+        citizenId, ssn, streetAddress, municipalityCode, municipalityName, county
+    """
+    p = "payload_json"
+
+    return df.select(
+        F.col("event_type"),
+        F.col("event_timestamp"),
+        F.col("kafka_timestamp"),
+
+        # person_id: citizenId for citizen-events, childId for birth
+        F.coalesce(
+            F.get_json_object(p, "$.citizenId"),
+            F.get_json_object(p, "$.childId"),
+        ).alias("person_id"),
+
+        # fnr_hash: SHA-256 av ssn/childSsn
+        _sha256_udf(F.coalesce(
+            F.get_json_object(p, "$.ssn"),
+            F.get_json_object(p, "$.childSsn"),
+        )).alias("fnr_hash"),
+
+        F.get_json_object(p, "$.firstName").alias("first_name"),
+        F.get_json_object(p, "$.lastName").alias("last_name"),
+        F.get_json_object(p, "$.sex").alias("gender"),
+        F.get_json_object(p, "$.birthDate").alias("birth_date"),
+        F.get_json_object(p, "$.parent1Id").alias("mother_id"),
+        F.get_json_object(p, "$.parent2Id").alias("father_id"),
+
+        # Adressefelter (event.relocation)
+        F.get_json_object(p, "$.streetAddress").alias("street_address"),
+        F.get_json_object(p, "$.municipalityCode").alias("municipality_code"),
+        F.get_json_object(p, "$.municipalityName").alias("municipality_name"),
+        F.get_json_object(p, "$.county").alias("county"),
+
+        # death_date: sett for citizen.died
+        F.when(
+            F.col("event_type") == "citizen.died",
+            F.get_json_object(p, "$.birthDate"),
+        ).alias("death_date"),
+
+        F.lit(None).cast("string").alias("civil_status_change"),
+    )
+
+
+def _extract_family_fields(df: DataFrame) -> DataFrame:
+    """
+    Trekker ut domenespesifikke felt fra payload_json for familiehendelser.
+
+    event.marriage / event.divorce:
+      citizen1Id, citizen1Ssn, citizen2Id, citizen2Ssn, officialDate
+    event.birth:
+      childId, childSsn, birthDate, parent1Id, parent2Id
+    """
+    p = "payload_json"
+
+    return df.select(
+        F.col("event_type"),
+        F.col("event_timestamp"),
+        F.col("kafka_timestamp"),
+        F.get_json_object(p, "$.citizen1Id").alias("person_id_a"),
+        F.get_json_object(p, "$.citizen2Id").alias("person_id_b"),
+        F.get_json_object(p, "$.childId").alias("child_id"),
+        F.get_json_object(p, "$.parent1Id").alias("parent1_id"),
+        F.get_json_object(p, "$.parent2Id").alias("parent2_id"),
+    )
+
 
 def _person_state_events(person_df: DataFrame) -> DataFrame:
     return person_df.filter(
@@ -66,7 +149,6 @@ def _person_state_events(person_df: DataFrame) -> DataFrame:
 
 
 def _civil_status_events(family_df: DataFrame) -> DataFrame:
-    """Syntetiske hendelser for sivilstatusendringer fra familiehendelser."""
     _static = _nulls(
         "fnr_hash", "first_name", "last_name", "birth_date",
         "gender", "mother_id", "father_id",
@@ -93,27 +175,22 @@ def _civil_status_events(family_df: DataFrame) -> DataFrame:
     return reduce(DataFrame.unionByName, frames)
 
 
-# ── Hovedlogikk ─────────────────────────────────────────────────────────────
-
 def build_registry(spark: SparkSession) -> None:
 
-    # ── Les Bronze-tabeller ───────────────────────────────────────────────
     log.info("Leser Bronze person_events …")
+    raw_person = spark.read.format("delta").load(PERSON_EVENTS_PATH)
     person_df = (
-        spark.read.format("delta").load(PERSON_EVENTS_PATH)
+        _extract_person_fields(raw_person)
         .withColumn("event_ts", F.coalesce(
             F.to_timestamp("event_timestamp"), F.col("kafka_timestamp"),
         ))
     )
-    # Bakoverkompatibel: legg til street_address som null hvis kolonnen mangler
-    # (Bronze-tabellen har gammelt skjema inntil IDP re-kjøres med ny kode)
-    if "street_address" not in person_df.columns:
-        person_df = person_df.withColumn("street_address", F.lit(None).cast("string"))
 
     try:
         log.info("Leser Bronze family_events …")
+        raw_family = spark.read.format("delta").load(FAMILY_EVENTS_PATH)
         family_df = (
-            spark.read.format("delta").load(FAMILY_EVENTS_PATH)
+            _extract_family_fields(raw_family)
             .withColumn("event_ts", F.coalesce(
                 F.to_timestamp("event_timestamp"), F.col("kafka_timestamp"),
             ))
@@ -123,12 +200,10 @@ def build_registry(spark: SparkSession) -> None:
         log.warning(f"Fant ikke family_events ({exc}) — sivilstatus settes til UGIFT.")
         civil_df = None
 
-    # ── Bygg unified event-timeline ───────────────────────────────────────
     timeline = _person_state_events(person_df)
     if civil_df is not None:
         timeline = timeline.unionByName(civil_df)
 
-    # ── Akkumuler tilstand med unbounded preceding window ─────────────────
     w_acc = (
         Window.partitionBy("person_id")
         .orderBy("event_ts")
@@ -160,7 +235,6 @@ def build_registry(spark: SparkSession) -> None:
     )
     timeline = timeline.withColumn("is_alive", F.col("_s_death_date").isNull())
 
-    # ── SCD Type 2 ────────────────────────────────────────────────────────
     w_scd = Window.partitionBy("person_id").orderBy("event_ts")
 
     timeline = (
@@ -170,7 +244,6 @@ def build_registry(spark: SparkSession) -> None:
         .withColumn("is_current", F.col("valid_to").isNull())
     )
 
-    # ── Velg Silver-schema ────────────────────────────────────────────────
     silver_df = timeline.select(
         F.col("person_id"),
         F.col("_s_fnr_hash").alias("fnr_masked"),
@@ -200,8 +273,6 @@ def build_registry(spark: SparkSession) -> None:
 
     from delta.tables import DeltaTable
 
-    # Bruk overwrite ved første kjøring eller ved skjemaendring (f.eks. omdøpte kolonner),
-    # ellers MERGE INTO for atomisk inkrementell oppdatering.
     needs_overwrite = True
     if DeltaTable.isDeltaTable(spark, TARGET_PATH):
         existing_cols = set(spark.read.format("delta").load(TARGET_PATH).columns)
@@ -233,8 +304,6 @@ def build_registry(spark: SparkSession) -> None:
         )
     log.info("Done.")
 
-
-# ── Inngangspunkt ───────────────────────────────────────────────────────────
 
 def main():
     parser = argparse.ArgumentParser()
