@@ -153,8 +153,11 @@ webserver:
       mountPath: /opt/airflow/dags/analytical_employees.py
       subPath: analytical_employees.py
     - name: dags-cm
-      mountPath: /opt/airflow/dags/folkeregister_idp.py
-      subPath: folkeregister_idp.py
+      mountPath: /opt/airflow/dags/folkeregister_person_events_idp.py
+      subPath: folkeregister_person_events_idp.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/folkeregister_family_events_idp.py
+      subPath: folkeregister_family_events_idp.py
     - name: dags-cm
       mountPath: /opt/airflow/dags/folkeregister_silver.py
       subPath: folkeregister_silver.py
@@ -195,8 +198,11 @@ scheduler:
       mountPath: /opt/airflow/dags/analytical_employees.py
       subPath: analytical_employees.py
     - name: dags-cm
-      mountPath: /opt/airflow/dags/folkeregister_idp.py
-      subPath: folkeregister_idp.py
+      mountPath: /opt/airflow/dags/folkeregister_person_events_idp.py
+      subPath: folkeregister_person_events_idp.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/folkeregister_family_events_idp.py
+      subPath: folkeregister_family_events_idp.py
     - name: dags-cm
       mountPath: /opt/airflow/dags/folkeregister_silver.py
       subPath: folkeregister_silver.py
@@ -239,8 +245,11 @@ workers:
       mountPath: /opt/airflow/dags/analytical_employees.py
       subPath: analytical_employees.py
     - name: dags-cm
-      mountPath: /opt/airflow/dags/folkeregister_idp.py
-      subPath: folkeregister_idp.py
+      mountPath: /opt/airflow/dags/folkeregister_person_events_idp.py
+      subPath: folkeregister_person_events_idp.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/folkeregister_family_events_idp.py
+      subPath: folkeregister_family_events_idp.py
     - name: dags-cm
       mountPath: /opt/airflow/dags/folkeregister_silver.py
       subPath: folkeregister_silver.py
@@ -282,8 +291,11 @@ triggerer:
       mountPath: /opt/airflow/dags/analytical_employees.py
       subPath: analytical_employees.py
     - name: dags-cm
-      mountPath: /opt/airflow/dags/folkeregister_idp.py
-      subPath: folkeregister_idp.py
+      mountPath: /opt/airflow/dags/folkeregister_person_events_idp.py
+      subPath: folkeregister_person_events_idp.py
+    - name: dags-cm
+      mountPath: /opt/airflow/dags/folkeregister_family_events_idp.py
+      subPath: folkeregister_family_events_idp.py
     - name: dags-cm
       mountPath: /opt/airflow/dags/folkeregister_silver.py
       subPath: folkeregister_silver.py
