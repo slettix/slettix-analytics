@@ -623,8 +623,8 @@ FROM delta_scan('{{ manifest.source_path }}');</pre>
         <li class="list-group-item">
           <span class="text-muted d-block mb-1">SLA</span>
           <small>
-            Maks null-rate: {{ manifest.quality_sla.max_null_rate * 100 }}%<br>
-            Ferskhet: {{ manifest.quality_sla.freshness_hours }}t
+            {% if manifest.quality_sla.max_null_rate is defined and manifest.quality_sla.max_null_rate is not none %}Maks null-rate: {{ manifest.quality_sla.max_null_rate * 100 }}%<br>{% endif %}
+            {% if manifest.quality_sla.freshness_hours is defined and manifest.quality_sla.freshness_hours %}Ferskhet: {{ manifest.quality_sla.freshness_hours }}t{% endif %}
           </small>
         </li>
         {% endif %}
