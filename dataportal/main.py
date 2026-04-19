@@ -478,6 +478,68 @@ def _related_products(product_id: str, manifest: dict, all_products: list[dict],
     return [m for _, m in scored[:limit]]
 
 
+_K8S_API_BASE   = "https://kubernetes.default.svc"
+_K8S_TOKEN_FILE = "/var/run/secrets/kubernetes.io/serviceaccount/token"
+_K8S_CA_FILE    = "/var/run/secrets/kubernetes.io/serviceaccount/ca.crt"
+
+
+def _k8s_get(path: str) -> dict:
+    """Gjør et GET-kall mot in-cluster Kubernetes API."""
+    try:
+        token = pathlib.Path(_K8S_TOKEN_FILE).read_text().strip()
+    except FileNotFoundError:
+        raise RuntimeError("Ikke in-cluster — ingen service account token")
+    resp = httpx.get(
+        f"{_K8S_API_BASE}{path}",
+        headers={"Authorization": f"Bearer {token}"},
+        verify=_K8S_CA_FILE,
+        timeout=5.0,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
+def _safe_idp_status(manifest: dict) -> dict | None:
+    """Henter SparkApplication-status for streaming IDP knyttet til dette produktet."""
+    product_id = manifest.get("id", "")
+    if not product_id:
+        return None
+    try:
+        result = _k8s_get(
+            "/apis/sparkoperator.k8s.io/v1beta2/namespaces/slettix-analytics/sparkapplications"
+        )
+        apps = [
+            item for item in result.get("items", [])
+            if item.get("metadata", {}).get("annotations", {}).get("slettix.io/product-id") == product_id
+        ]
+        if not apps:
+            return None
+        app = apps[0]
+        state     = app.get("status", {}).get("applicationState", {}).get("state", "UNKNOWN")
+        submitted = app.get("status", {}).get("lastSubmissionAttemptTime")
+        topics    = app.get("metadata", {}).get("annotations", {}).get("slettix.io/kafka-topics", "")
+        app_name  = app.get("metadata", {}).get("name", "")
+        uptime    = None
+        if submitted and state == "RUNNING":
+            try:
+                dt    = datetime.fromisoformat(submitted.replace("Z", "+00:00"))
+                delta = datetime.now(timezone.utc) - dt
+                hours = int(delta.total_seconds() // 3600)
+                mins  = int((delta.total_seconds() % 3600) // 60)
+                uptime = f"{hours}t {mins}m" if hours else f"{mins}m"
+            except Exception:
+                pass
+        return {
+            "state":     state,
+            "app_name":  app_name,
+            "submitted": submitted,
+            "uptime":    uptime,
+            "topics":    [t.strip() for t in topics.split(",") if t.strip()],
+        }
+    except Exception:
+        return None
+
+
 def _safe_pipeline(dag_id: str | None) -> dict:
     if not dag_id:
         return {"status": "unknown"}
@@ -2321,6 +2383,17 @@ def api_get_anomalies(product_id: str, request: Request, api_key: str | None = S
     return result
 
 
+@app.get("/api/products/{product_id}/idp-status", tags=["products"], summary="Streaming IDP-status (SparkApplication)")
+def api_get_idp_status(product_id: str, request: Request, api_key: str | None = Security(_api_key_scheme)):
+    manifest = _resolve_product(product_id)
+    user     = auth.get_current_user(request)
+    _require_access(manifest, user, api_key)
+    result = _safe_idp_status(manifest)
+    if result is None:
+        raise HTTPException(status_code=404, detail="Ingen streaming IDP funnet for dette produktet")
+    return result
+
+
 @app.get("/api/products/{product_id}/incidents", tags=["products"], summary="Alle incidents for produktet")
 def api_list_incidents(product_id: str, request: Request, api_key: str | None = Security(_api_key_scheme)):
     manifest = _resolve_product(product_id)
@@ -3241,8 +3314,9 @@ def page_product(request: Request, product_id: str):
     anomalies = _safe_anomalies(product_id) if has_access else None
     incidents = auth.list_incidents(product_id=product_id) if has_access else []
     quality_history = _safe_quality_history(product_id) if has_access else []
-    pipeline = _safe_pipeline(manifest.get("dag_id"))
-    sla      = (_safe_sla(product_id) or _compute_sla_live(manifest)) if has_access else None
+    pipeline   = _safe_pipeline(manifest.get("dag_id"))
+    idp_status = _safe_idp_status(manifest) if has_access else None
+    sla        = (_safe_sla(product_id) or _compute_sla_live(manifest)) if has_access else None
     sla_compliance_pct = _sla_compliance_pct(product_id) if has_access else None
     mttr_hours         = _mttr(product_id) if has_access else None
 
@@ -3292,6 +3366,7 @@ def page_product(request: Request, product_id: str):
         superset_sqllab_url=_superset_sqllab_url(manifest, schema),
         quality=quality,
         pipeline=pipeline,
+        idp_status=idp_status,
         sla=sla,
         airflow_url=AIRFLOW_EXTERNAL_URL,
         has_access=has_access,

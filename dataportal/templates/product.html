@@ -786,6 +786,77 @@ FROM delta_scan('{{ manifest.source_path }}');</pre>
       </div>
     </div>
 
+    {# streaming IDP-status #}
+    {% if idp_status %}
+    <div class="card mb-4" id="idp-status-card">
+      <div class="card-header bg-white fw-semibold d-flex justify-content-between align-items-center">
+        <span><i class="bi bi-broadcast me-2"></i>Streaming IDP</span>
+        <button class="btn btn-sm btn-outline-secondary" onclick="refreshIdpStatus()" title="Oppdater">
+          <i class="bi bi-arrow-clockwise" id="idp-refresh-icon"></i>
+        </button>
+      </div>
+      <div class="card-body" id="idp-status-body">
+        {% if idp_status.state == "RUNNING" %}
+          <span class="badge bg-success mb-2"><i class="bi bi-broadcast me-1"></i>Kjører</span>
+        {% elif idp_status.state in ("FAILED", "INVALIDATING") %}
+          <span class="badge bg-danger mb-2"><i class="bi bi-x-circle me-1"></i>{{ idp_status.state }}</span>
+        {% elif idp_status.state == "COMPLETED" %}
+          <span class="badge bg-secondary mb-2"><i class="bi bi-check-circle me-1"></i>Fullført</span>
+        {% elif idp_status.state in ("SUBMITTED", "PENDING_RERUN") %}
+          <span class="badge bg-warning text-dark mb-2"><i class="bi bi-hourglass me-1"></i>Starter opp…</span>
+        {% else %}
+          <span class="badge bg-secondary mb-2">{{ idp_status.state }}</span>
+        {% endif %}
+
+        <p class="mb-1 small"><span class="text-muted">App:</span> <code>{{ idp_status.app_name }}</code></p>
+        {% if idp_status.uptime %}
+        <p class="mb-1 small"><span class="text-muted">Oppe:</span> {{ idp_status.uptime }}</p>
+        {% endif %}
+        {% if idp_status.submitted %}
+        <p class="mb-2 small"><span class="text-muted">Startet:</span> {{ idp_status.submitted[:19].replace("T", " ") }} UTC</p>
+        {% endif %}
+        {% if idp_status.topics %}
+        <p class="mb-1 small text-muted">Kafka-topics:</p>
+        <ul class="list-unstyled mb-0 small">
+          {% for t in idp_status.topics %}
+          <li><code>{{ t }}</code></li>
+          {% endfor %}
+        </ul>
+        {% endif %}
+      </div>
+    </div>
+    <script>
+    function refreshIdpStatus() {
+      const icon = document.getElementById("idp-refresh-icon");
+      icon.classList.add("spin");
+      fetch("/api/products/{{ manifest.id }}/idp-status")
+        .then(r => r.ok ? r.json() : null)
+        .then(data => {
+          icon.classList.remove("spin");
+          if (!data) return;
+          const stateMap = {
+            "RUNNING":      '<span class="badge bg-success mb-2"><i class="bi bi-broadcast me-1"></i>Kjører</span>',
+            "FAILED":       '<span class="badge bg-danger mb-2"><i class="bi bi-x-circle me-1"></i>FAILED</span>',
+            "COMPLETED":    '<span class="badge bg-secondary mb-2"><i class="bi bi-check-circle me-1"></i>Fullført</span>',
+            "SUBMITTED":    '<span class="badge bg-warning text-dark mb-2"><i class="bi bi-hourglass me-1"></i>Starter opp…</span>',
+            "PENDING_RERUN":'<span class="badge bg-warning text-dark mb-2"><i class="bi bi-hourglass me-1"></i>Starter opp…</span>',
+          };
+          const badge = stateMap[data.state] || `<span class="badge bg-secondary mb-2">${data.state}</span>`;
+          const uptime = data.uptime ? `<p class="mb-1 small"><span class="text-muted">Oppe:</span> ${data.uptime}</p>` : "";
+          const started = data.submitted ? `<p class="mb-2 small"><span class="text-muted">Startet:</span> ${data.submitted.slice(0,19).replace("T"," ")} UTC</p>` : "";
+          const topics = data.topics?.length ? `<p class="mb-1 small text-muted">Kafka-topics:</p><ul class="list-unstyled mb-0 small">${data.topics.map(t=>`<li><code>${t}</code></li>`).join("")}</ul>` : "";
+          document.getElementById("idp-status-body").innerHTML =
+            `${badge}<p class="mb-1 small"><span class="text-muted">App:</span> <code>${data.app_name}</code></p>${uptime}${started}${topics}`;
+        })
+        .catch(() => icon.classList.remove("spin"));
+    }
+    </script>
+    <style>
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spin { display:inline-block; animation: spin .8s linear infinite; }
+    </style>
+    {% endif %}
+
     {# basert på (analytiske produkter) #}
     {% if source_product_manifests %}
     <div class="card mb-4">

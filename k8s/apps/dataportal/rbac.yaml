@@ -1,0 +1,23 @@
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: dataportal-sparkapps-reader
+  namespace: slettix-analytics
+rules:
+  - apiGroups: ["sparkoperator.k8s.io"]
+    resources: ["sparkapplications"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: dataportal-sparkapps-reader
+  namespace: slettix-analytics
+subjects:
+  - kind: ServiceAccount
+    name: default
+    namespace: slettix-analytics
+roleRef:
+  kind: Role
+  name: dataportal-sparkapps-reader
+  apiGroup: rbac.authorization.k8s.io
