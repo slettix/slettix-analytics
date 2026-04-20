@@ -96,10 +96,11 @@ def _extract_person_fields(df: DataFrame) -> DataFrame:
         F.get_json_object(p, "$.parent1Id").alias("mother_id"),
         F.get_json_object(p, "$.parent2Id").alias("father_id"),
 
-        # Adressefelter (event.relocation)
-        F.get_json_object(p, "$.streetAddress").alias("street_address"),
-        F.get_json_object(p, "$.municipalityCode").alias("municipality_code"),
-        F.get_json_object(p, "$.municipalityName").alias("municipality_name"),
+        # Adressefelter — støtter både gammelt (streetAddress/municipalityCode)
+        # og nytt format (address/postalCode/city) fra citizen.created
+        F.coalesce(F.get_json_object(p, "$.streetAddress"), F.get_json_object(p, "$.address")).alias("street_address"),
+        F.coalesce(F.get_json_object(p, "$.municipalityCode"), F.get_json_object(p, "$.postalCode")).alias("municipality_code"),
+        F.coalesce(F.get_json_object(p, "$.municipalityName"), F.get_json_object(p, "$.city")).alias("municipality_name"),
         F.get_json_object(p, "$.county").alias("county"),
 
         # death_date: sett for citizen.died

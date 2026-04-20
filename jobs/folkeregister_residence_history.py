@@ -63,8 +63,8 @@ def _extract_fields(df):
             F.get_json_object(p, "$.citizenId"),
             F.get_json_object(p, "$.childId"),
         ).alias("person_id"),
-        F.get_json_object(p, "$.municipalityCode").alias("municipality_code"),
-        F.get_json_object(p, "$.municipalityName").alias("municipality_name"),
+        F.coalesce(F.get_json_object(p, "$.municipalityCode"), F.get_json_object(p, "$.postalCode")).alias("municipality_code"),
+        F.coalesce(F.get_json_object(p, "$.municipalityName"), F.get_json_object(p, "$.city")).alias("municipality_name"),
         F.get_json_object(p, "$.county").alias("county"),
         F.when(
             F.col("event_type") == "citizen.died",
