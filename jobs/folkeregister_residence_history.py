@@ -52,11 +52,33 @@ MIGRATION_AGG_PATH  = "s3a://silver/folkeregister/municipality_migration"
 ADDRESS_EVENTS = {"event.relocation"}
 
 
+def _extract_fields(df):
+    """Trekker ut domenefelt fra payload_json (nytt IDP-format)."""
+    p = "payload_json"
+    return df.select(
+        F.col("event_type"),
+        F.col("event_timestamp"),
+        F.col("kafka_timestamp"),
+        F.coalesce(
+            F.get_json_object(p, "$.citizenId"),
+            F.get_json_object(p, "$.childId"),
+        ).alias("person_id"),
+        F.get_json_object(p, "$.municipalityCode").alias("municipality_code"),
+        F.get_json_object(p, "$.municipalityName").alias("municipality_name"),
+        F.get_json_object(p, "$.county").alias("county"),
+        F.when(
+            F.col("event_type") == "citizen.died",
+            F.get_json_object(p, "$.birthDate"),
+        ).alias("death_date"),
+    )
+
+
 def build_residence_history(spark: SparkSession) -> None:
 
     log.info("Leser Bronze person_events …")
     person_df = (
         spark.read.format("delta").load(PERSON_EVENTS_PATH)
+        .transform(_extract_fields)
         .withColumn("event_ts", F.coalesce(
             F.to_timestamp("event_timestamp"), F.col("kafka_timestamp"),
         ))
