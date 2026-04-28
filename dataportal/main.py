@@ -87,7 +87,11 @@ from fastapi.security import APIKeyHeader
 from fastapi.templating import Jinja2Templates
 
 sys.path.insert(0, "/opt/dataportal/jobs")
-from registry import get, list_all, list_versions, register  # noqa: E402
+from registry import (  # noqa: E402
+    list_all as _registry_list_all,
+    list_versions as _registry_list_versions,
+    register as _registry_register,
+)
 
 import auth  # noqa: E402
 
@@ -180,6 +184,98 @@ def timed(name: str):
     return decorator
 
 
+# ── registry-cache (PERF-2) ────────────────────────────────────────────────────
+#
+# Lagdelt cache rundt `registry.list_all()` og `registry.list_versions(pid)`:
+#   1. Request-scope dedup (samme request → samme liste, via ContextVar)
+#   2. Cross-request TTL-cache (default 60s)
+#   3. Fallback til Delta Lake-read
+# Cache-treff/miss logges på DEBUG-nivå via `dataportal.timing`-loggeren.
+# Kall til `register()` invaliderer cachene.
+
+_REGISTRY_CACHE_TTL_S = float(os.environ.get("REGISTRY_CACHE_TTL_S", "60"))
+
+_list_all_ttl_cache: tuple[list[dict], float] | None = None
+_list_versions_ttl_cache: dict[str, tuple[list[dict], float]] = {}
+
+_request_list_all_cv: contextvars.ContextVar[list[dict] | None] = contextvars.ContextVar(
+    "_request_list_all_cv", default=None
+)
+
+
+def _cache_log(name: str, result: str) -> None:
+    if _timing_logger.isEnabledFor(logging.DEBUG):
+        _timing_logger.debug(json.dumps(
+            {"event": "cache", "name": name, "result": result},
+            ensure_ascii=False,
+        ))
+
+
+def list_all() -> list[dict]:
+    """Cachet wrapper rundt `registry.list_all()`."""
+    global _list_all_ttl_cache
+    cached_req = _request_list_all_cv.get()
+    if cached_req is not None:
+        _cache_log("registry.list_all", "request_hit")
+        return cached_req
+
+    now = time.monotonic()
+    ttl = _list_all_ttl_cache
+    if ttl is not None:
+        value, expires_at = ttl
+        if now < expires_at:
+            _cache_log("registry.list_all", "ttl_hit")
+            _request_list_all_cv.set(value)
+            return value
+
+    _cache_log("registry.list_all", "miss")
+    value = _registry_list_all()
+    _list_all_ttl_cache = (value, now + _REGISTRY_CACHE_TTL_S)
+    _request_list_all_cv.set(value)
+    return value
+
+
+def list_versions(product_id: str) -> list[dict]:
+    """Cachet wrapper rundt `registry.list_versions(product_id)`."""
+    now = time.monotonic()
+    cached = _list_versions_ttl_cache.get(product_id)
+    if cached is not None:
+        value, expires_at = cached
+        if now < expires_at:
+            _cache_log("registry.list_versions", "ttl_hit")
+            return value
+
+    _cache_log("registry.list_versions", "miss")
+    value = _registry_list_versions(product_id)
+    _list_versions_ttl_cache[product_id] = (value, now + _REGISTRY_CACHE_TTL_S)
+    return value
+
+
+def get(product_id: str) -> dict:
+    """Latest manifest for `product_id` — leser fra cachet `list_all()`."""
+    products = {p["id"]: p for p in list_all()}
+    if product_id not in products:
+        raise KeyError(f"Data product '{product_id}' not found in registry")
+    return products[product_id]
+
+
+def register(manifest: dict) -> None:
+    """Skriv til Delta og invalider cacher (write-through)."""
+    _registry_register(manifest)
+    _invalidate_registry_cache(manifest.get("id"))
+
+
+def _invalidate_registry_cache(product_id: str | None = None) -> None:
+    """Tøm TTL- og request-scope-cache. Sikrer at neste les ser nye data."""
+    global _list_all_ttl_cache
+    _list_all_ttl_cache = None
+    if product_id:
+        _list_versions_ttl_cache.pop(product_id, None)
+    else:
+        _list_versions_ttl_cache.clear()
+    _request_list_all_cv.set(None)
+
+
 # ── app ────────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
@@ -220,6 +316,7 @@ async def timing_middleware(request, call_next):
     middlewares. Slow-request-terskel styres av `SLOW_REQUEST_MS` env-var.
     """
     token       = _stage_timings.set([])
+    req_token   = _request_list_all_cv.set(None)
     request_id  = uuid.uuid4().hex[:12]
     start       = time.perf_counter()
     status_code = 500
@@ -231,6 +328,7 @@ async def timing_middleware(request, call_next):
         duration_ms = round((time.perf_counter() - start) * 1000, 2)
         stages      = _stage_timings.get() or []
         _stage_timings.reset(token)
+        _request_list_all_cv.reset(req_token)
         record = {
             "event":       "request",
             "request_id":  request_id,
