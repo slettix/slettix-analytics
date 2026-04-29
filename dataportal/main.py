@@ -61,12 +61,18 @@ UI (HTML):
   POST /api/nl2sql                        — naturlig språk til SQL
 """
 
+import contextlib
+import contextvars
+import functools
 import json
+import logging
 import os
 import pathlib
 import re
 import sys
+import time
 import urllib.parse
+import uuid
 from datetime import date, datetime, timedelta, timezone
 
 import boto3
@@ -81,7 +87,11 @@ from fastapi.security import APIKeyHeader
 from fastapi.templating import Jinja2Templates
 
 sys.path.insert(0, "/opt/dataportal/jobs")
-from registry import get, list_all, list_versions, register  # noqa: E402
+from registry import (  # noqa: E402
+    list_all as _registry_list_all,
+    list_versions as _registry_list_versions,
+    register as _registry_register,
+)
 
 import auth  # noqa: E402
 
@@ -121,6 +131,151 @@ _STORAGE_OPTIONS = {
     "AWS_S3_ALLOW_UNSAFE_RENAME": "true",
 }
 
+# ── observability: request-timing ──────────────────────────────────────────────
+
+SLOW_REQUEST_MS = int(os.environ.get("SLOW_REQUEST_MS", "1000"))
+
+_timing_logger = logging.getLogger("dataportal.timing")
+if not _timing_logger.handlers:
+    _h = logging.StreamHandler(sys.stdout)
+    _h.setFormatter(logging.Formatter("%(message)s"))
+    _timing_logger.addHandler(_h)
+    _timing_logger.setLevel(logging.INFO)
+    _timing_logger.propagate = False
+
+_stage_timings: contextvars.ContextVar[list[dict] | None] = contextvars.ContextVar(
+    "_stage_timings", default=None
+)
+
+
+@contextlib.contextmanager
+def timer(name: str):
+    """Mål forløpt tid for en stage og legg den til pågående requests timing-liste.
+
+    Bruk:
+        with timer("s3.quality.latest"):
+            data = s3.get_object(...)
+    Stages logges samlet av `timing_middleware` ved request-slutt. Brukt utenfor
+    en request logger den én linje umiddelbart.
+    """
+    start = time.perf_counter()
+    try:
+        yield
+    finally:
+        elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
+        stages = _stage_timings.get()
+        if stages is not None:
+            stages.append({"name": name, "ms": elapsed_ms})
+        else:
+            _timing_logger.info(json.dumps(
+                {"event": "stage", "name": name, "ms": elapsed_ms},
+                ensure_ascii=False,
+            ))
+
+
+def timed(name: str):
+    """Dekoratør som wrapper en synkron funksjon med `timer(name)`."""
+    def decorator(fn):
+        @functools.wraps(fn)
+        def wrapper(*args, **kwargs):
+            with timer(name):
+                return fn(*args, **kwargs)
+        return wrapper
+    return decorator
+
+
+# ── registry-cache (PERF-2) ────────────────────────────────────────────────────
+#
+# Lagdelt cache rundt `registry.list_all()` og `registry.list_versions(pid)`:
+#   1. Request-scope dedup (samme request → samme liste, via ContextVar)
+#   2. Cross-request TTL-cache (default 60s)
+#   3. Fallback til Delta Lake-read
+# Cache-treff/miss logges på DEBUG-nivå via `dataportal.timing`-loggeren.
+# Kall til `register()` invaliderer cachene.
+
+_REGISTRY_CACHE_TTL_S = float(os.environ.get("REGISTRY_CACHE_TTL_S", "60"))
+
+_list_all_ttl_cache: tuple[list[dict], float] | None = None
+_list_versions_ttl_cache: dict[str, tuple[list[dict], float]] = {}
+
+_request_list_all_cv: contextvars.ContextVar[list[dict] | None] = contextvars.ContextVar(
+    "_request_list_all_cv", default=None
+)
+
+
+def _cache_log(name: str, result: str) -> None:
+    if _timing_logger.isEnabledFor(logging.DEBUG):
+        _timing_logger.debug(json.dumps(
+            {"event": "cache", "name": name, "result": result},
+            ensure_ascii=False,
+        ))
+
+
+def list_all() -> list[dict]:
+    """Cachet wrapper rundt `registry.list_all()`."""
+    global _list_all_ttl_cache
+    cached_req = _request_list_all_cv.get()
+    if cached_req is not None:
+        _cache_log("registry.list_all", "request_hit")
+        return cached_req
+
+    now = time.monotonic()
+    ttl = _list_all_ttl_cache
+    if ttl is not None:
+        value, expires_at = ttl
+        if now < expires_at:
+            _cache_log("registry.list_all", "ttl_hit")
+            _request_list_all_cv.set(value)
+            return value
+
+    _cache_log("registry.list_all", "miss")
+    value = _registry_list_all()
+    _list_all_ttl_cache = (value, now + _REGISTRY_CACHE_TTL_S)
+    _request_list_all_cv.set(value)
+    return value
+
+
+def list_versions(product_id: str) -> list[dict]:
+    """Cachet wrapper rundt `registry.list_versions(product_id)`."""
+    now = time.monotonic()
+    cached = _list_versions_ttl_cache.get(product_id)
+    if cached is not None:
+        value, expires_at = cached
+        if now < expires_at:
+            _cache_log("registry.list_versions", "ttl_hit")
+            return value
+
+    _cache_log("registry.list_versions", "miss")
+    value = _registry_list_versions(product_id)
+    _list_versions_ttl_cache[product_id] = (value, now + _REGISTRY_CACHE_TTL_S)
+    return value
+
+
+def get(product_id: str) -> dict:
+    """Latest manifest for `product_id` — leser fra cachet `list_all()`."""
+    products = {p["id"]: p for p in list_all()}
+    if product_id not in products:
+        raise KeyError(f"Data product '{product_id}' not found in registry")
+    return products[product_id]
+
+
+def register(manifest: dict) -> None:
+    """Skriv til Delta og invalider cacher (write-through)."""
+    _registry_register(manifest)
+    _invalidate_registry_cache(manifest.get("id"))
+
+
+def _invalidate_registry_cache(product_id: str | None = None) -> None:
+    """Tøm TTL- og request-scope-cache. Sikrer at neste les ser nye data."""
+    global _list_all_ttl_cache
+    _list_all_ttl_cache = None
+    if product_id:
+        _list_versions_ttl_cache.pop(product_id, None)
+    else:
+        _list_versions_ttl_cache.clear()
+    _request_list_all_cv.set(None)
+
+
 # ── app ────────────────────────────────────────────────────────────────────────
 
 app = FastAPI(
@@ -152,18 +307,172 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def timing_middleware(request, call_next):
+    """Logg method/path/status/duration_ms + per-stage timings per request.
+
+    Registrert sist → outermost middleware → måler total tid inkludert øvrige
+    middlewares. Slow-request-terskel styres av `SLOW_REQUEST_MS` env-var.
+    """
+    token       = _stage_timings.set([])
+    req_token   = _request_list_all_cv.set(None)
+    request_id  = uuid.uuid4().hex[:12]
+    start       = time.perf_counter()
+    status_code = 500
+    try:
+        response    = await call_next(request)
+        status_code = response.status_code
+        return response
+    finally:
+        duration_ms = round((time.perf_counter() - start) * 1000, 2)
+        stages      = _stage_timings.get() or []
+        _stage_timings.reset(token)
+        _request_list_all_cv.reset(req_token)
+        record = {
+            "event":       "request",
+            "request_id":  request_id,
+            "method":      request.method,
+            "path":        request.url.path,
+            "status":      status_code,
+            "duration_ms": duration_ms,
+        }
+        if stages:
+            record["stages"] = stages
+        msg = json.dumps(record, ensure_ascii=False)
+        if duration_ms >= SLOW_REQUEST_MS:
+            _timing_logger.warning(msg)
+        else:
+            _timing_logger.info(msg)
+
+
+def _prefill_versions_cache() -> int:
+    """Les hele registry-tabellen ÉN gang og populer per-produkt versions-cache.
+
+    Erstatter sekvensiell/parallell `list_versions(pid)` × N (som ville lest
+    hele tabellen N ganger). Returnerer antall produkter som ble cachet.
+    """
+    import json as _json
+    from deltalake import DeltaTable
+
+    try:
+        sys.path.insert(0, "/opt/dataportal/jobs")
+        from registry import REGISTRY_PATH, _STORAGE_OPTIONS as _REG_STORAGE  # noqa: E402
+
+        dt = DeltaTable(REGISTRY_PATH, storage_options=_REG_STORAGE)
+        df = dt.to_pandas().sort_values("registered_at", ascending=False)
+    except Exception:
+        return 0
+
+    now = time.monotonic()
+    expires_at = now + _REGISTRY_CACHE_TTL_S
+
+    # Grupper per product_id og bygg samme struktur som registry.list_versions
+    by_pid: dict[str, list[dict]] = {}
+    for _, row in df.iterrows():
+        pid = row["product_id"]
+        by_pid.setdefault(pid, []).append({
+            "version":       row["version"],
+            "registered_at": row["registered_at"],
+            "manifest":      _json.loads(row["manifest_json"]),
+        })
+
+    for pid, versions in by_pid.items():
+        _list_versions_ttl_cache[pid] = (versions, expires_at)
+    return len(by_pid)
+
+
+async def _warmup_task() -> None:
+    """PERF-9: prefetche tunge ressurser så første sidevisning er rask.
+
+    Kjøres som detached background-task fra `_kickoff_warmup()`. Første runde
+    logger hvert stage; deretter loop'er den med `_REGISTRY_CACHE_TTL_S * 0.7`s
+    intervall for å refreshe cachen *før* TTL utløper (proactive refresh).
+    Stille på succession; logger kun feil etter første runde.
+    """
+    import asyncio
+
+    refresh_interval_s = max(_REGISTRY_CACHE_TTL_S * 0.7, 10)
+    first_run = True
+
+    async def _stage(name: str, fn, *args):
+        start = time.perf_counter()
+        try:
+            result = await asyncio.to_thread(fn, *args)
+            ms = round((time.perf_counter() - start) * 1000, 2)
+            if first_run:
+                # Logg kun små numeriske resultater (f.eks. produkt-antall fra prefill)
+                extra = {"count": result} if isinstance(result, int) else {}
+                _timing_logger.info(json.dumps(
+                    {"event": "warmup", "name": name, "ms": ms, "ok": True, **extra},
+                    ensure_ascii=False,
+                ))
+        except Exception as exc:
+            ms = round((time.perf_counter() - start) * 1000, 2)
+            _timing_logger.info(json.dumps(
+                {"event": "warmup", "name": name, "ms": ms, "ok": False, "error": str(exc)[:200]},
+                ensure_ascii=False,
+            ))
+
+    while True:
+        # 1) Re-les list_all (invaliderer TTL og setter ny verdi)
+        _invalidate_registry_cache()
+        await _stage("registry.list_all", list_all)
+        # 2) Prefill alle list_versions-entries i én tabell-read
+        await _stage("registry.list_versions.prefill", _prefill_versions_cache)
+
+        if first_run:
+            # Ping Airflow webserver så connection pool er warm
+            await _stage(
+                "airflow.health",
+                lambda: _HTTPX_CLIENT.get(f"{AIRFLOW_URL}/health", timeout=3.0),
+            )
+            _timing_logger.info(json.dumps(
+                {"event": "warmup", "name": "complete", "ok": True, "refresh_interval_s": refresh_interval_s},
+                ensure_ascii=False,
+            ))
+            first_run = False
+
+        await asyncio.sleep(refresh_interval_s)
+
+
+@app.on_event("startup")
+async def _kickoff_warmup() -> None:
+    """Spinner opp warmup-tasken og returnerer umiddelbart, slik at readiness-
+    proben på `/health` ikke blokkeres av warmup-arbeidet."""
+    import asyncio
+    asyncio.create_task(_warmup_task())
+
+
 templates = Jinja2Templates(directory="/opt/dataportal/templates")
 
 # ── hjelpefunksjoner ───────────────────────────────────────────────────────────
 
+# PERF-1: gjenbruk klient-instanser på tvers av requests (eliminerer
+# cold-connection-overhead, signature-config og DNS-oppslag per kall).
+
+_S3_SINGLETON = None
+
+
 def _s3_client():
-    return boto3.client(
-        "s3",
-        endpoint_url=MINIO_ENDPOINT,
-        aws_access_key_id=MINIO_ACCESS_KEY,
-        aws_secret_access_key=MINIO_SECRET_KEY,
-        config=Config(signature_version="s3v4"),
-    )
+    global _S3_SINGLETON
+    if _S3_SINGLETON is None:
+        _S3_SINGLETON = boto3.client(
+            "s3",
+            endpoint_url=MINIO_ENDPOINT,
+            aws_access_key_id=MINIO_ACCESS_KEY,
+            aws_secret_access_key=MINIO_SECRET_KEY,
+            config=Config(signature_version="s3v4"),
+        )
+    return _S3_SINGLETON
+
+
+# Modul-nivå httpx.Client med connection pool. K8s API-kallet bruker egen
+# klient pga ulik SSL-trust (custom CA fra service account-mount).
+_HTTPX_CLIENT = httpx.Client(
+    timeout=httpx.Timeout(10.0),
+    limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
+)
 
 
 def _resolve_product(product_id: str) -> dict:
@@ -199,6 +508,7 @@ def _require_admin_api(user: dict | None) -> None:
         raise HTTPException(status_code=403, detail="Krever admin-rolle.")
 
 
+@timed("s3.sla.latest")
 def _safe_sla(product_id: str) -> dict | None:
     try:
         obj = _s3_client().get_object(
@@ -210,6 +520,7 @@ def _safe_sla(product_id: str) -> dict | None:
         return None
 
 
+@timed("s3.sla.history")
 def _safe_sla_history(product_id: str, limit: int = 60) -> list[dict]:
     """Les tidsserie av SLA-resultater fra MinIO history/-mappe."""
     try:
@@ -234,8 +545,39 @@ def _safe_sla_history(product_id: str, limit: int = 60) -> list[dict]:
         return []
 
 
-def _sla_compliance_pct(product_id: str, days: int = 30) -> float | None:
-    """Beregn SLA-overholdelse i prosent siste N dager fra historikk."""
+@timed("compute.sla_compliance_pct")
+def _sla_compliance_pct(
+    product_id: str,
+    days: int = 30,
+    manifest: dict | None = None,
+    max_age_hours: float = 24.0,
+) -> float | None:
+    """Beregn SLA-overholdelse i prosent siste N dager.
+
+    Bruker precomputed `sla_compliance_30d` fra manifest når den er tilgjengelig
+    og fersk (< `max_age_hours` gammel — default 24t). Faller tilbake til
+    live-beregning fra MinIO-historikk (1440 sekvensielle reads i verste fall).
+
+    PERF-4: precompute skjer i `airflow/dags/02_sla_monitor.py`.
+    """
+    if manifest is None:
+        try:
+            manifest = get(product_id)
+        except KeyError:
+            manifest = {}
+    cached_pct = manifest.get("sla_compliance_30d")
+    cached_at  = manifest.get("sla_aggregate_computed_at")
+    if cached_pct is not None and cached_at:
+        try:
+            computed_at = datetime.fromisoformat(cached_at)
+            if computed_at.tzinfo is None:
+                computed_at = computed_at.replace(tzinfo=timezone.utc)
+            age_h = (datetime.now(tz=timezone.utc) - computed_at).total_seconds() / 3600
+            if age_h < max_age_hours:
+                return float(cached_pct)
+        except (ValueError, TypeError):
+            pass
+
     history = _safe_sla_history(product_id, limit=days * 48)  # maks 48 sjekker/dag
     if not history:
         return None
@@ -254,6 +596,7 @@ def _sla_compliance_pct(product_id: str, days: int = 30) -> float | None:
     return round(compliant_count / len(relevant) * 100, 1)
 
 
+@timed("db.mttr")
 def _mttr(product_id: str) -> float | None:
     """Beregn Mean Time To Resolve (timer) for løste incidents på produktet."""
     incidents = auth.list_incidents(product_id=product_id)
@@ -282,6 +625,7 @@ def _mttr(product_id: str) -> float | None:
     return round(total_hours / count, 1)
 
 
+@timed("compute.sla_live")
 def _compute_sla_live(manifest: dict) -> dict:
     product_id      = manifest["id"]
     freshness_hours = (manifest.get("quality_sla") or {}).get("freshness_hours")
@@ -289,13 +633,20 @@ def _compute_sla_live(manifest: dict) -> dict:
     if not freshness_hours:
         return {"product_id": product_id, "compliant": None, "reason": "Ingen SLA definert"}
     try:
-        dt      = DeltaTable(manifest["source_path"], storage_options=_STORAGE_OPTIONS)
-        history = dt.history(limit=1)
-        if not history:
-            return {"product_id": product_id, "compliant": False, "reason": "Ingen historikk"}
-        ts_ms        = history[0].get("timestamp")
-        last_updated = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
-        hours_since  = (now - last_updated).total_seconds() / 3600
+        # Bruk cachet last_updated fra pipeline_stats hvis tilgjengelig
+        cached_ts = manifest.get("last_updated")
+        if cached_ts:
+            last_updated = datetime.fromisoformat(cached_ts)
+            if last_updated.tzinfo is None:
+                last_updated = last_updated.replace(tzinfo=timezone.utc)
+        else:
+            dt      = DeltaTable(manifest["source_path"], storage_options=_STORAGE_OPTIONS)
+            history = dt.history(limit=1)
+            if not history:
+                return {"product_id": product_id, "compliant": False, "reason": "Ingen historikk"}
+            ts_ms        = history[0].get("timestamp")
+            last_updated = datetime.fromtimestamp(ts_ms / 1000, tz=timezone.utc)
+        hours_since = (now - last_updated).total_seconds() / 3600
         return {
             "product_id":         product_id,
             "checked_at":         now.isoformat(),
@@ -308,6 +659,7 @@ def _compute_sla_live(manifest: dict) -> dict:
         return {"product_id": product_id, "compliant": False, "error": str(exc)}
 
 
+@timed("s3.quality.latest")
 def _safe_quality(product_id: str) -> dict | None:
     try:
         obj = _s3_client().get_object(
@@ -319,6 +671,7 @@ def _safe_quality(product_id: str) -> dict | None:
         return None
 
 
+@timed("s3.quality.history")
 def _safe_quality_history(product_id: str, limit: int = 30) -> list[dict]:
     """Les tidsserie av kvalitetsresultater fra MinIO history/-mappe."""
     try:
@@ -343,6 +696,7 @@ def _safe_quality_history(product_id: str, limit: int = 30) -> list[dict]:
         return []
 
 
+@timed("s3.quality.anomalies")
 def _safe_anomalies(product_id: str) -> dict | None:
     """Les siste anomaliresultat fra MinIO."""
     try:
@@ -440,6 +794,7 @@ def _search_products(query: str, products: list[dict], limit: int = 20) -> list[
         return results[:limit]
 
 
+@timed("compute.related")
 def _related_products(product_id: str, manifest: dict, all_products: list[dict], limit: int = 4) -> list[dict]:
     """
     Finn relaterte produkter basert på:
@@ -499,6 +854,7 @@ def _k8s_get(path: str) -> dict:
     return resp.json()
 
 
+@timed("k8s.idp_status")
 def _safe_idp_status(manifest: dict) -> dict | None:
     """Henter SparkApplication-status for streaming IDP knyttet til dette produktet."""
     product_id = manifest.get("id", "")
@@ -540,11 +896,12 @@ def _safe_idp_status(manifest: dict) -> dict | None:
         return None
 
 
+@timed("airflow.pipeline")
 def _safe_pipeline(dag_id: str | None) -> dict:
     if not dag_id:
         return {"status": "unknown"}
     try:
-        resp = httpx.get(
+        resp = _HTTPX_CLIENT.get(
             f"{AIRFLOW_URL}/api/v1/dags/{dag_id}/dagRuns",
             params={"limit": 1, "order_by": "-execution_date"},
             auth=(AIRFLOW_USER, AIRFLOW_PASS),
@@ -576,6 +933,7 @@ def _safe_pipeline(dag_id: str | None) -> dict:
         return {"status": "unknown", "reason": str(exc)}
 
 
+@timed("airflow.dag_timeline")
 def _get_dag_timeline(dag_id: str, days: int = 7) -> list[dict]:
     today = datetime.now(tz=timezone.utc).date()
     _priority = {"failed": 4, "running": 3, "queued": 2, "success": 1, "none": 0}
@@ -585,7 +943,7 @@ def _get_dag_timeline(dag_id: str, days: int = 7) -> list[dict]:
     }
     try:
         since = (today - timedelta(days=days)).isoformat() + "T00:00:00Z"
-        resp  = httpx.get(
+        resp  = _HTTPX_CLIENT.get(
             f"{AIRFLOW_URL}/api/v1/dags/{dag_id}/dagRuns",
             params={"execution_date_gte": since, "limit": 50, "order_by": "-execution_date"},
             auth=(AIRFLOW_USER, AIRFLOW_PASS),
@@ -801,7 +1159,7 @@ def _notify_subscribers(product_id: str, subject: str, body: str) -> None:
     full_msg = f"*{subject}*\n{body}\nAbonnenter: {emails}"
     if SLACK_WEBHOOK_URL:
         try:
-            httpx.post(SLACK_WEBHOOK_URL, json={"text": full_msg}, timeout=5.0)
+            _HTTPX_CLIENT.post(SLACK_WEBHOOK_URL, json={"text": full_msg}, timeout=5.0)
         except Exception:
             pass
 
@@ -835,6 +1193,7 @@ def _diff_manifests(prev: dict, curr: dict) -> list[str]:
     return changes
 
 
+@timed("delta.schema")
 def _safe_schema(source_path: str) -> list[dict] | None:
     try:
         dt     = DeltaTable(source_path, storage_options=_STORAGE_OPTIONS)
@@ -1123,7 +1482,7 @@ def _push_to_jupyter(filename: str, nb: dict) -> None:
     """Push notebook til Jupyter Contents API (intern URL) så filen dukker opp umiddelbart."""
     import httpx, logging
     try:
-        httpx.put(
+        _HTTPX_CLIENT.put(
             f"{JUPYTER_URL}/api/contents/{filename}",
             json={"type": "notebook", "content": nb},
             timeout=10,
@@ -1975,7 +2334,7 @@ def api_generate_notebook(product_id: str, request: Request, force: bool = False
     if nb_path.exists() and not force:
         return {"filename": filename, "url": _jupyter_open_url(filename), "created": False}
 
-    schema  = _safe_schema(manifest["source_path"])
+    schema  = manifest.get("delta_schema") or _safe_schema(manifest["source_path"])
     quality = _safe_quality(product_id)
     nb      = _generate_product_notebook(manifest, quality, schema)
 
@@ -2182,7 +2541,7 @@ def api_get_schema(product_id: str, request: Request, api_key: str | None = Secu
     manifest = _resolve_product(product_id)
     user     = auth.get_current_user(request)
     _require_access(manifest, user, api_key)
-    schema = _safe_schema(manifest["source_path"])
+    schema = manifest.get("delta_schema") or _safe_schema(manifest["source_path"])
     if schema is None:
         raise HTTPException(status_code=502, detail="Kunne ikke lese schema fra Delta-tabellen")
     return schema
@@ -2326,7 +2685,7 @@ def api_get_pipeline_config(dag_id: str):
 def api_get_pipeline_status(dag_id: str):
     """Poll Airflow API for deploy-status og siste kjøring."""
     try:
-        resp = httpx.get(
+        resp = _HTTPX_CLIENT.get(
             f"{AIRFLOW_URL}/api/v1/dags/{dag_id}",
             auth=(AIRFLOW_USER, AIRFLOW_PASS),
             timeout=5.0,
@@ -2615,7 +2974,7 @@ def api_get_sla_history(product_id: str, request: Request, api_key: str | None =
     user     = auth.get_current_user(request)
     _require_access(manifest, user, api_key)
     history        = _safe_sla_history(product_id)
-    compliance_pct = _sla_compliance_pct(product_id)
+    compliance_pct = _sla_compliance_pct(product_id, manifest=manifest)
     mttr           = _mttr(product_id)
     return {
         "product_id":     product_id,
@@ -2722,8 +3081,8 @@ async def api_patch_schema(product_id: str, request: Request, api_key: str | Non
     existing_schema = manifest.get("schema") or []
     existing_by_name = {col["name"]: col for col in existing_schema}
 
-    # Hent Delta-schema for å kjenne alle kolonnenavn
-    delta_schema = _safe_schema(manifest["source_path"])
+    # Hent Delta-schema for å kjenne alle kolonnenavn (bruk cache hvis tilgjengelig)
+    delta_schema = manifest.get("delta_schema") or _safe_schema(manifest["source_path"])
     all_col_names = (
         [f["name"] for f in delta_schema]
         if delta_schema
@@ -2903,7 +3262,7 @@ def api_get_user_domains(user_id: str, request: Request):
 def _check_service(url: str, timeout: float = 2.0) -> bool:
     """Returner True hvis tjenesten svarer på `url` med HTTP < 500."""
     try:
-        resp = httpx.get(url, timeout=timeout, follow_redirects=True)
+        resp = _HTTPX_CLIENT.get(url, timeout=timeout, follow_redirects=True)
         return resp.status_code < 500
     except Exception:
         return False
@@ -3299,7 +3658,8 @@ def page_product(request: Request, product_id: str):
     is_restricted = manifest.get("access") == "restricted"
     has_access    = _check_product_access(manifest, user, None)
 
-    raw_history       = list_versions(product_id)
+    with timer("registry.list_versions"):
+        raw_history = list_versions(product_id)
     versioned_history = []
     for i, entry in enumerate(raw_history):
         prev = raw_history[i + 1]["manifest"] if i + 1 < len(raw_history) else {}
@@ -3308,7 +3668,13 @@ def page_product(request: Request, product_id: str):
             "changes": _diff_manifests(prev, entry["manifest"]),
         })
 
-    delta_schema = _safe_schema(manifest["source_path"]) if has_access else None
+    # Bruk cachet delta_schema fra pipeline_stats; les Delta-log kun som fallback
+    cached_delta_schema = manifest.get("delta_schema")
+    delta_schema = (
+        cached_delta_schema
+        if (has_access and cached_delta_schema)
+        else (_safe_schema(manifest["source_path"]) if has_access else None)
+    )
     schema       = _merge_schema(delta_schema, manifest.get("schema"))
     quality      = _safe_quality(product_id) if has_access else None
     anomalies = _safe_anomalies(product_id) if has_access else None
@@ -3317,7 +3683,7 @@ def page_product(request: Request, product_id: str):
     pipeline   = _safe_pipeline(manifest.get("dag_id"))
     idp_status = _safe_idp_status(manifest) if has_access else None
     sla        = (_safe_sla(product_id) or _compute_sla_live(manifest)) if has_access else None
-    sla_compliance_pct = _sla_compliance_pct(product_id) if has_access else None
+    sla_compliance_pct = _sla_compliance_pct(product_id, manifest=manifest) if has_access else None
     mttr_hours         = _mttr(product_id) if has_access else None
 
     # Sjekk om brukeren allerede har en pending forespørsel
@@ -3340,13 +3706,16 @@ def page_product(request: Request, product_id: str):
             source_product_manifests.append({"id": spid, "name": spid})
 
     # Lineage (#62/#63)
-    _idx        = {m["id"]: m for m in list_all()}
-    upstream    = _build_upstream(product_id, _idx, {product_id})
-    downstream  = _find_downstream(product_id, _idx)
+    with timer("registry.list_all"):
+        _all_products = list_all()
+    _idx        = {m["id"]: m for m in _all_products}
+    with timer("compute.lineage"):
+        upstream    = _build_upstream(product_id, _idx, {product_id})
+        downstream  = _find_downstream(product_id, _idx)
     mermaid_lineage = _mermaid_lineage(manifest, upstream, downstream)
     column_lineage  = manifest.get("column_lineage") or []
 
-    related = _related_products(product_id, manifest, list_all()) if has_access else []
+    related = _related_products(product_id, manifest, _all_products) if has_access else []
     views   = auth.get_product_views(product_id, days=30)
 
     # Sjekk om notebook allerede finnes
@@ -3392,10 +3761,11 @@ def page_product(request: Request, product_id: str):
     ))
 
 
+@timed("airflow.list_dags")
 def _list_airflow_dags() -> list[str]:
     """Hent alle DAG-IDer fra Airflow. Returnerer tom liste ved feil."""
     try:
-        resp = httpx.get(
+        resp = _HTTPX_CLIENT.get(
             f"{AIRFLOW_URL}/api/v1/dags",
             params={"limit": 100, "only_active": "true"},
             auth=(AIRFLOW_USER, AIRFLOW_PASS),
