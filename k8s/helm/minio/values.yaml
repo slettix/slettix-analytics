@@ -49,13 +49,16 @@ buckets:
     purge: false
 
 # ── Ressurser (tilpasset lokal Docker Desktop) ────────────────────────────────
+# PERF-7: hevet fra 256Mi/512Mi → 512Mi/1Gi for å håndtere parallelle kall fra
+# Jupyter, dataportal og Spark-jobber uten OOM-kill. Krever Docker Desktop med
+# minst 20GB RAM allokert (sjekk Settings → Resources).
 resources:
   requests:
-    memory: 256Mi
-    cpu: 100m
-  limits:
     memory: 512Mi
-    cpu: 500m
+    cpu: 200m
+  limits:
+    memory: 1Gi
+    cpu: 1000m
 
 # ── Tjenester ─────────────────────────────────────────────────────────────────
 # NodePort gjør at localhost:9000 og localhost:9001 fungerer direkte på Docker Desktop
