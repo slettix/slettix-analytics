@@ -346,18 +346,133 @@ async def timing_middleware(request, call_next):
             _timing_logger.info(msg)
 
 
+def _prefill_versions_cache() -> int:
+    """Les hele registry-tabellen ÉN gang og populer per-produkt versions-cache.
+
+    Erstatter sekvensiell/parallell `list_versions(pid)` × N (som ville lest
+    hele tabellen N ganger). Returnerer antall produkter som ble cachet.
+    """
+    import json as _json
+    from deltalake import DeltaTable
+
+    try:
+        sys.path.insert(0, "/opt/dataportal/jobs")
+        from registry import REGISTRY_PATH, _STORAGE_OPTIONS as _REG_STORAGE  # noqa: E402
+
+        dt = DeltaTable(REGISTRY_PATH, storage_options=_REG_STORAGE)
+        df = dt.to_pandas().sort_values("registered_at", ascending=False)
+    except Exception:
+        return 0
+
+    now = time.monotonic()
+    expires_at = now + _REGISTRY_CACHE_TTL_S
+
+    # Grupper per product_id og bygg samme struktur som registry.list_versions
+    by_pid: dict[str, list[dict]] = {}
+    for _, row in df.iterrows():
+        pid = row["product_id"]
+        by_pid.setdefault(pid, []).append({
+            "version":       row["version"],
+            "registered_at": row["registered_at"],
+            "manifest":      _json.loads(row["manifest_json"]),
+        })
+
+    for pid, versions in by_pid.items():
+        _list_versions_ttl_cache[pid] = (versions, expires_at)
+    return len(by_pid)
+
+
+async def _warmup_task() -> None:
+    """PERF-9: prefetche tunge ressurser så første sidevisning er rask.
+
+    Kjøres som detached background-task fra `_kickoff_warmup()`. Første runde
+    logger hvert stage; deretter loop'er den med `_REGISTRY_CACHE_TTL_S * 0.7`s
+    intervall for å refreshe cachen *før* TTL utløper (proactive refresh).
+    Stille på succession; logger kun feil etter første runde.
+    """
+    import asyncio
+
+    refresh_interval_s = max(_REGISTRY_CACHE_TTL_S * 0.7, 10)
+    first_run = True
+
+    async def _stage(name: str, fn, *args):
+        start = time.perf_counter()
+        try:
+            result = await asyncio.to_thread(fn, *args)
+            ms = round((time.perf_counter() - start) * 1000, 2)
+            if first_run:
+                # Logg kun små numeriske resultater (f.eks. produkt-antall fra prefill)
+                extra = {"count": result} if isinstance(result, int) else {}
+                _timing_logger.info(json.dumps(
+                    {"event": "warmup", "name": name, "ms": ms, "ok": True, **extra},
+                    ensure_ascii=False,
+                ))
+        except Exception as exc:
+            ms = round((time.perf_counter() - start) * 1000, 2)
+            _timing_logger.info(json.dumps(
+                {"event": "warmup", "name": name, "ms": ms, "ok": False, "error": str(exc)[:200]},
+                ensure_ascii=False,
+            ))
+
+    while True:
+        # 1) Re-les list_all (invaliderer TTL og setter ny verdi)
+        _invalidate_registry_cache()
+        await _stage("registry.list_all", list_all)
+        # 2) Prefill alle list_versions-entries i én tabell-read
+        await _stage("registry.list_versions.prefill", _prefill_versions_cache)
+
+        if first_run:
+            # Ping Airflow webserver så connection pool er warm
+            await _stage(
+                "airflow.health",
+                lambda: _HTTPX_CLIENT.get(f"{AIRFLOW_URL}/health", timeout=3.0),
+            )
+            _timing_logger.info(json.dumps(
+                {"event": "warmup", "name": "complete", "ok": True, "refresh_interval_s": refresh_interval_s},
+                ensure_ascii=False,
+            ))
+            first_run = False
+
+        await asyncio.sleep(refresh_interval_s)
+
+
+@app.on_event("startup")
+async def _kickoff_warmup() -> None:
+    """Spinner opp warmup-tasken og returnerer umiddelbart, slik at readiness-
+    proben på `/health` ikke blokkeres av warmup-arbeidet."""
+    import asyncio
+    asyncio.create_task(_warmup_task())
+
+
 templates = Jinja2Templates(directory="/opt/dataportal/templates")
 
 # ── hjelpefunksjoner ───────────────────────────────────────────────────────────
 
+# PERF-1: gjenbruk klient-instanser på tvers av requests (eliminerer
+# cold-connection-overhead, signature-config og DNS-oppslag per kall).
+
+_S3_SINGLETON = None
+
+
 def _s3_client():
-    return boto3.client(
-        "s3",
-        endpoint_url=MINIO_ENDPOINT,
-        aws_access_key_id=MINIO_ACCESS_KEY,
-        aws_secret_access_key=MINIO_SECRET_KEY,
-        config=Config(signature_version="s3v4"),
-    )
+    global _S3_SINGLETON
+    if _S3_SINGLETON is None:
+        _S3_SINGLETON = boto3.client(
+            "s3",
+            endpoint_url=MINIO_ENDPOINT,
+            aws_access_key_id=MINIO_ACCESS_KEY,
+            aws_secret_access_key=MINIO_SECRET_KEY,
+            config=Config(signature_version="s3v4"),
+        )
+    return _S3_SINGLETON
+
+
+# Modul-nivå httpx.Client med connection pool. K8s API-kallet bruker egen
+# klient pga ulik SSL-trust (custom CA fra service account-mount).
+_HTTPX_CLIENT = httpx.Client(
+    timeout=httpx.Timeout(10.0),
+    limits=httpx.Limits(max_connections=50, max_keepalive_connections=20),
+)
 
 
 def _resolve_product(product_id: str) -> dict:
@@ -786,7 +901,7 @@ def _safe_pipeline(dag_id: str | None) -> dict:
     if not dag_id:
         return {"status": "unknown"}
     try:
-        resp = httpx.get(
+        resp = _HTTPX_CLIENT.get(
             f"{AIRFLOW_URL}/api/v1/dags/{dag_id}/dagRuns",
             params={"limit": 1, "order_by": "-execution_date"},
             auth=(AIRFLOW_USER, AIRFLOW_PASS),
@@ -828,7 +943,7 @@ def _get_dag_timeline(dag_id: str, days: int = 7) -> list[dict]:
     }
     try:
         since = (today - timedelta(days=days)).isoformat() + "T00:00:00Z"
-        resp  = httpx.get(
+        resp  = _HTTPX_CLIENT.get(
             f"{AIRFLOW_URL}/api/v1/dags/{dag_id}/dagRuns",
             params={"execution_date_gte": since, "limit": 50, "order_by": "-execution_date"},
             auth=(AIRFLOW_USER, AIRFLOW_PASS),
@@ -1044,7 +1159,7 @@ def _notify_subscribers(product_id: str, subject: str, body: str) -> None:
     full_msg = f"*{subject}*\n{body}\nAbonnenter: {emails}"
     if SLACK_WEBHOOK_URL:
         try:
-            httpx.post(SLACK_WEBHOOK_URL, json={"text": full_msg}, timeout=5.0)
+            _HTTPX_CLIENT.post(SLACK_WEBHOOK_URL, json={"text": full_msg}, timeout=5.0)
         except Exception:
             pass
 
@@ -1367,7 +1482,7 @@ def _push_to_jupyter(filename: str, nb: dict) -> None:
     """Push notebook til Jupyter Contents API (intern URL) så filen dukker opp umiddelbart."""
     import httpx, logging
     try:
-        httpx.put(
+        _HTTPX_CLIENT.put(
             f"{JUPYTER_URL}/api/contents/{filename}",
             json={"type": "notebook", "content": nb},
             timeout=10,
@@ -2570,7 +2685,7 @@ def api_get_pipeline_config(dag_id: str):
 def api_get_pipeline_status(dag_id: str):
     """Poll Airflow API for deploy-status og siste kjøring."""
     try:
-        resp = httpx.get(
+        resp = _HTTPX_CLIENT.get(
             f"{AIRFLOW_URL}/api/v1/dags/{dag_id}",
             auth=(AIRFLOW_USER, AIRFLOW_PASS),
             timeout=5.0,
@@ -3147,7 +3262,7 @@ def api_get_user_domains(user_id: str, request: Request):
 def _check_service(url: str, timeout: float = 2.0) -> bool:
     """Returner True hvis tjenesten svarer på `url` med HTTP < 500."""
     try:
-        resp = httpx.get(url, timeout=timeout, follow_redirects=True)
+        resp = _HTTPX_CLIENT.get(url, timeout=timeout, follow_redirects=True)
         return resp.status_code < 500
     except Exception:
         return False
@@ -3650,7 +3765,7 @@ def page_product(request: Request, product_id: str):
 def _list_airflow_dags() -> list[str]:
     """Hent alle DAG-IDer fra Airflow. Returnerer tom liste ved feil."""
     try:
-        resp = httpx.get(
+        resp = _HTTPX_CLIENT.get(
             f"{AIRFLOW_URL}/api/v1/dags",
             params={"limit": 100, "only_active": "true"},
             auth=(AIRFLOW_USER, AIRFLOW_PASS),
