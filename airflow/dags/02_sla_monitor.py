@@ -6,6 +6,10 @@ Kjører hvert 30. minutt og sjekker om hvert dataprodukt med en
 
 Resultat lagres til s3://gold/sla_results/<product_id>/latest.json
 og er tilgjengelig via GET /api/products/{id}/sla i portalen.
+
+PERF-4: etter SLA-sjekk beregnes også 30-dagers compliance-aggregat
+(`sla_compliance_30d`) og PATCH-es til produktmanifestet, slik at
+portalen kan vise verdien uten å lese 1440 MinIO-objekter per visning.
 """
 
 import json
@@ -28,6 +32,71 @@ default_args = {
 }
 
 
+def _compute_compliance_30d(s3, log, product_id: str, days: int = 30) -> float | None:
+    """Les SLA-historikk siste N dager og returner compliance i prosent.
+
+    Bruker key-prefix-filter på timestamp i filnavn (`<YYYYMMDDTHHMMSS>.json`)
+    for å unngå å hente objekter som er eldre enn N dager.
+    """
+    try:
+        cutoff = datetime.now(tz=timezone.utc) - timedelta(days=days)
+        cutoff_key_prefix = cutoff.strftime("%Y%m%dT%H%M%S")
+        prefix = f"sla_results/{product_id}/history/"
+
+        keys: list[str] = []
+        paginator = s3.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket="gold", Prefix=prefix):
+            for obj in page.get("Contents", []) or []:
+                # Filename: <prefix><ts>.json — kun keys nyere enn cutoff
+                fname = obj["Key"][len(prefix):]
+                ts_part = fname.replace(".json", "")
+                if ts_part >= cutoff_key_prefix:
+                    keys.append(obj["Key"])
+
+        if not keys:
+            return None
+
+        compliant_count = 0
+        total = 0
+        for key in keys:
+            try:
+                obj = s3.get_object(Bucket="gold", Key=key)
+                entry = json.loads(obj["Body"].read())
+                total += 1
+                if entry.get("compliant") is True:
+                    compliant_count += 1
+            except Exception as exc:
+                log.warning(f"Hopper over {key}: {exc}")
+
+        if total == 0:
+            return None
+        return round(compliant_count / total * 100, 1)
+    except Exception as exc:
+        log.warning(f"Kunne ikke beregne 30d-compliance for {product_id}: {exc}")
+        return None
+
+
+def _patch_manifest(log, product_id: str, payload: dict) -> None:
+    """PATCH /api/products/{id} med precomputed-felter. Best-effort — feiler stille."""
+    import requests
+
+    portal_url = os.environ.get("PORTAL_URL", "http://dataportal.slettix-analytics.svc.cluster.local:8090")
+    api_key    = os.environ.get("PORTAL_API_KEY", "dev-key-change-me")
+    try:
+        resp = requests.patch(
+            f"{portal_url}/api/products/{product_id}",
+            json=payload,
+            headers={"X-API-Key": api_key},
+            timeout=10,
+        )
+        if resp.ok:
+            log.info(f"  ✓ {product_id}: PATCH-et compliance til portal")
+        else:
+            log.warning(f"  ✗ {product_id}: portal PATCH {resp.status_code}: {resp.text[:200]}")
+    except Exception as exc:
+        log.warning(f"  ✗ {product_id}: PATCH feilet: {exc}")
+
+
 def check_sla(**context):
     """
     For hvert produkt med freshness_hours-SLA:
@@ -35,6 +104,7 @@ def check_sla(**context):
       2. Beregn timer siden siste oppdatering
       3. Avgjør om SLA er overholdt
       4. Lagre resultat til s3://gold/sla_results/<product_id>/latest.json
+      5. Beregn 30d-compliance-aggregat og PATCH til portal-manifest (PERF-4)
     """
     import boto3
     from botocore.client import Config
@@ -143,6 +213,14 @@ def check_sla(**context):
             log.warning(f"Kunne ikke lagre SLA-resultat for {product_id}: {exc}")
 
         checked += 1
+
+        # PERF-4: beregn 30d-compliance og PATCH til portal-manifest. Best-effort.
+        compliance_30d = _compute_compliance_30d(s3, log, product_id, days=30)
+        if compliance_30d is not None:
+            _patch_manifest(log, product_id, {
+                "sla_compliance_30d":          compliance_30d,
+                "sla_aggregate_computed_at":   now.isoformat(),
+            })
 
     log.info(f"SLA-sjekk fullført: {checked} produkter, {breached} brudd.")
 

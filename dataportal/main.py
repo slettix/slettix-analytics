@@ -431,8 +431,38 @@ def _safe_sla_history(product_id: str, limit: int = 60) -> list[dict]:
 
 
 @timed("compute.sla_compliance_pct")
-def _sla_compliance_pct(product_id: str, days: int = 30) -> float | None:
-    """Beregn SLA-overholdelse i prosent siste N dager fra historikk."""
+def _sla_compliance_pct(
+    product_id: str,
+    days: int = 30,
+    manifest: dict | None = None,
+    max_age_hours: float = 24.0,
+) -> float | None:
+    """Beregn SLA-overholdelse i prosent siste N dager.
+
+    Bruker precomputed `sla_compliance_30d` fra manifest når den er tilgjengelig
+    og fersk (< `max_age_hours` gammel — default 24t). Faller tilbake til
+    live-beregning fra MinIO-historikk (1440 sekvensielle reads i verste fall).
+
+    PERF-4: precompute skjer i `airflow/dags/02_sla_monitor.py`.
+    """
+    if manifest is None:
+        try:
+            manifest = get(product_id)
+        except KeyError:
+            manifest = {}
+    cached_pct = manifest.get("sla_compliance_30d")
+    cached_at  = manifest.get("sla_aggregate_computed_at")
+    if cached_pct is not None and cached_at:
+        try:
+            computed_at = datetime.fromisoformat(cached_at)
+            if computed_at.tzinfo is None:
+                computed_at = computed_at.replace(tzinfo=timezone.utc)
+            age_h = (datetime.now(tz=timezone.utc) - computed_at).total_seconds() / 3600
+            if age_h < max_age_hours:
+                return float(cached_pct)
+        except (ValueError, TypeError):
+            pass
+
     history = _safe_sla_history(product_id, limit=days * 48)  # maks 48 sjekker/dag
     if not history:
         return None
@@ -2829,7 +2859,7 @@ def api_get_sla_history(product_id: str, request: Request, api_key: str | None =
     user     = auth.get_current_user(request)
     _require_access(manifest, user, api_key)
     history        = _safe_sla_history(product_id)
-    compliance_pct = _sla_compliance_pct(product_id)
+    compliance_pct = _sla_compliance_pct(product_id, manifest=manifest)
     mttr           = _mttr(product_id)
     return {
         "product_id":     product_id,
@@ -3538,7 +3568,7 @@ def page_product(request: Request, product_id: str):
     pipeline   = _safe_pipeline(manifest.get("dag_id"))
     idp_status = _safe_idp_status(manifest) if has_access else None
     sla        = (_safe_sla(product_id) or _compute_sla_live(manifest)) if has_access else None
-    sla_compliance_pct = _sla_compliance_pct(product_id) if has_access else None
+    sla_compliance_pct = _sla_compliance_pct(product_id, manifest=manifest) if has_access else None
     mttr_hours         = _mttr(product_id) if has_access else None
 
     # Sjekk om brukeren allerede har en pending forespørsel
