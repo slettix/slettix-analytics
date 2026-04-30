@@ -2341,6 +2341,8 @@ def api_generate_notebook(product_id: str, request: Request, force: bool = False
     pathlib.Path(NOTEBOOKS_DIR).mkdir(parents=True, exist_ok=True)
     nb_path.write_text(json.dumps(nb, ensure_ascii=False, indent=1))
     _push_to_jupyter(filename, nb)
+    if user:
+        auth.track_usage(product_id, "generate_notebook", user["id"])
 
     return {"filename": filename, "url": _jupyter_open_url(filename), "created": True}
 
@@ -3636,6 +3638,13 @@ def page_catalog(request: Request):
         if a and a.get("has_anomaly"):
             anomaly_map[m["id"]] = True
     view_counts = {r["product_id"]: r["views"] for r in auth.get_usage_counts(30)}
+
+    # GUIDE-4: rolle-tilpassede landings­widgets — påvirkes av ?persona=… for toggle.
+    persona  = (request.query_params.get("persona") or (user or {}).get("persona") or "analyst")
+    if persona not in auth.PERSONAS:
+        persona = "analyst"
+    persona_widgets = _persona_landing(persona, user, products, view_counts)
+
     return templates.TemplateResponse("catalog.html", _template_ctx(
         request,
         products=products,
@@ -3643,7 +3652,99 @@ def page_catalog(request: Request):
         all_tags=all_tags,
         anomaly_map=anomaly_map,
         view_counts=view_counts,
+        persona=persona,
+        persona_widgets=persona_widgets,
     ))
+
+
+def _persona_landing(persona: str, user: dict | None, products: list[dict], view_counts: dict) -> dict:
+    """Bygger rolle-spesifikke widget-data for forsiden (GUIDE-4)."""
+    user_domains = set(auth.get_user_domains(user["id"])) if user else set()
+    if persona == "engineer":
+        # Pipeline-bygger fokus: vis produkter med dag_id og deres siste pipeline-status
+        with_dag = [p for p in products if p.get("dag_id")]
+        return {
+            "title":    "Pipeline-bygger",
+            "subtitle": "Du ser dataingeniør-vista — fokus på pipelines, status og publisering.",
+            "shortcuts": [
+                {"label": "Pipeline-bygger", "url": "/pipeline-builder", "icon": "bi-tools"},
+                {"label": "DAG-status",       "url": "/pipelines",       "icon": "bi-diagram-3"},
+                {"label": "Publisér produkt", "url": "/publish",         "icon": "bi-cloud-upload"},
+            ],
+            "section_title":    "Produkter med pipeline",
+            "section_products": with_dag[:8],
+        }
+    if persona == "domain_owner":
+        # Eier-fokus: produkter du eier eller domeneprivilegier dekker
+        owned = [
+            p for p in products
+            if (user and p.get("owner") == user.get("username"))
+            or (p.get("domain") in user_domains)
+        ]
+        return {
+            "title":    "Domene­oversikt",
+            "subtitle": "Du ser domeneeier-vista — fokus på governance, SLA og abonnementer.",
+            "shortcuts": [
+                {"label": "Governance",  "url": "/governance",   "icon": "bi-shield-lock"},
+                {"label": "Observability","url": "/observability", "icon": "bi-graph-up"},
+                {"label": "Publisér produkt", "url": "/publish",  "icon": "bi-cloud-upload"},
+            ],
+            "section_title":    "Mine produkter",
+            "section_products": owned[:8],
+        }
+    # analyst (default)
+    most_viewed_ids = sorted(view_counts.items(), key=lambda x: -x[1])[:8]
+    most_viewed = [p for pid, _ in most_viewed_ids for p in products if p["id"] == pid]
+    return {
+        "title":    "Anbefalt for analytikere",
+        "subtitle": "Du ser analytiker-vista — fokus på utforsking og analyse.",
+        "shortcuts": [
+            {"label": "Bla i katalog", "url": "/?tab=analytical", "icon": "bi-search"},
+            {"label": "Glossar",       "url": "/glossary",        "icon": "bi-book"},
+            {"label": "Lag analytisk produkt", "url": "/create-analytical", "icon": "bi-plus-circle"},
+        ],
+        "section_title":    "Mest brukte produkter (siste 30 dager)",
+        "section_products": most_viewed[:8],
+    }
+
+
+@app.get("/getting-started", response_class=HTMLResponse, include_in_schema=False)
+def page_getting_started(request: Request):
+    """GUIDE-1: kom-i-gang-checklist."""
+    user = auth.get_current_user(request)
+    if not user:
+        return RedirectResponse("/login?next=/getting-started", status_code=303)
+    progress = auth.get_onboarding_progress(user["id"])
+    completed_count = sum(1 for v in progress.values() if v)
+    return templates.TemplateResponse("getting_started.html", _template_ctx(
+        request,
+        steps=auth.ONBOARDING_STEPS,
+        progress=progress,
+        completed_count=completed_count,
+        total_count=len(auth.ONBOARDING_STEPS),
+        personas=auth.PERSONAS,
+    ))
+
+
+@app.post("/api/profile/persona", tags=["users"], summary="Sett egen rolle (analyst/engineer/domain_owner)")
+async def api_set_persona(request: Request):
+    user = auth.get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Krever innlogging")
+    body = await request.json()
+    persona = body.get("persona")
+    if not auth.set_persona(user["id"], persona):
+        raise HTTPException(status_code=400, detail=f"Ugyldig persona — må være en av {auth.PERSONAS}")
+    return {"persona": persona}
+
+
+@app.post("/api/profile/onboarding/complete", tags=["users"], summary="Marker onboarding som ferdig")
+async def api_complete_onboarding(request: Request):
+    user = auth.get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Krever innlogging")
+    auth.mark_onboarding_completed(user["id"])
+    return {"completed": True}
 
 
 @app.get("/products/{product_id}", response_class=HTMLResponse, include_in_schema=False)

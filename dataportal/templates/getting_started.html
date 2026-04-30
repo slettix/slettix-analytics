@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block title %}Kom i gang — Slettix Data Portal{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-3" style="max-width: 920px;">
+
+  <div class="d-flex align-items-center mb-3">
+    <h1 class="h3 mb-0"><i class="bi bi-rocket-takeoff me-2 text-primary"></i>Kom i gang</h1>
+    <span class="ms-auto badge bg-light text-dark">{{ completed_count }} / {{ total_count }} steg fullført</span>
+  </div>
+  <p class="text-muted mb-4">
+    Disse stegene tar deg gjennom plattformen som ny bruker. Du kan gjøre dem i hvilken som helst rekkefølge —
+    progresjonen oppdateres automatisk når du utfører hver handling.
+  </p>
+
+  <div class="progress mb-4" style="height: 8px;">
+    <div class="progress-bar bg-success" role="progressbar"
+         style="width: {{ (completed_count / total_count * 100)|round(0) }}%;"
+         aria-valuenow="{{ completed_count }}" aria-valuemin="0" aria-valuemax="{{ total_count }}"></div>
+  </div>
+
+  {# ── Persona-seksjon ── #}
+  <div id="persona" class="card mb-4 shadow-sm">
+    <div class="card-body">
+      <h2 class="h5 mb-2"><i class="bi bi-person-badge me-2 text-primary"></i>Velg din rolle</h2>
+      <p class="text-muted small mb-3">
+        Forsiden tilpasses ut fra rolle. Du kan bytte når som helst senere fra topplinjen.
+      </p>
+      <div class="btn-group" role="group" aria-label="Velg rolle">
+        {% for p in personas %}
+        <input type="radio" class="btn-check persona-radio" name="persona" id="persona-{{ p }}" value="{{ p }}"
+               {% if (current_user.persona if current_user else None) == p %}checked{% endif %}>
+        <label class="btn btn-outline-primary" for="persona-{{ p }}">
+          {% if p == "analyst" %}<i class="bi bi-graph-up me-1"></i>Analytiker
+          {% elif p == "engineer" %}<i class="bi bi-tools me-1"></i>Dataingeniør
+          {% elif p == "domain_owner" %}<i class="bi bi-shield-lock me-1"></i>Domeneeier
+          {% else %}{{ p }}{% endif %}
+        </label>
+        {% endfor %}
+      </div>
+      <div id="persona-status" class="small text-success mt-2" style="display:none;">
+        <i class="bi bi-check-circle me-1"></i>Lagret
+      </div>
+    </div>
+  </div>
+
+  {# ── Checklist ── #}
+  <div class="list-group shadow-sm mb-4">
+    {% for step in steps %}
+    {% set done = progress[step.key] %}
+    <a href="{{ step.url }}" class="list-group-item list-group-item-action d-flex align-items-start gap-3 py-3">
+      <div class="flex-shrink-0" style="width: 32px;">
+        {% if done %}
+          <i class="bi bi-check-circle-fill text-success" style="font-size: 1.4rem;"></i>
+        {% else %}
+          <span class="badge rounded-circle bg-light text-muted border" style="width: 28px; height: 28px; line-height: 22px; font-size: .8rem;">
+            {{ loop.index }}
+          </span>
+        {% endif %}
+      </div>
+      <div class="flex-grow-1">
+        <div class="fw-semibold {% if done %}text-decoration-line-through text-muted{% endif %}">
+          {{ step.title }}
+        </div>
+        <div class="small text-muted">{{ step.description }}</div>
+      </div>
+      <div class="flex-shrink-0 align-self-center">
+        <i class="bi bi-arrow-right text-muted"></i>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+
+  {% if completed_count == total_count %}
+  <div class="alert alert-success">
+    <i class="bi bi-trophy me-1"></i>
+    <strong>Du har fullført alle stegene!</strong>
+    Glossaret og brukerguiden er fortsatt tilgjengelig fra menyen når du trenger det.
+  </div>
+  {% endif %}
+</div>
+
+<script>
+  (function () {
+    const radios = document.querySelectorAll('.persona-radio');
+    const status = document.getElementById('persona-status');
+    radios.forEach(r => r.addEventListener('change', async () => {
+      try {
+        const resp = await fetch('/api/profile/persona', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({persona: r.value}),
+        });
+        if (resp.ok) {
+          status.style.display = '';
+          setTimeout(() => location.reload(), 800);
+        }
+      } catch (_) { /* ignore */ }
+    }));
+  })();
+</script>
+{% endblock %}

@@ -47,6 +47,9 @@ def _db():
         conn.close()
 
 
+PERSONAS = ("analyst", "engineer", "domain_owner")
+
+
 def init_db() -> None:
     with _db() as conn:
         conn.executescript("""
@@ -126,6 +129,13 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_usage_product ON usage_events(product_id);
             CREATE INDEX IF NOT EXISTS idx_usage_ts ON usage_events(ts);
         """)
+        # GUIDE-1/4: legg til persona og onboarding-felter (idempotent migrasjon)
+        existing_cols = {r[1] for r in conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "persona" not in existing_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN persona TEXT")
+        if "onboarding_completed_at" not in existing_cols:
+            conn.execute("ALTER TABLE users ADD COLUMN onboarding_completed_at TEXT")
+
         # Opprett admin-bruker hvis ingen finnes
         row = conn.execute("SELECT COUNT(*) FROM users").fetchone()
         if row[0] == 0:
@@ -398,7 +408,21 @@ def get_current_user(request) -> Optional[dict]:
     payload = decode_access_token(token)
     if not payload:
         return None
-    return {"id": payload["sub"], "username": payload["username"], "role": payload["role"]}
+    user = {"id": payload["sub"], "username": payload["username"], "role": payload["role"]}
+    # Slå opp persona og onboarding-status fra DB (bestemmer landingssidens innhold).
+    try:
+        with _db() as conn:
+            row = conn.execute(
+                "SELECT persona, onboarding_completed_at FROM users WHERE id = ?",
+                (payload["sub"],),
+            ).fetchone()
+            if row:
+                user["persona"] = row["persona"]
+                user["onboarding_completed_at"] = row["onboarding_completed_at"]
+    except Exception:
+        user["persona"] = None
+        user["onboarding_completed_at"] = None
+    return user
 
 # ── domeneprivilegier ──────────────────────────────────────────────────────────
 
@@ -539,3 +563,113 @@ def update_incident(incident_id: str, status: str, updated_by: str) -> dict | No
             (status, now, updated_by, resolved_at, incident_id),
         )
         return dict(conn.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone())
+
+
+# ── GUIDE-1/4: persona og onboarding ────────────────────────────────────────────
+
+# Onboarding-steg som vises på /getting-started. `predicate` evaluerer mot
+# eksisterende data i databasen — vi unngår å duplisere state.
+ONBOARDING_STEPS = [
+    {
+        "key":         "set_persona",
+        "title":       "Velg din rolle",
+        "description": "Tilpass forsiden basert på om du er analytiker, dataingeniør eller domeneeier.",
+        "url":         "/getting-started?focus=persona",
+    },
+    {
+        "key":         "view_product",
+        "title":       "Åpne et dataprodukt",
+        "description": "Klikk inn på et produkt fra katalogen for å se schema, lineage og kvalitet.",
+        "url":         "/",
+    },
+    {
+        "key":         "open_glossary",
+        "title":       "Bli kjent med plattformkonseptene",
+        "description": "Bla i glossaret for forklaring av Medallion, Data Mesh, IDP og mer.",
+        "url":         "/glossary",
+    },
+    {
+        "key":         "subscribe",
+        "title":       "Abonner på et produkt",
+        "description": "Få varsel når et produkt får schema- eller SLO-endringer.",
+        "url":         "/",
+    },
+    {
+        "key":         "generate_notebook",
+        "title":       "Generer en notebook",
+        "description": "Lag et utgangspunkt for analyse i Jupyter via «Åpne i Jupyter».",
+        "url":         "/",
+    },
+]
+
+
+def set_persona(user_id: str, persona: str) -> bool:
+    if persona not in PERSONAS:
+        return False
+    with _db() as conn:
+        conn.execute("UPDATE users SET persona = ? WHERE id = ?", (persona, user_id))
+    return True
+
+
+def get_persona(user_id: str) -> str | None:
+    with _db() as conn:
+        row = conn.execute("SELECT persona FROM users WHERE id = ?", (user_id,)).fetchone()
+    return (row["persona"] if row else None) or None
+
+
+def get_onboarding_progress(user_id: str) -> dict:
+    """Returnér {step_key: bool} basert på state i databasen.
+
+    Stegene er fullført hvis:
+      set_persona       — users.persona er satt
+      view_product      — minst én usage_events.action='view' for brukeren
+      open_glossary     — minst én usage_events.action='view_glossary'
+      subscribe         — minst én rad i subscriptions
+      generate_notebook — minst én usage_events.action='generate_notebook'
+    """
+    with _db() as conn:
+        user_row = conn.execute(
+            "SELECT persona, onboarding_completed_at FROM users WHERE id = ?",
+            (user_id,),
+        ).fetchone()
+        if not user_row:
+            return {s["key"]: False for s in ONBOARDING_STEPS}
+
+        persona = user_row["persona"]
+
+        def _has_event(action: str) -> bool:
+            row = conn.execute(
+                "SELECT 1 FROM usage_events WHERE user_id = ? AND action = ? LIMIT 1",
+                (user_id, action),
+            ).fetchone()
+            return bool(row)
+
+        sub_row = conn.execute(
+            "SELECT 1 FROM subscriptions WHERE user_id = ? LIMIT 1", (user_id,)
+        ).fetchone()
+
+        return {
+            "set_persona":       bool(persona),
+            "view_product":      _has_event("view"),
+            "open_glossary":     _has_event("view_glossary"),
+            "subscribe":         bool(sub_row),
+            "generate_notebook": _has_event("generate_notebook"),
+        }
+
+
+def mark_onboarding_completed(user_id: str) -> None:
+    """Skriver tidsstempel — UI kan bruke dette til å skjule velkomstmodal."""
+    now = datetime.now(tz=timezone.utc).isoformat()
+    with _db() as conn:
+        conn.execute(
+            "UPDATE users SET onboarding_completed_at = ? WHERE id = ?",
+            (now, user_id),
+        )
+
+
+def is_onboarding_completed(user_id: str) -> bool:
+    with _db() as conn:
+        row = conn.execute(
+            "SELECT onboarding_completed_at FROM users WHERE id = ?", (user_id,)
+        ).fetchone()
+    return bool(row and row["onboarding_completed_at"])

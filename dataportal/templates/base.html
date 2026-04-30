@@ -481,6 +481,12 @@
       MinIO Console
       <i class="bi bi-box-arrow-up-right ext-icon"></i>
     </a>
+    {% if current_user %}
+    <a href="/getting-started" class="sidebar-link {% if path == '/getting-started' %}active{% endif %}">
+      <i class="bi bi-rocket-takeoff link-icon" style="color:#10b981;"></i>
+      Kom i gang
+    </a>
+    {% endif %}
     <a href="/docs" target="_blank" class="sidebar-link">
       <i class="bi bi-code-slash link-icon" style="color:#8b5cf6;"></i>
       API-dokumentasjon
@@ -621,5 +627,51 @@
   })();
 </script>
 {% block scripts %}{% endblock %}
+
+{# GUIDE-1: velkomst-modal som vises én gang for brukere uten onboarding-status #}
+{% if current_user and not current_user.onboarding_completed_at and path != '/getting-started' %}
+<div class="modal fade" id="welcomeModal" tabindex="-1" aria-labelledby="welcomeModalLabel" aria-hidden="true" data-bs-backdrop="static">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header bg-primary text-white">
+        <h5 class="modal-title" id="welcomeModalLabel">
+          <i class="bi bi-rocket-takeoff me-2"></i>Velkommen til Slettix Analytics
+        </h5>
+      </div>
+      <div class="modal-body">
+        <p>
+          Slettix Analytics er en data mesh-plattform der domener publiserer dataprodukter med
+          tydelig eierskap, kontrakter og kvalitetskrav. Du kan utforske katalogen, åpne
+          notebooks i Jupyter og bygge dashboards i Superset — alt fra dataportalen.
+        </p>
+        <p class="mb-0 small text-muted">
+          Vi har laget en kort kom-i-gang-checklist som tar deg gjennom de første stegene.
+          Ukjente begreper? Sjekk Glossar i menyen.
+        </p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-link text-muted" id="welcome-skip">Hopp over</button>
+        <a href="/getting-started" class="btn btn-primary">
+          <i class="bi bi-arrow-right me-1"></i>Start kom-i-gang-flyten
+        </a>
+      </div>
+    </div>
+  </div>
+</div>
+<script>
+  (function () {
+    const modalEl = document.getElementById('welcomeModal');
+    if (!modalEl) return;
+    const modal = new bootstrap.Modal(modalEl);
+    modal.show();
+    document.getElementById('welcome-skip').addEventListener('click', async () => {
+      try {
+        await fetch('/api/profile/onboarding/complete', {method: 'POST'});
+      } catch (_) {}
+      modal.hide();
+    });
+  })();
+</script>
+{% endif %}
 </body>
 </html>
