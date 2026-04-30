@@ -28,6 +28,8 @@ Kjøring:
 import argparse
 import os
 
+from municipality_ref import enrich_municipality
+from pipeline_stats import report_stats
 from pyspark.sql import SparkSession, Window
 from pyspark.sql import functions as F
 
@@ -47,9 +49,9 @@ PERSON_EVENTS_PATH  = "s3a://bronze/folkeregister/person_events"
 TARGET_PATH         = "s3a://silver/folkeregister/residence_history"
 MIGRATION_AGG_PATH  = "s3a://silver/folkeregister/municipality_migration"
 
-# Kun event.relocation inneholder adressedata (newPostalCode / newCity).
-# citizen.created og event.birth har ingen adresse i payload.
-ADDRESS_EVENTS = {"event.relocation"}
+# Alle events der personens bosted er kjent (municipalityCode i payload).
+# Etter 8c96e30 har citizen.created og event.birth også adressefelter.
+ADDRESS_EVENTS = {"citizen.created", "event.birth", "event.relocation"}
 
 
 def _extract_fields(df):
@@ -92,6 +94,9 @@ def build_residence_history(spark: SparkSession) -> None:
         "person_id", "event_ts", "event_type",
         "municipality_code", "municipality_name", "county",
     )
+
+    # Berik med korrekt kommunenavn og fylke fra referansetabell
+    addr_df = enrich_municipality(addr_df, spark)
 
     # ── Finn utflyttingsdato = neste innflyttingsdato for personen ────────
     w = Window.partitionBy("person_id").orderBy("event_ts")
@@ -151,8 +156,7 @@ def build_residence_history(spark: SparkSession) -> None:
         F.current_timestamp().alias("_updated_at"),
     )
 
-    count = silver_df.count()
-    log.info(f"Skriver {count:,} bostedsrader til {TARGET_PATH} …")
+    log.info(f"Skriver bostedsrader til {TARGET_PATH} …")
 
     (
         silver_df.write
@@ -162,6 +166,12 @@ def build_residence_history(spark: SparkSession) -> None:
         .partitionBy("is_current")
         .save(TARGET_PATH)
     )
+
+    # Re-les fra Delta — unngår at downstream-aggregat re-evaluerer hele
+    # transformasjonspipelinen fra Bronze (eller cache-OOM på 1g executor).
+    silver_df = spark.read.format("delta").load(TARGET_PATH)
+    count = silver_df.count()
+    log.info(f"Skrev {count:,} bostedsrader.")
 
     # ── Aggregat på kommunenivå: antall inn- og utflyttinger per periode ──
     log.info("Beregner municipality-migrasjon aggregat …")
@@ -213,6 +223,7 @@ def build_residence_history(spark: SparkSession) -> None:
         .partitionBy("municipality_code")
         .save(MIGRATION_AGG_PATH)
     )
+    report_stats(spark, "folkeregister.residence_history", TARGET_PATH, count)
     log.info("Done.")
 
 
