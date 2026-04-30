@@ -1,0 +1,106 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container-fluid py-3">
+  <div class="d-flex align-items-center mb-3">
+    <h1 class="h3 mb-0">
+      <i class="bi bi-book me-2 text-primary"></i>Plattform-glossar
+    </h1>
+    <span class="badge bg-light text-dark ms-3">{{ terms|length }} termer</span>
+  </div>
+  <p class="text-muted mb-4">
+    Forklaring av faglige termer som brukes på plattformen — Medallion, Data Mesh, IDP, Delta Lake,
+    SLA, lineage med flere. Lenker fra "?"-ikoner andre steder i portalen peker hit.
+  </p>
+
+  <div class="row mb-4">
+    <div class="col-md-6">
+      <div class="input-group">
+        <span class="input-group-text"><i class="bi bi-search"></i></span>
+        <input id="glossary-search" type="text" class="form-control" autofocus
+               placeholder="Søk i termer (eks: 'sla', 'mesh', 'pii') …">
+      </div>
+    </div>
+  </div>
+
+  {% for cat_slug, cat_label, cat_terms in by_category %}
+    <section class="glossary-category mb-4" data-category="{{ cat_slug }}">
+      <h2 class="h5 mb-3 text-uppercase text-muted small">{{ cat_label }}</h2>
+      <div class="row g-3">
+        {% for term in cat_terms %}
+        <div class="col-md-6 col-lg-4 glossary-card-wrap"
+             data-search="{{ (term.title ~ ' ' ~ term.short ~ ' ' ~ term.long)|lower }}">
+          <article id="{{ term.slug }}" class="card h-100 shadow-sm">
+            <div class="card-body">
+              <h3 class="h6 mb-2">
+                <a href="#{{ term.slug }}" class="text-decoration-none text-dark">
+                  {{ term.title }}
+                </a>
+              </h3>
+              <p class="small text-muted mb-2">{{ term.short }}</p>
+              <details>
+                <summary class="small text-primary" style="cursor:pointer;">Mer</summary>
+                <div class="small mt-2" style="white-space:pre-line;">{{ term.long }}</div>
+                {% if term.related %}
+                <div class="mt-3 small">
+                  <strong>Se også:</strong>
+                  {% for rel in term.related %}
+                    {% set rel_term = terms_by_slug.get(rel) %}
+                    {% if rel_term %}
+                      <a href="#{{ rel }}" class="badge bg-light text-primary text-decoration-none border me-1">
+                        {{ rel_term.title }}
+                      </a>
+                    {% endif %}
+                  {% endfor %}
+                </div>
+                {% endif %}
+              </details>
+            </div>
+          </article>
+        </div>
+        {% endfor %}
+      </div>
+    </section>
+  {% endfor %}
+
+  <div id="glossary-empty" class="text-center text-muted py-5" style="display:none;">
+    <i class="bi bi-search" style="font-size:2rem;"></i>
+    <p class="mt-2">Ingen termer matcher søket.</p>
+  </div>
+</div>
+
+<script>
+  (function () {
+    const input = document.getElementById('glossary-search');
+    const cards = document.querySelectorAll('.glossary-card-wrap');
+    const sections = document.querySelectorAll('.glossary-category');
+    const empty = document.getElementById('glossary-empty');
+
+    function applyFilter() {
+      const q = (input.value || '').trim().toLowerCase();
+      let visibleCount = 0;
+      cards.forEach(c => {
+        const hit = !q || (c.dataset.search || '').includes(q);
+        c.style.display = hit ? '' : 'none';
+        if (hit) visibleCount++;
+      });
+      sections.forEach(s => {
+        const hasVisible = s.querySelector('.glossary-card-wrap[style=""], .glossary-card-wrap:not([style*="none"])');
+        s.style.display = hasVisible ? '' : 'none';
+      });
+      empty.style.display = visibleCount === 0 ? '' : 'none';
+    }
+
+    input.addEventListener('input', applyFilter);
+
+    // Hopp direkte til term hvis URL har anker
+    if (window.location.hash) {
+      const target = document.querySelector(window.location.hash);
+      if (target) {
+        const details = target.querySelector('details');
+        if (details) details.open = true;
+      }
+    }
+  })();
+</script>
+{% endblock %}

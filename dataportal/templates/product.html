@@ -96,7 +96,7 @@
     {# schema #}
     <div class="card mb-4">
       <div class="card-header bg-white fw-semibold d-flex align-items-center">
-        <span><i class="bi bi-table me-2"></i>Schema</span>
+        <span><i class="bi bi-table me-2"></i>Schema {{ help_tooltip("schema-compatibility") }}</span>
         {% if is_owner and schema %}
         <span class="ms-auto text-muted small fw-normal">
           <i class="bi bi-pencil me-1"></i>Klikk <i class="bi bi-pencil-square"></i> for å redigere kolonnemetadata
@@ -188,13 +188,13 @@
               <div class="form-check form-switch">
                 <input class="form-check-input" type="checkbox" id="modal-pii" role="switch">
                 <label class="form-check-label fw-semibold" for="modal-pii">
-                  <span class="badge bg-danger me-1">PII</span>Personopplysning
+                  <span class="badge bg-danger me-1">PII</span>Personopplysning {{ help_tooltip("pii") }}
                 </label>
               </div>
               <div class="form-text">Marker kolonnen som personidentifiserende informasjon (GDPR-relevant).</div>
             </div>
             <div class="mb-3">
-              <label class="form-label fw-semibold" for="modal-sensitivity">Sensitivitetsnivå</label>
+              <label class="form-label fw-semibold" for="modal-sensitivity">Sensitivitetsnivå {{ help_tooltip("data-classification") }}</label>
               <select class="form-select" id="modal-sensitivity">
                 <option value="">— ikke angitt —</option>
                 <option value="low">Lav</option>
@@ -223,7 +223,7 @@
     {# datakvalitet #}
     <div class="card mb-4">
       <div class="card-header bg-white fw-semibold">
-        <i class="bi bi-shield-check me-2"></i>Datakvalitet
+        <i class="bi bi-shield-check me-2"></i>Datakvalitet {{ help_tooltip("quality-rules") }}
       </div>
       <div class="card-body">
         {% if quality %}
@@ -429,7 +429,7 @@
     {# ── lineage-graf (#62/#63) ── #}
     <div class="card mb-4">
       <div class="card-header bg-white fw-semibold d-flex justify-content-between align-items-center">
-        <span><i class="bi bi-diagram-3 me-2"></i>Datalineage</span>
+        <span><i class="bi bi-diagram-3 me-2"></i>Datalineage {{ help_tooltip("lineage") }}</span>
         <div class="d-flex gap-2">
           {% if upstream %}
           <span class="badge bg-primary-subtle text-primary-emphasis border border-primary-subtle">
@@ -621,7 +621,7 @@ FROM delta_scan('{{ manifest.source_path }}');</pre>
         {% endif %}
         {% if manifest.quality_sla %}
         <li class="list-group-item">
-          <span class="text-muted d-block mb-1">SLA</span>
+          <span class="text-muted d-block mb-1">SLA {{ help_tooltip("sla") }}</span>
           <small>
             {% if manifest.quality_sla.max_null_rate is defined and manifest.quality_sla.max_null_rate is not none %}Maks null-rate: {{ manifest.quality_sla.max_null_rate * 100 }}%<br>{% endif %}
             {% if manifest.quality_sla.freshness_hours is defined and manifest.quality_sla.freshness_hours %}Ferskhet: {{ manifest.quality_sla.freshness_hours }}t{% endif %}
@@ -634,7 +634,7 @@ FROM delta_scan('{{ manifest.source_path }}');</pre>
     {# SLA #}
     <div class="card mb-4">
       <div class="card-header bg-white fw-semibold">
-        <i class="bi bi-clock-fill me-2"></i>SLA-ferskhet
+        <i class="bi bi-clock-fill me-2"></i>SLA-ferskhet {{ help_tooltip("sla") }}
       </div>
       <div class="card-body">
         {% if sla and sla.compliant is not none %}
@@ -880,7 +880,7 @@ FROM delta_scan('{{ manifest.source_path }}');</pre>
     {% if history %}
     <div class="card mb-4">
       <div class="card-header bg-white fw-semibold">
-        <i class="bi bi-clock-history me-2"></i>Versjonshistorikk
+        <i class="bi bi-clock-history me-2"></i>Versjonshistorikk {{ help_tooltip("scd2", label="(SCD2)") }}
       </div>
       <div class="card-body py-2 px-3">
         <div class="position-relative" style="padding-left:1.5rem;">
