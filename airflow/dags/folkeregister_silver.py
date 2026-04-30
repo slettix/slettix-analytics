@@ -32,7 +32,6 @@ from airflow import DAG
 from airflow.models import Variable
 from airflow.operators.python import PythonOperator
 from airflow.providers.cncf.kubernetes.operators.spark_kubernetes import SparkKubernetesOperator
-from kubernetes import client as k8s
 
 SPARK_NS   = "slettix-analytics"
 PORTAL_URL = os.environ.get("PORTAL_URL", "http://dataportal.slettix-analytics.svc.cluster.local:8090")
@@ -90,8 +89,8 @@ spec:
   executor:
     instances: 1
     cores: 1
-    memory: "512m"
-    memoryOverhead: "128m"
+    memory: "1g"
+    memoryOverhead: "256m"
     env:
       - name: AWS_ACCESS_KEY_ID
         valueFrom:
@@ -117,6 +116,48 @@ spec:
 _PERSON_REGISTRY_APP   = _spark_app("fr-person-registry",  "folkeregister_person_registry.py")
 _FAMILY_RELATIONS_APP  = _spark_app("fr-family-relations",  "folkeregister_family_relations.py")
 _RESIDENCE_HISTORY_APP = _spark_app("fr-residence-history", "folkeregister_residence_history.py")
+_VALIDATE_QUALITY_APP  = _spark_app("fr-validate-quality",  "folkeregister_validate_quality.py")
+
+
+# ── Referansedata: kommuner ────────────────────────────────────────────────
+
+def load_kommuner_reference(**context):
+    """
+    Leser kommuner.csv fra jobs-ConfigMap og skriver til Delta-tabell
+    s3://silver/reference/kommuner.  Kjøres som første task i Silver-DAGen
+    slik at Spark-jobbene alltid har en oppdatert kommuneoppslags-tabell.
+    """
+    import pandas as pd
+    from deltalake.writer import write_deltalake
+
+    log = context["task_instance"].log
+
+    minio_endpoint   = os.environ.get("MINIO_ENDPOINT",    "http://minio.slettix-analytics.svc.cluster.local:9000")
+    minio_access_key = os.environ.get("MINIO_ACCESS_KEY",  "admin")
+    minio_secret_key = os.environ.get("MINIO_SECRET_KEY",  "changeme")
+
+    storage_options = {
+        "AWS_ENDPOINT_URL":           minio_endpoint,
+        "AWS_ACCESS_KEY_ID":          minio_access_key,
+        "AWS_SECRET_ACCESS_KEY":      minio_secret_key,
+        "AWS_ALLOW_HTTP":             "true",
+        "AWS_S3_ALLOW_UNSAFE_RENAME": "true",
+    }
+
+    import pyarrow as pa
+
+    csv_path = "/opt/airflow/jobs/kommuner.csv"
+    df = pd.read_csv(csv_path, sep=";", dtype=str)
+    df.columns = [c.lower() for c in df.columns]
+    df["kommunenr"] = df["kommunenr"].str.zfill(4)
+
+    write_deltalake(
+        "s3://silver/reference/kommuner",
+        pa.Table.from_pandas(df, preserve_index=False),
+        mode="overwrite",
+        storage_options=storage_options,
+    )
+    log.info(f"Lastet {len(df)} kommuner til s3://silver/reference/kommuner")
 
 
 # ── Feilhåndtering ─────────────────────────────────────────────────────────
@@ -144,139 +185,6 @@ def on_task_failure(context):
         except Exception as e:
             context["task_instance"].log.warning(f"Slack-varsling feilet: {e}")
 
-
-# ── Datakvalitetsvalidering ────────────────────────────────────────────────
-
-def validate_quality(**context):
-    """
-    Les de tre Silver-tabellene med deltalake og kjør enkle Great Expectations-sjekker.
-    Resultatene skrives til MinIO: quality_results/{product_id}/latest.json
-    """
-    import json
-    from datetime import datetime, timezone
-
-    import boto3
-    import great_expectations as gx
-    from botocore.client import Config
-    from deltalake import DeltaTable
-
-    log = context["task_instance"].log
-
-    minio_endpoint   = os.environ.get("MINIO_ENDPOINT", "http://minio.slettix-analytics.svc.cluster.local:9000")
-    minio_access_key = os.environ.get("MINIO_ACCESS_KEY", "admin")
-    minio_secret_key = os.environ.get("MINIO_SECRET_KEY", "changeme")
-
-    storage_options = {
-        "AWS_ENDPOINT_URL":           minio_endpoint,
-        "AWS_ACCESS_KEY_ID":          minio_access_key,
-        "AWS_SECRET_ACCESS_KEY":      minio_secret_key,
-        "AWS_ALLOW_HTTP":             "true",
-        "AWS_S3_ALLOW_UNSAFE_RENAME": "true",
-    }
-
-    s3 = boto3.client(
-        "s3",
-        endpoint_url=minio_endpoint,
-        aws_access_key_id=minio_access_key,
-        aws_secret_access_key=minio_secret_key,
-        config=Config(signature_version="s3v4"),
-    )
-
-    checks = [
-        {
-            "product_id": "folkeregister.person_registry",
-            "path":       "s3://silver/folkeregister/person_registry",
-            "expectations": [
-                ("expect_column_values_to_not_be_null", {"column": "person_id"}),
-                ("expect_column_values_to_not_be_null", {"column": "full_name"}),
-                ("expect_column_values_to_not_be_null", {"column": "fnr_masked"}),
-                ("expect_column_to_exist",              {"column": "marital_status"}),
-                ("expect_table_row_count_to_be_between", {"min_value": 1, "max_value": None}),
-            ],
-        },
-        {
-            "product_id": "folkeregister.family_relations",
-            "path":       "s3://silver/folkeregister/family_relations",
-            "expectations": [
-                ("expect_column_values_to_not_be_null", {"column": "person_id_a"}),
-                ("expect_column_values_to_not_be_null", {"column": "person_id_b"}),
-                ("expect_table_row_count_to_be_between", {"min_value": 1, "max_value": None}),
-            ],
-        },
-        {
-            "product_id": "folkeregister.residence_history",
-            "path":       "s3://silver/folkeregister/residence_history",
-            "expectations": [
-                ("expect_column_values_to_not_be_null", {"column": "person_id"}),
-                ("expect_table_row_count_to_be_between", {"min_value": 1, "max_value": None}),
-            ],
-        },
-    ]
-
-    context_gx = gx.get_context(mode="ephemeral")
-
-    for check in checks:
-        product_id = check["product_id"]
-        log.info(f"Validerer {product_id} …")
-        try:
-            dt  = DeltaTable(check["path"], storage_options=storage_options)
-            df  = dt.to_pandas()
-
-            ds  = context_gx.data_sources.add_pandas("ds_" + product_id.replace(".", "_"))
-            da  = ds.add_dataframe_asset("asset")
-            bd  = da.add_batch_definition_whole_dataframe("batch")
-            suite = context_gx.suites.add(gx.ExpectationSuite(name="suite_" + product_id.replace(".", "_")))
-            for exp_type, kwargs in check["expectations"]:
-                suite.add_expectation(gx.expectations.__dict__[
-                    "".join(p.capitalize() for p in exp_type.split("_"))
-                ](**kwargs))
-
-            val_def = context_gx.validation_definitions.add(
-                gx.ValidationDefinition(name="val_" + product_id.replace(".", "_"), data=bd, suite=suite)
-            )
-            result = val_def.run(batch_parameters={"dataframe": df})
-
-            passed = sum(1 for r in result.results if r.success)
-            failed = [r for r in result.results if not r.success]
-            quality_result = {
-                "product_id":         product_id,
-                "validated_at":       datetime.now(tz=timezone.utc).isoformat(),
-                "score_pct":          round(passed / len(result.results) * 100, 1),
-                "total_expectations": len(result.results),
-                "passed":             passed,
-                "failed":             len(failed),
-                "failures": [
-                    {"expectation": r.expectation_config.type, "kwargs": r.expectation_config.kwargs}
-                    for r in failed
-                ],
-            }
-        except Exception as exc:
-            log.warning(f"Validering av {product_id} feilet: {exc}")
-            quality_result = {
-                "product_id":         product_id,
-                "validated_at":       datetime.now(tz=timezone.utc).isoformat(),
-                "score_pct":          0.0,
-                "total_expectations": 0,
-                "passed":             0,
-                "failed":             1,
-                "failures":           [{"expectation": "pipeline", "error": str(exc)}],
-            }
-
-        ts_key = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
-        for key in [
-            f"quality_results/{product_id}/latest.json",
-            f"quality_results/{product_id}/history/{ts_key}.json",
-        ]:
-            try:
-                s3.put_object(
-                    Bucket="gold", Key=key,
-                    Body=json.dumps(quality_result, indent=2).encode(),
-                    ContentType="application/json",
-                )
-            except Exception as exc:
-                log.warning(f"Kunne ikke lagre kvalitetsresultat for {product_id}: {exc}")
-
-        log.info(f"{product_id}: {quality_result['score_pct']}% ({quality_result['passed']}/{quality_result['total_expectations']})")
 
 
 # ── Registrer DAG-lenker ───────────────────────────────────────────────────
@@ -353,6 +261,12 @@ with DAG(
     doc_md=__doc__,
 ) as dag:
 
+    load_reference = PythonOperator(
+        task_id="load_kommuner_reference",
+        python_callable=load_kommuner_reference,
+        execution_timeout=timedelta(minutes=5),
+    )
+
     person_registry = SparkKubernetesOperator(
         task_id="build_person_registry",
         namespace=SPARK_NS,
@@ -380,25 +294,13 @@ with DAG(
         execution_timeout=timedelta(minutes=20),
     )
 
-    quality_check = PythonOperator(
+    quality_check = SparkKubernetesOperator(
         task_id="validate_quality",
-        python_callable=validate_quality,
-        execution_timeout=timedelta(minutes=15),
-        executor_config={
-            "pod_override": k8s.V1Pod(
-                spec=k8s.V1PodSpec(
-                    containers=[
-                        k8s.V1Container(
-                            name="base",
-                            resources=k8s.V1ResourceRequirements(
-                                requests={"memory": "512Mi"},
-                                limits={"memory": "1Gi"},
-                            ),
-                        )
-                    ]
-                )
-            )
-        },
+        namespace=SPARK_NS,
+        application_file=_VALIDATE_QUALITY_APP,
+        kubernetes_conn_id="kubernetes_default",
+        do_xcom_push=False,
+        execution_timeout=timedelta(minutes=20),
     )
 
     register_links = PythonOperator(
@@ -407,4 +309,4 @@ with DAG(
         execution_timeout=timedelta(minutes=5),
     )
 
-    person_registry >> family_relations >> residence_history >> quality_check >> register_links
+    load_reference >> person_registry >> family_relations >> residence_history >> quality_check >> register_links
