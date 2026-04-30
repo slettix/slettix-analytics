@@ -94,6 +94,7 @@ from registry import (  # noqa: E402
 )
 
 import auth  # noqa: E402
+import glossary  # noqa: E402
 
 # ── oppstart ───────────────────────────────────────────────────────────────────
 
@@ -445,6 +446,13 @@ async def _kickoff_warmup() -> None:
 
 
 templates = Jinja2Templates(directory="/opt/dataportal/templates")
+
+# GUIDE-2/GUIDE-7: gjør glossary og help_tooltip tilgjengelig i alle templates,
+# slik at glossary-siden og tooltips deler samme datakilde uten import-ceremoni.
+templates.env.globals["glossary"] = glossary.GLOSSARY
+templates.env.globals["help_tooltip"] = (
+    templates.env.get_template("macros/help.html").module.help_tooltip
+)
 
 # ── hjelpefunksjoner ───────────────────────────────────────────────────────────
 
@@ -3423,6 +3431,17 @@ def page_browse_redirect(request: Request):
     if not user:
         return RedirectResponse("/login?next=/browse", status_code=303)
     return templates.TemplateResponse("browse.html", _template_ctx(request))
+
+
+@app.get("/glossary", response_class=HTMLResponse, include_in_schema=False)
+def page_glossary(request: Request):
+    """GUIDE-2: plattform-glossar med søk og kategorier."""
+    return templates.TemplateResponse("glossary.html", _template_ctx(
+        request,
+        terms=glossary.all_terms(),
+        terms_by_slug=glossary.GLOSSARY,
+        by_category=glossary.by_category(),
+    ))
 
 
 @app.post("/api/create-analytical", tags=["jupyter"], summary="Opprett analytisk dataprodukt")

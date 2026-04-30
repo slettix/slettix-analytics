@@ -1,0 +1,27 @@
+{# GUIDE-7: tooltip-makro som henter forklaring fra GLOSSARY (GUIDE-2). #}
+{# Bruk:   {{ help_tooltip("sla") }}                                       #}
+{#         {{ help_tooltip("medallion", "Forklaring av medallion-lag") }}  #}
+{# Andre arg overstyrer short-tekst om man trenger kontekstspesifikk hjelp. #}
+
+{% macro help_tooltip(slug, override_text=None, label=None) -%}
+  {%- set term = glossary.get(slug) -%}
+  {%- if term -%}
+    {%- set text = override_text or term.short -%}
+    <a href="/glossary#{{ slug }}"
+       class="help-tooltip text-decoration-none"
+       data-bs-toggle="tooltip"
+       data-bs-placement="top"
+       data-bs-html="true"
+       title="<strong>{{ term.title }}</strong><br>{{ text }}<br><span class='small text-muted'>(klikk for full forklaring)</span>"
+       aria-label="Hjelp: {{ term.title }}">
+      <i class="bi bi-question-circle text-muted small"></i>{% if label %} {{ label }}{% endif %}
+    </a>
+  {%- elif label -%}
+    {{ label }}
+  {%- endif -%}
+{%- endmacro %}
+
+{# Variant for inline-bruk i tabeller eller kompakte UI-elementer. #}
+{% macro help_inline(slug) -%}
+  {{ help_tooltip(slug) }}
+{%- endmacro %}
