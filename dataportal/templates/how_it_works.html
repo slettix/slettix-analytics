@@ -14,15 +14,15 @@
     <div class="card-body p-2">
       <div class="mermaid" style="text-align:center;">
 flowchart LR
-  KAFKA["📨 Kafka<br/>events"]:::source
-  IDP{{"⚡ IDP-er<br/>(streaming Spark)"}}:::compute
-  BRONZE[("🟫 Bronze<br/>raw events")]:::bronze
-  SILVER[("🪙 Silver<br/>konformerte")]:::silver
-  GOLD[("🏅 Gold<br/>analytiske")]:::gold
-  AIRFLOW{{"🗓️ Airflow<br/>(batch DAG-er)"}}:::compute
-  PORTAL["🧭 Dataportal<br/>katalog/styring"]:::ui
-  JUPYTER["📓 Jupyter<br/>analyse"]:::ui
-  SUPERSET["📊 Superset<br/>dashboard"]:::ui
+  KAFKA["Kafka<br/>events"]:::source
+  IDP{{"IDP-er<br/>streaming Spark"}}:::compute
+  BRONZE[("Bronze<br/>raw events")]:::bronze
+  SILVER[("Silver<br/>konformerte")]:::silver
+  GOLD[("Gold<br/>analytiske")]:::gold
+  AIRFLOW{{"Airflow<br/>batch DAG-er"}}:::compute
+  PORTAL["Dataportal<br/>katalog og styring"]:::ui
+  JUPYTER["Jupyter<br/>analyse"]:::ui
+  SUPERSET["Superset<br/>dashboard"]:::ui
 
   KAFKA --> IDP
   IDP --> BRONZE
@@ -43,15 +43,15 @@ flowchart LR
   classDef gold    fill:#fef08a,stroke:#a16207,color:#713f12;
   classDef ui      fill:#bfdbfe,stroke:#1d4ed8,color:#1e3a8a;
 
-  click KAFKA       openInfo "kafka"
-  click IDP         openInfo "idp"
-  click BRONZE      openInfo "bronze"
-  click SILVER      openInfo "silver"
-  click GOLD        openInfo "gold"
-  click AIRFLOW     openInfo "airflow"
-  click PORTAL      openInfo "portal"
-  click JUPYTER     openInfo "jupyter"
-  click SUPERSET    openInfo "superset"
+  click KAFKA    call openInfo("kafka")
+  click IDP      call openInfo("idp")
+  click BRONZE   call openInfo("bronze")
+  click SILVER   call openInfo("silver")
+  click GOLD     call openInfo("gold")
+  click AIRFLOW  call openInfo("airflow")
+  click PORTAL   call openInfo("portal")
+  click JUPYTER  call openInfo("jupyter")
+  click SUPERSET call openInfo("superset")
       </div>
     </div>
   </div>
