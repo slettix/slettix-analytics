@@ -95,6 +95,7 @@ from registry import (  # noqa: E402
 
 import auth  # noqa: E402
 import glossary  # noqa: E402
+import help_content  # noqa: E402
 
 # ── oppstart ───────────────────────────────────────────────────────────────────
 
@@ -3436,11 +3437,30 @@ def page_browse_redirect(request: Request):
 @app.get("/glossary", response_class=HTMLResponse, include_in_schema=False)
 def page_glossary(request: Request):
     """GUIDE-2: plattform-glossar med søk og kategorier."""
+    user = auth.get_current_user(request)
+    if user:
+        # Markerer onboarding-steget «open_glossary» for innloggede brukere.
+        auth.track_usage("__platform__", "view_glossary", user["id"])
     return templates.TemplateResponse("glossary.html", _template_ctx(
         request,
         terms=glossary.all_terms(),
         terms_by_slug=glossary.GLOSSARY,
         by_category=glossary.by_category(),
+    ))
+
+
+@app.get("/how-it-works", response_class=HTMLResponse, include_in_schema=False)
+def page_how_it_works(request: Request):
+    """GUIDE-3: visuell plattform-oversikt med interaktivt arkitektur-diagram."""
+    return templates.TemplateResponse("how_it_works.html", _template_ctx(request))
+
+
+@app.get("/help", response_class=HTMLResponse, include_in_schema=False)
+def page_help(request: Request):
+    """GUIDE-10: FAQ og kjente feilløsninger."""
+    return templates.TemplateResponse("help.html", _template_ctx(
+        request,
+        by_category=help_content.by_category(),
     ))
 
 
