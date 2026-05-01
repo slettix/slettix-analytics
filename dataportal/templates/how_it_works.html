@@ -13,6 +13,7 @@
   <div class="card shadow-sm mb-4">
     <div class="card-body p-2">
       <div class="mermaid" style="text-align:center;">
+{% raw %}
 flowchart LR
   KAFKA["Kafka<br/>events"]:::source
   IDP{{"IDP-er<br/>streaming Spark"}}:::compute
@@ -52,6 +53,7 @@ flowchart LR
   click PORTAL   call openInfo("portal")
   click JUPYTER  call openInfo("jupyter")
   click SUPERSET call openInfo("superset")
+{% endraw %}
       </div>
     </div>
   </div>
