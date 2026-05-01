@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block title %}Notebook-galleri — Slettix Data Portal{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-3">
+
+  <div class="d-flex align-items-center mb-3">
+    <h1 class="h3 mb-0"><i class="bi bi-journal-code me-2 text-warning"></i>Notebook-galleri</h1>
+    <span class="badge bg-light text-dark ms-3">{{ examples|length }} eksempler</span>
+  </div>
+  <p class="text-muted mb-4">
+    Ferdige notebooks som utgangspunkt for analyse. Klikk «Fork til mitt Jupyter» for å få en
+    kopi i ditt eget arbeidsområde — du kan da redigere fritt uten å påvirke originalen.
+  </p>
+
+  <div class="row mb-4 g-2 align-items-center">
+    <div class="col-md-5">
+      <div class="input-group">
+        <span class="input-group-text"><i class="bi bi-search"></i></span>
+        <input id="gallery-search" type="text" class="form-control" autofocus
+               placeholder="Søk på navn, beskrivelse, tagger…">
+      </div>
+    </div>
+    <div class="col-md-auto">
+      <select id="gallery-difficulty" class="form-select form-select-sm" style="width:auto;">
+        <option value="">Vanskelighetsgrad: Alle</option>
+        <option value="begynner">Begynner</option>
+        <option value="middels">Middels</option>
+        <option value="avansert">Avansert</option>
+      </select>
+    </div>
+    <div class="col-md-auto">
+      <select id="gallery-category" class="form-select form-select-sm" style="width:auto;">
+        <option value="">Kategori: Alle</option>
+        {% for cat_slug, cat_label, _ in by_category %}
+        <option value="{{ cat_slug }}">{{ cat_label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+  </div>
+
+  <div class="row g-3" id="gallery-grid">
+    {% for ex in examples %}
+    <div class="col-md-6 col-lg-4 gallery-card-wrap"
+         data-search="{{ (ex.title ~ ' ' ~ ex.description ~ ' ' ~ (ex.tags|join(' ')) ~ ' ' ~ ex.domain)|lower }}"
+         data-category="{{ ex.category }}"
+         data-difficulty="{{ ex.difficulty }}">
+      <div class="card h-100 shadow-sm">
+        <div class="card-body d-flex flex-column">
+          <div class="mb-2 d-flex align-items-start gap-2">
+            <h3 class="h6 mb-0 flex-grow-1">{{ ex.title }}</h3>
+            <span class="badge bg-light text-dark border">{{ ex.difficulty }}</span>
+          </div>
+          <p class="small text-muted mb-2">{{ ex.description }}</p>
+          <div class="mb-2">
+            {% for tag in ex.tags %}
+            <span class="badge rounded-pill bg-light text-dark border me-1 small">{{ tag }}</span>
+            {% endfor %}
+          </div>
+          <details class="mb-3">
+            <summary class="small text-primary" style="cursor:pointer;">Forhåndsvis kode</summary>
+            <pre class="small p-2 mt-2 mb-0" style="background:#212529; color:#f8f9fa; border-radius:4px; max-height:160px; overflow:auto;"><code>{{ ex.preview }}</code></pre>
+          </details>
+          <div class="mt-auto pt-2 border-top d-flex gap-2">
+            <button class="btn btn-sm btn-warning fork-btn flex-grow-1"
+                    data-slug="{{ ex.slug }}"
+                    {% if not current_user %}disabled title="Logg inn for å fork-e"{% endif %}>
+              <i class="bi bi-journal-plus me-1"></i>Fork til mitt Jupyter
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div id="gallery-empty" class="text-center text-muted py-5" style="display:none;">
+    <i class="bi bi-search" style="font-size:2rem;"></i>
+    <p class="mt-2">Ingen eksempler matcher.</p>
+  </div>
+</div>
+
+<script>
+  (function () {
+    const search   = document.getElementById('gallery-search');
+    const diffSel  = document.getElementById('gallery-difficulty');
+    const catSel   = document.getElementById('gallery-category');
+    const cards    = document.querySelectorAll('.gallery-card-wrap');
+    const empty    = document.getElementById('gallery-empty');
+
+    function applyFilter() {
+      const q   = (search.value || '').trim().toLowerCase();
+      const d   = diffSel.value;
+      const c   = catSel.value;
+      let visible = 0;
+      cards.forEach(card => {
+        const hit = (
+          (!q || (card.dataset.search || '').includes(q)) &&
+          (!d || card.dataset.difficulty === d) &&
+          (!c || card.dataset.category === c)
+        );
+        card.style.display = hit ? '' : 'none';
+        if (hit) visible++;
+      });
+      empty.style.display = visible === 0 ? '' : 'none';
+    }
+    [search, diffSel, catSel].forEach(el => el.addEventListener('input', applyFilter));
+    [diffSel, catSel].forEach(el => el.addEventListener('change', applyFilter));
+
+    document.querySelectorAll('.fork-btn').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const slug   = btn.dataset.slug;
+        const orig   = btn.innerHTML;
+        btn.disabled = true;
+        btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Forker…';
+        try {
+          const resp = await fetch(`/api/notebooks/gallery/${slug}/fork`, {method: 'POST'});
+          if (!resp.ok) throw new Error(await resp.text());
+          const data = await resp.json();
+          window.open(data.url, '_blank');
+          btn.innerHTML = '<i class="bi bi-check-circle me-1"></i>Åpnet i Jupyter';
+          setTimeout(() => { btn.innerHTML = orig; btn.disabled = false; }, 2500);
+        } catch (e) {
+          btn.innerHTML = '<i class="bi bi-x-circle me-1"></i>Feilet';
+          setTimeout(() => { btn.innerHTML = orig; btn.disabled = false; }, 2500);
+          console.error(e);
+        }
+      });
+    });
+  })();
+</script>
+{% endblock %}
