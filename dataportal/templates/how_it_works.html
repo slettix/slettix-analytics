@@ -1,0 +1,170 @@
+{% extends "base.html" %}
+{% block title %}Hvordan plattformen henger sammen — Slettix Data Portal{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-3" style="max-width: 1100px;">
+
+  <h1 class="h3 mb-3"><i class="bi bi-diagram-2 me-2 text-primary"></i>Hvordan plattformen henger sammen</h1>
+  <p class="text-muted mb-4">
+    Klikk på en komponent for å se hva den gjør og hvor du finner relevante
+    konsepter i glossaret.
+  </p>
+
+  <div class="card shadow-sm mb-4">
+    <div class="card-body p-2">
+      <div class="mermaid" style="text-align:center;">
+flowchart LR
+  KAFKA["📨 Kafka<br/>events"]:::source
+  IDP{{"⚡ IDP-er<br/>(streaming Spark)"}}:::compute
+  BRONZE[("🟫 Bronze<br/>raw events")]:::bronze
+  SILVER[("🪙 Silver<br/>konformerte")]:::silver
+  GOLD[("🏅 Gold<br/>analytiske")]:::gold
+  AIRFLOW{{"🗓️ Airflow<br/>(batch DAG-er)"}}:::compute
+  PORTAL["🧭 Dataportal<br/>katalog/styring"]:::ui
+  JUPYTER["📓 Jupyter<br/>analyse"]:::ui
+  SUPERSET["📊 Superset<br/>dashboard"]:::ui
+
+  KAFKA --> IDP
+  IDP --> BRONZE
+  BRONZE --> AIRFLOW
+  AIRFLOW --> SILVER
+  SILVER --> AIRFLOW
+  AIRFLOW --> GOLD
+  SILVER --> JUPYTER
+  GOLD --> JUPYTER
+  GOLD --> SUPERSET
+  PORTAL -.->|publiserer manifest| SILVER
+  PORTAL -.->|trigger| AIRFLOW
+
+  classDef source  fill:#fde68a,stroke:#b45309,color:#78350f;
+  classDef compute fill:#ddd6fe,stroke:#6d28d9,color:#4c1d95;
+  classDef bronze  fill:#fed7aa,stroke:#c2410c,color:#7c2d12;
+  classDef silver  fill:#e5e7eb,stroke:#6b7280,color:#1f2937;
+  classDef gold    fill:#fef08a,stroke:#a16207,color:#713f12;
+  classDef ui      fill:#bfdbfe,stroke:#1d4ed8,color:#1e3a8a;
+
+  click KAFKA       openInfo "kafka"
+  click IDP         openInfo "idp"
+  click BRONZE      openInfo "bronze"
+  click SILVER      openInfo "silver"
+  click GOLD        openInfo "gold"
+  click AIRFLOW     openInfo "airflow"
+  click PORTAL      openInfo "portal"
+  click JUPYTER     openInfo "jupyter"
+  click SUPERSET    openInfo "superset"
+      </div>
+    </div>
+  </div>
+
+  <div class="row g-3">
+    <div class="col-md-6">
+      <h2 class="h6 text-muted text-uppercase small mb-2">Lag i Medallion</h2>
+      <ul class="list-group list-group-flush">
+        <li class="list-group-item d-flex justify-content-between">
+          <span><span class="badge me-2" style="background:#fed7aa;color:#7c2d12;">Bronze</span>Råinntak fra Kafka</span>
+          <a href="/glossary#bronze" class="small text-decoration-none">Glossar →</a>
+        </li>
+        <li class="list-group-item d-flex justify-content-between">
+          <span><span class="badge me-2" style="background:#e5e7eb;color:#1f2937;">Silver</span>Domeneprodukter</span>
+          <a href="/glossary#silver" class="small text-decoration-none">Glossar →</a>
+        </li>
+        <li class="list-group-item d-flex justify-content-between">
+          <span><span class="badge me-2" style="background:#fef08a;color:#713f12;">Gold</span>Analytiske aggregater</span>
+          <a href="/glossary#gold" class="small text-decoration-none">Glossar →</a>
+        </li>
+      </ul>
+    </div>
+    <div class="col-md-6">
+      <h2 class="h6 text-muted text-uppercase small mb-2">Konsepter</h2>
+      <ul class="list-group list-group-flush">
+        <li class="list-group-item d-flex justify-content-between">
+          <span>Data Mesh</span>
+          <a href="/glossary#data-mesh" class="small text-decoration-none">Glossar →</a>
+        </li>
+        <li class="list-group-item d-flex justify-content-between">
+          <span>Datakontrakt</span>
+          <a href="/glossary#data-contract" class="small text-decoration-none">Glossar →</a>
+        </li>
+        <li class="list-group-item d-flex justify-content-between">
+          <span>SLA og freshness</span>
+          <a href="/glossary#sla" class="small text-decoration-none">Glossar →</a>
+        </li>
+        <li class="list-group-item d-flex justify-content-between">
+          <span>Lineage</span>
+          <a href="/glossary#lineage" class="small text-decoration-none">Glossar →</a>
+        </li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+{# Modal som viser detaljer for klikk-bare noder #}
+<div class="modal fade" id="nodeInfoModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title" id="nodeInfoTitle">—</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Lukk"></button>
+      </div>
+      <div class="modal-body" id="nodeInfoBody">—</div>
+      <div class="modal-footer">
+        <a id="nodeInfoLink" href="#" class="btn btn-sm btn-outline-primary">
+          <i class="bi bi-book me-1"></i>Åpne i glossar
+        </a>
+        <button type="button" class="btn btn-sm btn-secondary" data-bs-dismiss="modal">Lukk</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/mermaid@10.9.1/dist/mermaid.min.js"></script>
+<script>
+  mermaid.initialize({startOnLoad: true, theme: 'default', securityLevel: 'loose'});
+
+  const NODE_INFO = {
+    kafka:    {title: "Kafka — event-strømmer",
+               body:  "Hendelser fra kildesystemer leveres som meldinger i Kafka-topics. IDP-ene leser disse og skriver dem til Bronze.",
+               glossary: null},
+    idp:      {title: "IDP — Inbound Data Pipeline",
+               body:  "Spark Structured Streaming-jobb som kontinuerlig leser Kafka og skriver til Bronze i sanntid.",
+               glossary: "idp"},
+    bronze:   {title: "Bronze — råinntak",
+               body:  "Hendelsesdata lagret uendret fra Kafka. Bevarer alle felter slik at vi kan reprosessere ved feil eller endringer.",
+               glossary: "bronze"},
+    silver:   {title: "Silver — konformerte produkter",
+               body:  "Rensede, validerte og konformerte tabeller. Domeneprodukter med eier, kontrakt, kvalitetskrav.",
+               glossary: "silver"},
+    gold:     {title: "Gold — analytiske produkter",
+               body:  "Aggregerte tabeller optimalisert for spørringer i Superset, Jupyter og BI-verktøy.",
+               glossary: "gold"},
+    airflow:  {title: "Airflow — batch-orkestrering",
+               body:  "Kjører batch-DAG-er som transformerer Bronze → Silver → Gold på timeplan. Bruker Spark via SparkKubernetesOperator.",
+               glossary: null},
+    portal:   {title: "Dataportal — katalog og styring",
+               body:  "Sentralpunkt: katalogsøk, manifest-publisering, kvalitet- og SLA-overvåking, lineage, governance.",
+               glossary: null},
+    jupyter:  {title: "Jupyter — utforsking og analyse",
+               body:  "Interaktivt notebook-miljø. Generér notebook fra produktdetaljside med ferdig boilerplate.",
+               glossary: null},
+    superset: {title: "Superset — dashboards og SQL",
+               body:  "BI-grensesnitt for ad-hoc spørringer (SQL Lab) og dashboards mot Gold-tabellene.",
+               glossary: null},
+  };
+
+  // Mermaid-click-bindings — kalles fra grafen
+  window.openInfo = function (key) {
+    const info = NODE_INFO[key];
+    if (!info) return;
+    document.getElementById('nodeInfoTitle').textContent = info.title;
+    document.getElementById('nodeInfoBody').textContent = info.body;
+    const link = document.getElementById('nodeInfoLink');
+    if (info.glossary) {
+      link.href = "/glossary#" + info.glossary;
+      link.style.display = '';
+    } else {
+      link.style.display = 'none';
+    }
+    new bootstrap.Modal(document.getElementById('nodeInfoModal')).show();
+  };
+</script>
+{% endblock %}

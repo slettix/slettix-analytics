@@ -1,0 +1,91 @@
+{% extends "base.html" %}
+{% block title %}Hjelp og FAQ — Slettix Data Portal{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-3" style="max-width: 1100px;">
+
+  <h1 class="h3 mb-3"><i class="bi bi-life-preserver me-2 text-primary"></i>Hjelp og FAQ</h1>
+  <p class="text-muted mb-4">
+    Ofte stilte spørsmål og kjente feil. Søk etter ord eller bla i kategoriene.
+    Mangler noe? Si fra til plattformteamet, så legger vi til.
+  </p>
+
+  <div class="row mb-4">
+    <div class="col-md-6">
+      <div class="input-group">
+        <span class="input-group-text"><i class="bi bi-search"></i></span>
+        <input id="help-search" type="text" class="form-control" autofocus
+               placeholder="Søk i FAQ og feilløsninger …">
+      </div>
+    </div>
+  </div>
+
+  {% for cat_slug, cat_label, cat_entries in by_category %}
+  <section class="help-category mb-5" data-category="{{ cat_slug }}">
+    <h2 class="h5 mb-3 text-uppercase text-muted small">
+      {% if cat_slug == "troubleshoot" %}<i class="bi bi-exclamation-triangle me-1"></i>{% else %}<i class="bi bi-question-circle me-1"></i>{% endif %}
+      {{ cat_label }}
+    </h2>
+    <div class="accordion" id="acc-{{ cat_slug }}">
+      {% for entry in cat_entries %}
+      <div class="accordion-item help-entry-wrap" data-search="{{ entry.search }}">
+        <h3 class="accordion-header" id="heading-{{ entry.slug }}">
+          <button class="accordion-button collapsed" type="button"
+                  data-bs-toggle="collapse" data-bs-target="#collapse-{{ entry.slug }}"
+                  aria-expanded="false" aria-controls="collapse-{{ entry.slug }}">
+            <span id="{{ entry.slug }}">{{ entry.title }}</span>
+          </button>
+        </h3>
+        <div id="collapse-{{ entry.slug }}" class="accordion-collapse collapse"
+             aria-labelledby="heading-{{ entry.slug }}" data-bs-parent="#acc-{{ cat_slug }}">
+          <div class="accordion-body small">
+            {{ entry.body|safe }}
+          </div>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+  {% endfor %}
+
+  <div id="help-empty" class="text-center text-muted py-5" style="display:none;">
+    <i class="bi bi-search" style="font-size:2rem;"></i>
+    <p class="mt-2">Ingen treff. Prøv et annet søkeord.</p>
+  </div>
+</div>
+
+<script>
+  (function () {
+    const input = document.getElementById('help-search');
+    const wraps = document.querySelectorAll('.help-entry-wrap');
+    const sections = document.querySelectorAll('.help-category');
+    const empty = document.getElementById('help-empty');
+
+    function applyFilter() {
+      const q = (input.value || '').trim().toLowerCase();
+      let visible = 0;
+      wraps.forEach(w => {
+        const hit = !q || (w.dataset.search || '').includes(q);
+        w.style.display = hit ? '' : 'none';
+        if (hit) visible++;
+      });
+      sections.forEach(s => {
+        const hasVisible = !!s.querySelector('.help-entry-wrap[style=""], .help-entry-wrap:not([style*="none"])');
+        s.style.display = hasVisible ? '' : 'none';
+      });
+      empty.style.display = visible === 0 ? '' : 'none';
+    }
+
+    input.addEventListener('input', applyFilter);
+
+    // Hopp direkte til entry hvis URL har anker
+    if (window.location.hash) {
+      const target = document.querySelector(window.location.hash);
+      if (target) {
+        const collapse = target.closest('.accordion-item')?.querySelector('.accordion-collapse');
+        if (collapse) new bootstrap.Collapse(collapse, {show: true});
+      }
+    }
+  })();
+</script>
+{% endblock %}
