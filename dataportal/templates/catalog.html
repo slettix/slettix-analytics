@@ -127,7 +127,7 @@
   {# ══ FANE 1: KILDEPRODUKTER ══ #}
   <div class="tab-pane fade show active" id="tab-source">
 
-    {# søk og filter #}
+    {# søk og filter — GUIDE-9: utvidet med fasetter, sortering og URL-state #}
     <div class="row g-2 mb-3 mt-1">
       <div class="col-md-6">
         <div class="input-group">
@@ -146,12 +146,74 @@
       </div>
     </div>
 
+    <div class="row g-2 mb-3 align-items-center">
+      <div class="col-md-auto">
+        <select id="sort-source" class="form-select form-select-sm" style="width:auto;">
+          <option value="name">Sorter: Navn (A-Å)</option>
+          <option value="recent">Sorter: Nylig oppdatert</option>
+          <option value="popular">Sorter: Mest brukt</option>
+          <option value="quality">Sorter: Best kvalitet</option>
+        </select>
+      </div>
+      <div class="col-md-auto">
+        <button id="advanced-toggle-source" class="btn btn-sm btn-outline-secondary" type="button"
+                data-bs-toggle="collapse" data-bs-target="#advanced-source" aria-expanded="false">
+          <i class="bi bi-funnel me-1"></i>Avansert filtrering
+        </button>
+      </div>
+      <div class="col text-end small text-muted">
+        <span id="visible-count-source">{{ source_products|length }}</span> av {{ source_products|length }} synlig
+      </div>
+    </div>
+
+    <div class="collapse mb-3" id="advanced-source">
+      <div class="card card-body bg-light small">
+        <div class="row g-3">
+          <div class="col-md-3">
+            <label class="form-label fw-semibold">Tilgang</label>
+            {% for val, lbl in [('','Alle'),('public','Public'),('restricted','Restricted')] %}
+            <div class="form-check"><input class="form-check-input filter-source" type="radio" name="access-source" value="{{ val }}" id="access-source-{{ val|default('all') }}" {% if not val %}checked{% endif %}><label class="form-check-label" for="access-source-{{ val|default('all') }}">{{ lbl }}</label></div>
+            {% endfor %}
+          </div>
+          <div class="col-md-3">
+            <label class="form-label fw-semibold">PII {{ help_tooltip("pii") }}</label>
+            {% for val, lbl in [('','Alle'),('yes','Inneholder PII'),('no','Ingen PII')] %}
+            <div class="form-check"><input class="form-check-input filter-source" type="radio" name="pii-source" value="{{ val }}" id="pii-source-{{ val|default('all') }}" {% if not val %}checked{% endif %}><label class="form-check-label" for="pii-source-{{ val|default('all') }}">{{ lbl }}</label></div>
+            {% endfor %}
+          </div>
+          <div class="col-md-3">
+            <label class="form-label fw-semibold">Kvalitet {{ help_tooltip("quality-rules") }}</label>
+            {% for val, lbl in [('','Alle'),('ok','OK (100%)'),('breach','Brudd (< 100%)'),('none','Ingen sjekk')] %}
+            <div class="form-check"><input class="form-check-input filter-source" type="radio" name="quality-source" value="{{ val }}" id="quality-source-{{ val|default('all') }}" {% if not val %}checked{% endif %}><label class="form-check-label" for="quality-source-{{ val|default('all') }}">{{ lbl }}</label></div>
+            {% endfor %}
+          </div>
+          <div class="col-md-3">
+            <label class="form-label fw-semibold">Oppdatert {{ help_tooltip("sla") }}</label>
+            {% for val, lbl in [('','Alle'),('day','I dag'),('week','Siste uke'),('month','Siste måned')] %}
+            <div class="form-check"><input class="form-check-input filter-source" type="radio" name="freshness-source" value="{{ val }}" id="freshness-source-{{ val|default('all') }}" {% if not val %}checked{% endif %}><label class="form-check-label" for="freshness-source-{{ val|default('all') }}">{{ lbl }}</label></div>
+            {% endfor %}
+          </div>
+        </div>
+        <div class="mt-2 text-end">
+          <button id="reset-source" type="button" class="btn btn-link btn-sm text-decoration-none">
+            <i class="bi bi-arrow-counterclockwise me-1"></i>Nullstill filtre
+          </button>
+        </div>
+      </div>
+    </div>
+
     <div class="row g-3" id="source-grid">
       {% for p in source_products %}
       {% set pipeline_status = p._pipeline.status if p._pipeline else "unknown" %}
       {% set quality_score   = p._quality.score_pct if p._quality else None %}
       <div class="col-md-6 col-lg-4 product-card source-card position-relative"
            data-domain="{{ p.domain }}"
+           data-name="{{ p.name|lower }}"
+           data-access="{{ p.access|default('public') }}"
+           data-pii="{{ 'yes' if 'pii' in (p.tags or []) else 'no' }}"
+           data-quality="{{ 'ok' if quality_score == 100 else ('breach' if quality_score is not none else 'none') }}"
+           data-views="{{ view_counts.get(p.id, 0) }}"
+           data-updated="{{ p.last_updated|default('') }}"
            data-search="{{ p.name }} {{ p.description|default('') }} {{ p.tags|join(' ') }} {{ p.domain }} {{ p.owner }}">
         {% if current_user %}
         <div class="position-absolute" style="top:.75rem;right:.75rem;z-index:10;">
@@ -349,26 +411,114 @@
 {% block scripts %}
 <script>
   // ── Filterfunksjon per fane ───────────────────────────────────────────────────
-  function makeFilter(searchId, filterClass, gridId, noResultsId) {
+  function makeFilter(searchId, filterClass, gridId, noResultsId, opts = {}) {
     const searchEl   = document.getElementById(searchId);
     const filterBtns = document.querySelectorAll(`.${filterClass}`);
     const noResults  = document.getElementById(noResultsId);
+    const sortEl     = opts.sortId ? document.getElementById(opts.sortId) : null;
+    const visibleEl  = opts.visibleCountId ? document.getElementById(opts.visibleCountId) : null;
+    const facetSel   = opts.facetSelector;   // querySelector for radio-fasetter
+    const resetBtn   = opts.resetId ? document.getElementById(opts.resetId) : null;
+    const tab        = opts.tab || gridId;
     let activeDomain = "";
+
+    function freshnessBucket(updatedISO) {
+      if (!updatedISO) return "";
+      const days = (Date.now() - new Date(updatedISO).getTime()) / (1000 * 60 * 60 * 24);
+      if (days <= 1) return "day";
+      if (days <= 7) return "week";
+      if (days <= 31) return "month";
+      return "older";
+    }
+
+    function readFacets() {
+      if (!facetSel) return {};
+      const obj = {};
+      document.querySelectorAll(facetSel + " input[type=radio]:checked").forEach(r => {
+        const name = r.name.replace(`-${tab}`, "");
+        obj[name] = r.value;
+      });
+      return obj;
+    }
 
     function applyFilters() {
       const q      = searchEl.value.toLowerCase().trim();
-      const cards  = document.querySelectorAll(`#${gridId} .product-card`);
+      const f      = readFacets();
+      const sortBy = sortEl ? sortEl.value : "name";
+      const cards  = Array.from(document.querySelectorAll(`#${gridId} .product-card`));
       let visible  = 0;
+
       cards.forEach(card => {
-        const matchDomain = !activeDomain || card.dataset.domain === activeDomain;
-        const matchSearch = !q || card.dataset.search.toLowerCase().includes(q);
-        const show        = matchDomain && matchSearch;
-        card.classList.toggle("d-none", !show);
-        if (show) visible++;
+        const ds = card.dataset;
+        const matches =
+          (!activeDomain || ds.domain === activeDomain) &&
+          (!q || (ds.search || "").toLowerCase().includes(q)) &&
+          (!f.access  || ds.access  === f.access) &&
+          (!f.pii     || ds.pii     === f.pii) &&
+          (!f.quality || ds.quality === f.quality) &&
+          (!f.freshness || freshnessBucket(ds.updated) === f.freshness);
+        card.classList.toggle("d-none", !matches);
+        if (matches) visible++;
       });
+
+      // Sortering — detach + reattach i ny rekkefølge
+      const grid = document.getElementById(gridId);
+      cards.sort((a, b) => {
+        const da = a.dataset, db = b.dataset;
+        if (sortBy === "name")    return (da.name || "").localeCompare(db.name || "");
+        if (sortBy === "popular") return (parseInt(db.views) || 0) - (parseInt(da.views) || 0);
+        if (sortBy === "recent")  return (db.updated || "").localeCompare(da.updated || "");
+        if (sortBy === "quality") {
+          const score = q => (q.dataset.quality === "ok" ? 2 : q.dataset.quality === "none" ? 1 : 0);
+          return score(b) - score(a);
+        }
+        return 0;
+      });
+      cards.forEach(c => grid.appendChild(c));
+
       if (noResults) noResults.classList.toggle("d-none", visible > 0);
+      if (visibleEl) visibleEl.textContent = visible;
+
+      // URL-state — kun relevante params, ren utskrift
+      const params = new URLSearchParams(window.location.search);
+      const setOrDel = (k, v) => v ? params.set(k, v) : params.delete(k);
+      setOrDel("q",         q);
+      setOrDel("domain",    activeDomain);
+      setOrDel("sort",      sortBy !== "name" ? sortBy : "");
+      setOrDel("access",    f.access);
+      setOrDel("pii",       f.pii);
+      setOrDel("quality",   f.quality);
+      setOrDel("freshness", f.freshness);
+      history.replaceState({}, "", "?" + params.toString());
     }
 
+    // Init fra URL
+    const params = new URLSearchParams(window.location.search);
+    const initQ = params.get("q") || "";
+    if (initQ) searchEl.value = initQ;
+    const initDomain = params.get("domain");
+    if (initDomain) {
+      filterBtns.forEach(b => {
+        if (b.dataset.domain === initDomain) {
+          filterBtns.forEach(x => { x.classList.replace("btn-dark","btn-outline-secondary"); x.classList.remove("active"); });
+          b.classList.replace("btn-outline-secondary","btn-dark");
+          b.classList.add("active");
+          activeDomain = initDomain;
+        }
+      });
+    }
+    if (sortEl && params.get("sort")) sortEl.value = params.get("sort");
+    if (facetSel) {
+      ["access", "pii", "quality", "freshness"].forEach(name => {
+        const v = params.get(name);
+        if (v != null) {
+          const radio = document.querySelector(`input[name="${name}-${tab}"][value="${v}"]`);
+          if (radio) radio.checked = true;
+        }
+      });
+    }
+
+    // Event-bindings
     searchEl.addEventListener("input", applyFilters);
     filterBtns.forEach(btn => {
       btn.addEventListener("click", () => {
@@ -379,10 +529,29 @@
         applyFilters();
       });
     });
+    if (sortEl)   sortEl.addEventListener("change", applyFilters);
+    if (facetSel) document.querySelectorAll(facetSel + " input[type=radio]").forEach(r => r.addEventListener("change", applyFilters));
+    if (resetBtn) resetBtn.addEventListener("click", () => {
+      if (facetSel) {
+        document.querySelectorAll(facetSel + ' input[type=radio][value=""]').forEach(r => r.checked = true);
+      }
+      if (sortEl) sortEl.value = "name";
+      applyFilters();
+    });
+
+    applyFilters();  // kjør én gang ved load
   }
 
-  makeFilter("search-source",     "domain-filter-source",     "source-grid",     "no-results-source");
-  makeFilter("search-analytical", "domain-filter-analytical", "analytical-grid", "no-results-analytical");
+  makeFilter("search-source", "domain-filter-source", "source-grid", "no-results-source", {
+    sortId:         "sort-source",
+    visibleCountId: "visible-count-source",
+    facetSelector:  "#advanced-source",
+    resetId:        "reset-source",
+    tab:            "source",
+  });
+  makeFilter("search-analytical", "domain-filter-analytical", "analytical-grid", "no-results-analytical", {
+    tab: "analytical",
+  });
 
   // ── Aktiver riktig fane fra URL (?tab=analytical) ────────────────────────────
   if (new URLSearchParams(window.location.search).get("tab") === "analytical") {
