@@ -95,6 +95,7 @@ from registry import (  # noqa: E402
 
 import auth  # noqa: E402
 import glossary  # noqa: E402
+import notebook_gallery  # noqa: E402
 import help_content  # noqa: E402
 
 # ── oppstart ───────────────────────────────────────────────────────────────────
@@ -3462,6 +3463,44 @@ def page_help(request: Request):
         request,
         by_category=help_content.by_category(),
     ))
+
+
+@app.get("/notebooks", response_class=HTMLResponse, include_in_schema=False)
+def page_notebook_gallery(request: Request):
+    """GUIDE-8: galleri av notebook-eksempler som kan fork-es til Jupyter."""
+    return templates.TemplateResponse("notebook_gallery.html", _template_ctx(
+        request,
+        examples=notebook_gallery.all_examples(),
+        by_category=notebook_gallery.by_category(),
+    ))
+
+
+@app.post("/api/notebooks/gallery/{slug}/fork", tags=["jupyter"],
+          summary="Kopier galleri-notebook til brukerens Jupyter-area")
+def api_fork_gallery_notebook(slug: str, request: Request):
+    """Forker en eksempel-notebook fra galleriet til NOTEBOOKS_DIR + Jupyter."""
+    user = auth.get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Krever innlogging")
+
+    nb = notebook_gallery.load_notebook(slug)
+    if nb is None:
+        raise HTTPException(status_code=404, detail=f"Eksempel '{slug}' ikke funnet")
+
+    ts       = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
+    filename = f"{slug}-{ts}.ipynb"
+    nb_path  = _notebook_path(filename)
+
+    pathlib.Path(NOTEBOOKS_DIR).mkdir(parents=True, exist_ok=True)
+    nb_path.write_text(json.dumps(nb, ensure_ascii=False, indent=1))
+    _push_to_jupyter(filename, nb)
+    auth.track_usage("__platform__", "fork_notebook", user["id"])
+
+    return {
+        "filename": filename,
+        "url":      _jupyter_open_url(filename),
+        "slug":     slug,
+    }
 
 
 @app.post("/api/create-analytical", tags=["jupyter"], summary="Opprett analytisk dataprodukt")
