@@ -54,6 +54,9 @@
     <a href="{{ superset_sqllab_url }}" target="_blank" class="btn btn-sm btn-outline-info">
       <i class="bi bi-bar-chart-line me-1"></i>Utforsk i Superset
     </a>
+    <button type="button" class="btn btn-sm btn-info" data-bs-toggle="modal" data-bs-target="#dashboardWizardModal">
+      <i class="bi bi-magic me-1"></i>Bygg dashboard
+    </button>
     {% if jupyter_nb_url %}
     <a href="{{ jupyter_nb_url }}" target="_blank" class="btn btn-sm btn-warning">
       <i class="bi bi-journal-code me-1"></i>Åpne notebook
@@ -1307,4 +1310,8 @@ FROM delta_scan('{{ manifest.source_path }}');</pre>
     });
   })();
 </script>
+
+{% if has_access and dashboard_types %}
+{% include "wizard_dashboard.html" %}
+{% endif %}
 {% endblock %}

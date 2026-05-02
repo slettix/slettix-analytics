@@ -1,0 +1,216 @@
+{% extends "base.html" %}
+{% block title %}Veiviser: fra spørsmål til analyse — Slettix Data Portal{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-3" style="max-width: 1000px;">
+
+  <h1 class="h3 mb-3"><i class="bi bi-magic me-2 text-primary"></i>Veiviser: fra spørsmål til analyse</h1>
+  <p class="text-muted mb-4">
+    Beskriv hva du vil finne ut, velg et dataprodukt og en analyseform —
+    veiviseren genererer en notebook med ferdig boilerplate du kan fork-e til Jupyter.
+  </p>
+
+  <ol class="list-unstyled mb-0">
+
+    {# ── Steg 1: spørsmål ── #}
+    <li class="card shadow-sm mb-3" id="step-1">
+      <div class="card-body">
+        <div class="d-flex align-items-center mb-2">
+          <span class="badge rounded-circle bg-primary me-2">1</span>
+          <h2 class="h6 mb-0">Hva vil du finne ut?</h2>
+        </div>
+        <textarea id="wiz-question" class="form-control" rows="2"
+                  placeholder="Eks: 'Hvor mange flytter til Oslo per måned?' eller 'Aldersfordeling i 1980-kohorten'"></textarea>
+        <div class="form-text small">Valgfritt — hjelper deg å huske hvorfor analysen ble laget. Lagres som første markdown-celle i notebooken.</div>
+      </div>
+    </li>
+
+    {# ── Steg 2: produkt ── #}
+    <li class="card shadow-sm mb-3" id="step-2">
+      <div class="card-body">
+        <div class="d-flex align-items-center mb-2">
+          <span class="badge rounded-circle bg-primary me-2">2</span>
+          <h2 class="h6 mb-0">Hvilket dataprodukt?</h2>
+        </div>
+        <input id="wiz-product-search" type="text" class="form-control mb-2"
+               placeholder="Filtrer produkter etter navn, domene, tag…">
+        <div id="wiz-product-list" class="list-group" style="max-height:280px; overflow-y:auto;">
+          {% for p in products %}
+          <button type="button" class="list-group-item list-group-item-action wiz-product-item"
+                  data-pid="{{ p.id }}"
+                  data-search="{{ (p.name ~ ' ' ~ p.domain ~ ' ' ~ (p.tags|join(' ')) ~ ' ' ~ (p.description|default('')))|lower }}">
+            <div class="d-flex justify-content-between align-items-start gap-2">
+              <div>
+                <div class="fw-semibold">{{ p.name }}</div>
+                <div class="small text-muted">{{ p.domain }} / {{ p.owner }}</div>
+                {% if p.description %}
+                <div class="small text-muted mt-1" style="display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;">{{ p.description }}</div>
+                {% endif %}
+              </div>
+              <i class="bi bi-arrow-right text-muted flex-shrink-0"></i>
+            </div>
+          </button>
+          {% endfor %}
+        </div>
+        <div id="wiz-product-empty" class="text-muted small mt-2" style="display:none;">Ingen produkter matcher søket.</div>
+      </div>
+    </li>
+
+    {# ── Steg 3: schema-preview ── #}
+    <li class="card shadow-sm mb-3 d-none" id="step-3">
+      <div class="card-body">
+        <div class="d-flex align-items-center mb-2">
+          <span class="badge rounded-circle bg-primary me-2">3</span>
+          <h2 class="h6 mb-0">Forhåndsvis schema</h2>
+        </div>
+        <div id="wiz-schema-info" class="small text-muted mb-2"></div>
+        <div id="wiz-schema-preview" class="table-responsive" style="max-height:200px; overflow-y:auto;"></div>
+      </div>
+    </li>
+
+    {# ── Steg 4: analyse-template ── #}
+    <li class="card shadow-sm mb-3 d-none" id="step-4">
+      <div class="card-body">
+        <div class="d-flex align-items-center mb-2">
+          <span class="badge rounded-circle bg-primary me-2">4</span>
+          <h2 class="h6 mb-0">Velg analyseform</h2>
+        </div>
+        <div class="row g-2">
+          {% for tpl in templates %}
+          <div class="col-md-6 col-lg-3">
+            <button type="button" class="btn btn-outline-primary w-100 h-100 text-start wiz-template-btn"
+                    data-template="{{ tpl.key }}">
+              <div><i class="bi {{ tpl.icon }} me-1"></i><strong>{{ tpl.title }}</strong></div>
+              <div class="small text-muted">{{ tpl.description }}</div>
+            </button>
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+    </li>
+
+    {# ── Steg 5: bekreft og generer ── #}
+    <li class="card shadow-sm mb-3 d-none" id="step-5">
+      <div class="card-body">
+        <div class="d-flex align-items-center mb-2">
+          <span class="badge rounded-circle bg-primary me-2">5</span>
+          <h2 class="h6 mb-0">Generer notebook</h2>
+        </div>
+        <div id="wiz-summary" class="alert alert-light border small"></div>
+        <button id="wiz-generate-btn" class="btn btn-primary">
+          <i class="bi bi-magic me-1"></i>Generer og åpne i Jupyter
+        </button>
+        <div id="wiz-result" class="small mt-2"></div>
+      </div>
+    </li>
+  </ol>
+</div>
+
+<script>
+  (function () {
+    const state = {pid: null, manifest: null, template: null};
+
+    // Steg 2 — filter
+    const search    = document.getElementById('wiz-product-search');
+    const items     = document.querySelectorAll('.wiz-product-item');
+    const empty     = document.getElementById('wiz-product-empty');
+    search.addEventListener('input', () => {
+      const q = (search.value || '').trim().toLowerCase();
+      let visible = 0;
+      items.forEach(el => {
+        const hit = !q || (el.dataset.search || '').includes(q);
+        el.style.display = hit ? '' : 'none';
+        if (hit) visible++;
+      });
+      empty.style.display = visible === 0 ? '' : 'none';
+    });
+
+    // Steg 2 → 3+4
+    items.forEach(el => el.addEventListener('click', async () => {
+      items.forEach(x => x.classList.remove('active'));
+      el.classList.add('active');
+      state.pid = el.dataset.pid;
+      // Hent manifest (api returnerer {manifest, history})
+      const resp = await fetch(`/api/products/${state.pid}`);
+      if (!resp.ok) return;
+      const data = await resp.json();
+      state.manifest = data.manifest || data;
+      renderSchema(state.manifest);
+      document.getElementById('step-3').classList.remove('d-none');
+      document.getElementById('step-4').classList.remove('d-none');
+      updateSummary();
+    }));
+
+    function renderSchema(m) {
+      const schema = m.schema || [];
+      const info = document.getElementById('wiz-schema-info');
+      const tbl  = document.getElementById('wiz-schema-preview');
+      info.innerHTML = `<strong>${m.name}</strong> · ${m.domain} / ${m.owner} · ${schema.length} kolonner`;
+      if (!schema.length) {
+        tbl.innerHTML = '<div class="text-muted small">Ingen schema-info i manifest.</div>';
+        return;
+      }
+      tbl.innerHTML = `
+        <table class="table table-sm small mb-0">
+          <thead class="table-light"><tr><th>Kolonne</th><th>Type</th><th>PII</th></tr></thead>
+          <tbody>
+            ${schema.map(c => `<tr>
+              <td><code>${c.name}</code></td>
+              <td class="text-muted">${c.type || '—'}</td>
+              <td>${c.pii ? '<span class="badge bg-danger">PII</span>' : ''}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>`;
+    }
+
+    // Steg 4 → 5
+    document.querySelectorAll('.wiz-template-btn').forEach(btn => btn.addEventListener('click', () => {
+      document.querySelectorAll('.wiz-template-btn').forEach(b => b.classList.replace('btn-primary','btn-outline-primary'));
+      btn.classList.replace('btn-outline-primary','btn-primary');
+      state.template = btn.dataset.template;
+      document.getElementById('step-5').classList.remove('d-none');
+      updateSummary();
+    }));
+
+    function updateSummary() {
+      const sum = document.getElementById('wiz-summary');
+      if (!state.manifest || !state.template) {
+        sum.innerHTML = '<em class="text-muted">Velg produkt og analyseform for å se sammendrag.</em>';
+        return;
+      }
+      const q = document.getElementById('wiz-question').value.trim();
+      sum.innerHTML = `
+        <div><strong>Produkt:</strong> ${state.manifest.name} (${state.manifest.id})</div>
+        <div><strong>Analyseform:</strong> ${state.template}</div>
+        ${q ? `<div><strong>Spørsmål:</strong> ${q}</div>` : ''}`;
+    }
+
+    // Steg 5 — generer
+    document.getElementById('wiz-generate-btn').addEventListener('click', async () => {
+      const btn = document.getElementById('wiz-generate-btn');
+      const out = document.getElementById('wiz-result');
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Genererer…';
+      try {
+        const resp = await fetch('/api/wizard/analyze', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            product_id: state.pid,
+            template:   state.template,
+            question:   document.getElementById('wiz-question').value.trim(),
+          }),
+        });
+        if (!resp.ok) throw new Error(await resp.text());
+        const data = await resp.json();
+        window.open(data.url, '_blank');
+        out.innerHTML = `<i class="bi bi-check-circle text-success me-1"></i>Åpnet <code>${data.filename}</code> i Jupyter.`;
+        btn.innerHTML = '<i class="bi bi-check-circle me-1"></i>Åpnet';
+      } catch (e) {
+        out.innerHTML = `<i class="bi bi-x-circle text-danger me-1"></i>Feilet: ${e.message}`;
+        btn.innerHTML = '<i class="bi bi-magic me-1"></i>Prøv igjen';
+        btn.disabled = false;
+      }
+    });
+  })();
+</script>
+{% endblock %}
