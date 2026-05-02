@@ -130,10 +130,11 @@
       items.forEach(x => x.classList.remove('active'));
       el.classList.add('active');
       state.pid = el.dataset.pid;
-      // Hent manifest
+      // Hent manifest (api returnerer {manifest, history})
       const resp = await fetch(`/api/products/${state.pid}`);
       if (!resp.ok) return;
-      state.manifest = await resp.json();
+      const data = await resp.json();
+      state.manifest = data.manifest || data;
       renderSchema(state.manifest);
       document.getElementById('step-3').classList.remove('d-none');
       document.getElementById('step-4').classList.remove('d-none');
