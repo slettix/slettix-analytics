@@ -83,57 +83,53 @@ def build_notebook(manifest: dict, template_key: str, question: str = "") -> dic
     if pii_cols:
         md(f"⚠️ **PII-kolonner**: `{', '.join(pii_cols)}` — håndter forsiktig.")
 
-    # Felles boilerplate
+    # Felles boilerplate (bruker slettix_client → pandas DataFrame, samme
+    # pattern som /products/{id}-notebook-generatoren — unngår Spark-k8s-config)
     md("## 1. Last data")
     code(
-        "from pyspark.sql import SparkSession, functions as F\n"
-        "spark = (\n"
-        "    SparkSession.builder.appName('analyze')\n"
-        "    .config('spark.sql.extensions', 'io.delta.sql.DeltaSparkSessionExtension')\n"
-        "    .config('spark.sql.catalog.spark_catalog', 'org.apache.spark.sql.delta.catalog.DeltaCatalog')\n"
-        "    .getOrCreate()\n"
-        ")\n\n"
-        f"df = spark.read.format('delta').load('{source}')\n"
-        f"print(f'{{df.count():,}} rader, {{len(df.columns)}} kolonner')\n"
-        "df.printSchema()"
+        "import sys\n"
+        "sys.path.insert(0, '/home/spark/jobs')\n"
+        "from slettix_client import get_product\n"
+        "\n"
+        f"PRODUCT_ID = '{pid}'\n"
+        "df = get_product(PRODUCT_ID)\n"
+        "print(f'{len(df):,} rader, {len(df.columns)} kolonner')\n"
+        "df.head()"
     )
 
     if template_key == "cohort":
         first_cat = col_names[0] if col_names else "kategori"
         md(f"## 2. Cohort-analyse — fordeling per `{first_cat}`")
         code(
-            f"cohort = df.groupBy('{first_cat}').count().orderBy(F.desc('count'))\n"
-            "cohort.show(20)"
+            f"cohort = df.groupby('{first_cat}').size().reset_index(name='count').sort_values('count', ascending=False)\n"
+            "cohort.head(20)"
         )
         md("## 3. Visualisering")
         code(
             "import matplotlib.pyplot as plt\n"
-            f"pd_cohort = cohort.limit(20).toPandas()\n"
-            f"pd_cohort.plot(kind='bar', x='{first_cat}', y='count', figsize=(12, 4), legend=False)\n"
+            f"cohort.head(20).plot(kind='bar', x='{first_cat}', y='count', figsize=(12, 4), legend=False)\n"
             f"plt.title('Fordeling per {first_cat}')\n"
             "plt.tight_layout()"
         )
     elif template_key == "timeseries":
         time_cols = [c for c in col_names if any(s in c.lower() for s in ("date", "time", "_at", "ts"))]
         time_col = time_cols[0] if time_cols else "event_date"
-        metric_col = next((c for c in col_names if c not in time_cols and c != "person_id"), col_names[0] if col_names else "value")
         md(f"## 2. Aggregér per måned (`{time_col}`)")
         code(
-            f"ts = (\n"
-            f"    df.withColumn('period', F.date_trunc('month', F.col('{time_col}')))\n"
-            f"      .groupBy('period')\n"
-            f"      .agg(F.count('*').alias('antall'))\n"
-            f"      .orderBy('period')\n"
-            ")\n"
-            "ts.show(24)"
+            "import pandas as pd\n"
+            f"df['{time_col}'] = pd.to_datetime(df['{time_col}'])\n"
+            f"ts = (df.set_index('{time_col}')\n"
+            f"        .groupby(pd.Grouper(freq='M'))\n"
+            f"        .size()\n"
+            f"        .reset_index(name='antall'))\n"
+            "ts.head(24)"
         )
         md("## 3. Plot tidsserien")
         code(
             "import matplotlib.pyplot as plt\n"
-            "pd_ts = ts.toPandas()\n"
             "plt.figure(figsize=(12, 4))\n"
-            "plt.plot(pd_ts['period'], pd_ts['antall'], marker='o')\n"
-            f"plt.title('Antall per måned')\n"
+            f"plt.plot(ts['{time_col}'], ts['antall'], marker='o')\n"
+            "plt.title('Antall per måned')\n"
             "plt.xticks(rotation=45)\n"
             "plt.tight_layout()"
         )
@@ -141,28 +137,25 @@ def build_notebook(manifest: dict, template_key: str, question: str = "") -> dic
         numeric_hint = next((c for c in col_names if any(s in c.lower() for s in ("count", "amount", "value", "score", "days", "hours"))), col_names[0] if col_names else "value")
         md(f"## 2. Deskriptiv statistikk for `{numeric_hint}`")
         code(
-            f"df.select('{numeric_hint}').describe().show()"
+            f"df['{numeric_hint}'].describe()"
         )
         md("## 3. Histogram")
         code(
             "import matplotlib.pyplot as plt\n"
-            f"vals = df.select('{numeric_hint}').toPandas()['{numeric_hint}'].dropna()\n"
-            f"plt.figure(figsize=(10, 4))\n"
-            f"plt.hist(vals, bins=30)\n"
+            f"vals = df['{numeric_hint}'].dropna()\n"
+            "plt.figure(figsize=(10, 4))\n"
+            "plt.hist(vals, bins=30)\n"
             f"plt.title('Fordeling — {numeric_hint}')\n"
             f"plt.xlabel('{numeric_hint}')\n"
-            f"plt.tight_layout()"
+            "plt.tight_layout()"
         )
     else:  # explore
         md("## 2. Inspeksjon")
-        code("df.show(5)")
+        code("df.head(10)")
         md("## 3. Null-rate per kolonne")
         code(
-            "from pyspark.sql.functions import col, sum as _sum, when\n"
-            "null_counts = df.select([\n"
-            "    _sum(when(col(c).isNull(), 1).otherwise(0)).alias(c) for c in df.columns\n"
-            "])\n"
-            "null_counts.show(vertical=True)"
+            "null_rate = (df.isnull().mean() * 100).round(1).sort_values(ascending=False)\n"
+            "null_rate.to_frame('null_pct')"
         )
 
     md("---")
