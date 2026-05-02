@@ -67,12 +67,12 @@ def build_notebook(manifest: dict, template_key: str, question: str = "") -> dic
     }
 
     def md(text: str):
-        nb["cells"].append({"cell_type": "markdown", "metadata": {}, "source": text.split("\n")})
+        nb["cells"].append({"cell_type": "markdown", "metadata": {}, "source": text})
 
     def code(src: str):
         nb["cells"].append({
             "cell_type": "code", "metadata": {}, "execution_count": None,
-            "outputs": [], "source": src.split("\n"),
+            "outputs": [], "source": src,
         })
 
     md(f"# {name} — {get_template(template_key)['title']}")
