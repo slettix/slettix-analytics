@@ -27,6 +27,7 @@ executor: KubernetesExecutor
 config:
   core:
     load_examples: "False"
+    dagbag_import_timeout: "120"   # kubernetes_asyncio-import kan ta >30s i kalde pods
   kubernetes_executor:
     namespace: slettix-analytics
     worker_container_repository: slettix-analytics/airflow
@@ -48,10 +49,13 @@ data:
     db: airflow
     sslmode: disable
 
-# ── DAGs: ConfigMap med subPath-montering ─────────────────────────────────────
-# subPath unngår K8s ConfigMap-symlink-strukturen som forårsaker
-# "Detected recursive loop"-feil i Airflow sin DAG-scanner.
-# Legg til nye DAG-filer i extraVolumeMounts-listene nedenfor.
+# ── DAGs: ConfigMap → emptyDir via init-container ─────────────────────────────
+# Init-container kopierer alle filer fra airflow-dags ConfigMap (mounted på
+# /tmp/dags-cm/) til en delt emptyDir mounted på /opt/airflow/dags/.
+# Dette bryter ConfigMap-symlinkene som forårsaker «Detected recursive loop»
+# i Airflow sin DAG-scanner, OG gjør at nye DAGs lagt til ConfigMap dukker
+# opp uten å måtte deklarere subPath-mount per fil i denne values-filen.
+# Pipeline-builder i dataportalen kan dermed publisere DAGs automatisk.
 dags:
   persistence:
     enabled: false
@@ -142,31 +146,20 @@ webserver:
     - name: dags-cm
       configMap:
         name: airflow-dags
+    - name: dags
+      emptyDir: {}
   extraVolumeMounts:
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/01_slettix_pipeline.py
-      subPath: 01_slettix_pipeline.py
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/02_sla_monitor.py
-      subPath: 02_sla_monitor.py
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/analytical_employees.py
-      subPath: analytical_employees.py
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/folkeregister_person_events_idp.py
-      subPath: folkeregister_person_events_idp.py
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/folkeregister_family_events_idp.py
-      subPath: folkeregister_family_events_idp.py
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/folkeregister_silver.py
-      subPath: folkeregister_silver.py
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/folkeregister_gold.py
-      subPath: folkeregister_gold.py
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/governance_retention.py
-      subPath: governance_retention.py
+    - name: dags
+      mountPath: /opt/airflow/dags
+  extraInitContainers:
+    - name: dag-copier
+      image: busybox:1.36
+      command: ["sh", "-c", "cp -L /tmp/dags-cm/*.py /opt/airflow/dags/ 2>/dev/null; ls /opt/airflow/dags"]
+      volumeMounts:
+        - name: dags-cm
+          mountPath: /tmp/dags-cm
+        - name: dags
+          mountPath: /opt/airflow/dags
 
 
 # ── Scheduler ─────────────────────────────────────────────────────────────────
@@ -174,46 +167,34 @@ scheduler:
   resources:
     requests:
       cpu: 200m
-      memory: 512Mi
+      memory: 768Mi
     limits:
       cpu: 500m
-      memory: 1Gi
+      memory: 1.5Gi
   extraVolumes:
     - name: dags-cm
       configMap:
         name: airflow-dags
+    - name: dags
+      emptyDir: {}
     - name: jobs-cm
       configMap:
         name: airflow-jobs
   extraVolumeMounts:
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/01_slettix_pipeline.py
-      subPath: 01_slettix_pipeline.py
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/02_sla_monitor.py
-      subPath: 02_sla_monitor.py
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/analytical_employees.py
-      subPath: analytical_employees.py
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/folkeregister_person_events_idp.py
-      subPath: folkeregister_person_events_idp.py
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/folkeregister_family_events_idp.py
-      subPath: folkeregister_family_events_idp.py
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/folkeregister_silver.py
-      subPath: folkeregister_silver.py
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/folkeregister_gold.py
-      subPath: folkeregister_gold.py
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/governance_retention.py
-      subPath: governance_retention.py
-
+    - name: dags
+      mountPath: /opt/airflow/dags
     - name: jobs-cm
       mountPath: /opt/airflow/jobs
       readOnly: true
+  extraInitContainers:
+    - name: dag-copier
+      image: busybox:1.36
+      command: ["sh", "-c", "cp -L /tmp/dags-cm/*.py /opt/airflow/dags/ 2>/dev/null; ls /opt/airflow/dags"]
+      volumeMounts:
+        - name: dags-cm
+          mountPath: /tmp/dags-cm
+        - name: dags
+          mountPath: /opt/airflow/dags
 
 # ── KubernetesExecutor worker pods ───────────────────────────────────────────
 workers:
@@ -227,38 +208,26 @@ workers:
     - name: dags-cm
       configMap:
         name: airflow-dags
+    - name: dags
+      emptyDir: {}
     - name: jobs-cm
       configMap:
         name: airflow-jobs
   extraVolumeMounts:
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/01_slettix_pipeline.py
-      subPath: 01_slettix_pipeline.py
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/02_sla_monitor.py
-      subPath: 02_sla_monitor.py
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/analytical_employees.py
-      subPath: analytical_employees.py
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/folkeregister_person_events_idp.py
-      subPath: folkeregister_person_events_idp.py
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/folkeregister_family_events_idp.py
-      subPath: folkeregister_family_events_idp.py
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/folkeregister_silver.py
-      subPath: folkeregister_silver.py
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/folkeregister_gold.py
-      subPath: folkeregister_gold.py
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/governance_retention.py
-      subPath: governance_retention.py
-
+    - name: dags
+      mountPath: /opt/airflow/dags
     - name: jobs-cm
       mountPath: /opt/airflow/jobs
       readOnly: true
+  extraInitContainers:
+    - name: dag-copier
+      image: busybox:1.36
+      command: ["sh", "-c", "cp -L /tmp/dags-cm/*.py /opt/airflow/dags/ 2>/dev/null; ls /opt/airflow/dags"]
+      volumeMounts:
+        - name: dags-cm
+          mountPath: /tmp/dags-cm
+        - name: dags
+          mountPath: /opt/airflow/dags
 
 # ── Triggerer ─────────────────────────────────────────────────────────────────
 triggerer:
@@ -274,31 +243,20 @@ triggerer:
     - name: dags-cm
       configMap:
         name: airflow-dags
+    - name: dags
+      emptyDir: {}
   extraVolumeMounts:
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/01_slettix_pipeline.py
-      subPath: 01_slettix_pipeline.py
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/02_sla_monitor.py
-      subPath: 02_sla_monitor.py
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/analytical_employees.py
-      subPath: analytical_employees.py
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/folkeregister_person_events_idp.py
-      subPath: folkeregister_person_events_idp.py
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/folkeregister_family_events_idp.py
-      subPath: folkeregister_family_events_idp.py
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/folkeregister_silver.py
-      subPath: folkeregister_silver.py
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/folkeregister_gold.py
-      subPath: folkeregister_gold.py
-    - name: dags-cm
-      mountPath: /opt/airflow/dags/governance_retention.py
-      subPath: governance_retention.py
+    - name: dags
+      mountPath: /opt/airflow/dags
+  extraInitContainers:
+    - name: dag-copier
+      image: busybox:1.36
+      command: ["sh", "-c", "cp -L /tmp/dags-cm/*.py /opt/airflow/dags/ 2>/dev/null; ls /opt/airflow/dags"]
+      volumeMounts:
+        - name: dags-cm
+          mountPath: /tmp/dags-cm
+        - name: dags
+          mountPath: /opt/airflow/dags
 
 
 # ── Labels ────────────────────────────────────────────────────────────────────
