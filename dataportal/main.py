@@ -865,6 +865,36 @@ def _k8s_get(path: str) -> dict:
     return resp.json()
 
 
+def _patch_dag_configmap(dag_id: str, code: str) -> str:
+    """Patcher airflow-dags ConfigMap med generert DAG-kode.
+
+    Returnerer "ok" / "skipped (no service account)" / feilmelding. Krever
+    rolle med `configmaps[airflow-dags]/patch` i slettix-analytics-namespace.
+    Best-effort — feiler ikke endepunktet hvis ConfigMap-patch ikke går.
+    """
+    try:
+        token = pathlib.Path(_K8S_TOKEN_FILE).read_text().strip()
+    except FileNotFoundError:
+        return "skipped (ikke i cluster)"
+    filename = f"{dag_id}.py"
+    try:
+        resp = httpx.patch(
+            f"{_K8S_API_BASE}/api/v1/namespaces/slettix-analytics/configmaps/airflow-dags",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type":  "application/strategic-merge-patch+json",
+            },
+            json={"data": {filename: code}},
+            verify=_K8S_CA_FILE,
+            timeout=10.0,
+        )
+        if resp.status_code >= 400:
+            return f"feilet: {resp.status_code} {resp.text[:200]}"
+        return "ok"
+    except Exception as exc:
+        return f"feilet: {exc}"
+
+
 @timed("k8s.idp_status")
 def _safe_idp_status(manifest: dict) -> dict | None:
     """Henter SparkApplication-status for streaming IDP knyttet til dette produktet."""
@@ -2658,11 +2688,19 @@ async def api_create_pipeline(request: Request, api_key: str | None = Security(_
     try:
         code     = _generate_dag_from_template(template_id, config)
         dag_path = pathlib.Path(DAGS_DIR) / f"{dag_id}.py"
+        dag_path.parent.mkdir(parents=True, exist_ok=True)
         dag_path.write_text(code, encoding="utf-8")
         _save_pipeline_config(dag_id, template_id, config)
+        # Pusher DAG-koden inn i airflow-dags ConfigMap så Airflow plukker den opp.
+        configmap_status = _patch_dag_configmap(dag_id, code)
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Kunne ikke opprette DAG: {exc}")
-    return {"status": "deployed", "dag_id": dag_id, "dag_file": str(dag_path)}
+    return {
+        "status":            "deployed",
+        "dag_id":            dag_id,
+        "dag_file":          str(dag_path),
+        "configmap_status":  configmap_status,
+    }
 
 
 @app.put("/api/pipelines/{dag_id}", tags=["pipelines"], summary="Oppdater og redeploy pipeline")
