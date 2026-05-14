@@ -8,21 +8,44 @@ Usage:
   spark-submit /opt/spark/jobs/transform_bronze_to_silver.py \\
     --config /opt/spark/conf/silver/employees.json
 
-Config format (see conf/silver/employees.json):
-  {
-    "source":      "s3a://bronze/employees",
-    "target":      "s3a://silver/employees",
-    "primary_key": "id",
-    "null_handling": {
-      "drop_if_null": ["id", "name"],
-      "fill":         {"department": "unknown", "salary": 0}
-    },
-    "cast": {
-      "id": "integer",
-      "salary": "integer",
-      "hire_date": "date"
-    }
-  }
+Config supports two source-formats:
+
+  1. Flat Bronze (default):
+     {
+       "source":      "s3a://bronze/employees",
+       "target":      "s3a://silver/employees",
+       "primary_key": "id",
+       "null_handling": {
+         "drop_if_null": ["id", "name"],
+         "fill":         {"department": "unknown", "salary": 0}
+       },
+       "cast": {
+         "id": "integer",
+         "salary": "integer",
+         "hire_date": "date"
+       }
+     }
+
+  2. IDP-format (payload_json-flatten — SILVER-4):
+     {
+       "source":      "s3a://bronze/folkeregister/person_events",
+       "target":      "s3a://silver/folkeregister/persons",
+       "primary_key": "citizen_id",
+       "payload_extract": {
+         "from_column": "payload_json",
+         "fields": {
+           "citizen_id":   "$.citizenId",
+           "first_name":   "$.firstName",
+           "municipality": "$.municipalityCode"
+         }
+       },
+       "cast":          { "citizen_id": "string" },
+       "null_handling": { "drop_if_null": ["citizen_id"] }
+     }
+
+  Når `payload_extract` finnes, ekstraheres JSON-feltene fra angitt
+  kolonne FØR cast/null_handling. Resterende kolonner (event_type osv)
+  kan også med — bare uten å ekstrahere fra dem.
 """
 
 import argparse
@@ -62,6 +85,33 @@ def apply_casts(df: DataFrame, cast_rules: dict) -> DataFrame:
             log.info(f"Cast '{col_name}' → {target_type}: OK")
 
     return df
+
+
+def apply_payload_extract(df: DataFrame, payload_extract: dict) -> DataFrame:
+    """SILVER-4: Trekk ut top-level JSON-felter fra en payload-kolonne.
+
+    Erstatter rad-settet med kun de ekstraherte feltene (pluss Bronze
+    metadata `_ingested_at`/`event_type` om de finnes — de brukes senere
+    av dedup-vinduet og slettes så av drop_bronze_metadata).
+    """
+    from_col = payload_extract.get("from_column", "payload_json")
+    fields   = payload_extract.get("fields", {})
+    if from_col not in df.columns:
+        log.warning(f"payload_extract.from_column '{from_col}' finnes ikke — hopper over flatten")
+        return df
+
+    select_exprs = []
+    for target_name, json_path in fields.items():
+        select_exprs.append(F.get_json_object(F.col(from_col), json_path).alias(target_name))
+
+    # Behold _ingested_at (brukes til dedup) og event_type hvis tilgjengelige.
+    for passthrough in ("_ingested_at", "event_type", "event_timestamp"):
+        if passthrough in df.columns:
+            select_exprs.append(F.col(passthrough))
+
+    extracted = df.select(*select_exprs)
+    log.info(f"Ekstraherte {len(fields)} payload-felter fra '{from_col}': {list(fields.keys())}")
+    return extracted
 
 
 def apply_null_rules(df: DataFrame, null_handling: dict) -> DataFrame:
@@ -120,18 +170,22 @@ def upsert_to_silver(spark: SparkSession, df: DataFrame, target: str, primary_ke
 
 
 def run(spark: SparkSession, config: dict) -> None:
-    source      = config["source"]
-    target      = config["target"]
-    primary_key = config["primary_key"]
-    null_rules  = config.get("null_handling", {})
-    cast_rules  = config.get("cast", {})
-    t0          = time.time()
+    source           = config["source"]
+    target           = config["target"]
+    primary_key      = config["primary_key"]
+    null_rules       = config.get("null_handling", {})
+    cast_rules       = config.get("cast", {})
+    payload_extract  = config.get("payload_extract")
+    t0               = time.time()
 
     log.info("Job started", extra={"event": "job_start", "source": source, "target": target})
 
     df = spark.read.format("delta").load(source)
     rows_read = df.count()
     log.info("Bronze read", extra={"event": "read_done", "rows_read": rows_read, "source": source})
+
+    if payload_extract:
+        df = apply_payload_extract(df, payload_extract)
 
     df = apply_casts(df, cast_rules)
     df = apply_null_rules(df, null_rules)
@@ -140,9 +194,15 @@ def run(spark: SparkSession, config: dict) -> None:
     # requirement that each target row matches at most one source row.
     # Must happen before drop_bronze_metadata so _ingested_at is still available.
     from pyspark.sql.window import Window
+    if "_ingested_at" in df.columns:
+        order_col = F.col("_ingested_at").desc()
+    elif "event_timestamp" in df.columns:
+        order_col = F.col("event_timestamp").desc()
+    else:
+        order_col = F.lit(0)  # fallback — beholder vilkårlig rad per pk
     df = (
         df.withColumn("_rn", F.row_number().over(
-            Window.partitionBy(primary_key).orderBy(F.col("_ingested_at").desc())
+            Window.partitionBy(primary_key).orderBy(order_col)
         ))
         .filter(F.col("_rn") == 1)
         .drop("_rn")
