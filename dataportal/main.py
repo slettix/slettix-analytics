@@ -3642,6 +3642,146 @@ def api_wizard_dashboard(product_id: str, request: Request, type: str = "table")
     return {"sql": sql, "url": url, "type": type}
 
 
+@app.post("/api/wizard/silver/deploy", tags=["pipelines"],
+          summary="SILVER-5: deploy ende-til-ende fra wizard")
+async def api_wizard_silver_deploy(request: Request):
+    """Orkestrerer alle stegene for å deploye et nytt Silver-produkt:
+
+    1. Skriv silver-config til MinIO (s3://config/silver/{slug}/current.json)
+    2. Generér DAG-kode via silver_transform-malen
+    3. Patch DAG inn i airflow-dags ConfigMap
+    4. Sett source_products + column_lineage på manifestet
+    5. Registrer Silver-manifestet i Delta-registret
+
+    Best-effort: feilet steg 3-5 returnerer status per steg, men feiler ikke
+    endepunktet hvis config (steg 1) er skrevet OK.
+
+    Body:
+      {
+        "config":   { "source": "...", "target": "...", "primary_key": "...", ... },
+        "manifest": { "id": "...", "name": "...", "domain": "...", "owner": "...", ... },
+        "source_product_id": "folkeregister.person_events",
+        "schedule":          "@daily",
+        "overwrite":         false   // true → tillat register over eksisterende manifest
+      }
+    """
+    user = auth.get_current_user(request)
+    api_key = request.headers.get("X-API-Key")
+    if not user and api_key != PORTAL_API_KEY:
+        raise HTTPException(status_code=401, detail="Krever innlogging eller API-nøkkel")
+
+    body              = await request.json()
+    silver_config     = body.get("config") or {}
+    manifest_in       = body.get("manifest") or {}
+    source_product_id = (body.get("source_product_id") or "").strip()
+    schedule          = body.get("schedule", "@daily")
+    overwrite         = bool(body.get("overwrite", False))
+
+    # ── Validering ────────────────────────────────────────────────────────
+    for required in ("source", "target", "primary_key"):
+        if not silver_config.get(required):
+            raise HTTPException(status_code=422, detail=f"config.{required} kreves")
+    for required in ("id", "name", "domain", "owner"):
+        if not manifest_in.get(required):
+            raise HTTPException(status_code=422, detail=f"manifest.{required} kreves")
+    if not source_product_id:
+        raise HTTPException(status_code=422, detail="source_product_id kreves")
+
+    product_id = manifest_in["id"]
+    slug       = re.sub(r"[^a-z0-9_-]", "-", product_id.lower())
+    dag_id     = re.sub(r"[^a-zA-Z0-9_]", "_", product_id)
+
+    # Sjekk om manifest allerede finnes (409 hvis overwrite=false)
+    try:
+        get(product_id)
+        if not overwrite:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Manifest '{product_id}' finnes allerede. Send overwrite=true for å overskrive.",
+            )
+    except KeyError:
+        pass  # nytt produkt — OK
+
+    # Resolve kildeprodukt for lineage
+    try:
+        source_manifest = get(source_product_id)
+    except KeyError:
+        raise HTTPException(status_code=404, detail=f"Kildeprodukt '{source_product_id}' ikke funnet")
+
+    status = {"steps": {}}
+
+    # ── Steg 1: skriv config til MinIO ────────────────────────────────────
+    try:
+        config_url = _save_silver_config(slug, silver_config)
+        status["steps"]["save_config"] = {"ok": True, "url": config_url}
+        status["config_url"] = config_url
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Kunne ikke skrive config: {exc}")
+
+    # ── Steg 2: generér DAG-kode ──────────────────────────────────────────
+    try:
+        dag_config = {
+            "dag_id":      dag_id,
+            "config_path": config_url,
+            "domain":      manifest_in["domain"],
+            "owner":       manifest_in["owner"],
+            "schedule":    schedule,
+            "retries":     "2",
+        }
+        dag_code = _generate_dag_from_template("silver_transform", dag_config)
+        dag_path = pathlib.Path(DAGS_DIR) / f"{dag_id}.py"
+        dag_path.parent.mkdir(parents=True, exist_ok=True)
+        dag_path.write_text(dag_code, encoding="utf-8")
+        _save_pipeline_config(dag_id, "silver_transform", dag_config)
+        status["steps"]["generate_dag"] = {"ok": True, "dag_id": dag_id, "path": str(dag_path)}
+        status["dag_id"] = dag_id
+    except Exception as exc:
+        status["steps"]["generate_dag"] = {"ok": False, "error": str(exc)}
+        return status  # uten DAG har vi ingenting å patche
+
+    # ── Steg 3: patch DAG til airflow-dags ConfigMap ──────────────────────
+    cm_status = _patch_dag_configmap(dag_id, dag_code)
+    status["steps"]["configmap_patch"] = {"ok": cm_status == "ok", "status": cm_status}
+    status["configmap_status"] = cm_status
+
+    # ── Steg 4 + 5: bygg og registrer Silver-manifestet ───────────────────
+    silver_manifest = {
+        **manifest_in,
+        "source_path":    silver_config["target"],
+        "format":         "delta",
+        "version":        manifest_in.get("version", "1.0.0"),
+        "access":         manifest_in.get("access", "public"),
+        "source_products": [source_product_id],
+        "dag_id":          dag_id,
+    }
+    # Column-lineage: hver target-kolonne får kildereferanse til Bronze-produktet.
+    # For payload-extract bruker vi json_path som ledetråd; ellers samme kolonnenavn.
+    payload_extract = silver_config.get("payload_extract") or {}
+    payload_fields  = payload_extract.get("fields") or {}
+    cast_rules      = silver_config.get("cast") or {}
+    target_columns  = set(payload_fields.keys()) | set(cast_rules.keys()) | {silver_config["primary_key"]}
+    column_lineage  = []
+    for col in sorted(target_columns):
+        src_hint = payload_fields.get(col) or col
+        column_lineage.append({
+            "column":  col,
+            "sources": [{"product_id": source_product_id, "column": src_hint}],
+            "transformation": "payload_json-extract + cast" if col in payload_fields else "cast/null-handling",
+        })
+    silver_manifest["column_lineage"] = column_lineage
+
+    try:
+        register(silver_manifest)
+        status["steps"]["register_manifest"] = {"ok": True}
+        status["manifest_status"]  = "registered"
+        status["manifest_version"] = silver_manifest["version"]
+    except Exception as exc:
+        status["steps"]["register_manifest"] = {"ok": False, "error": str(exc)}
+        status["manifest_status"] = "failed"
+
+    return status
+
+
 @app.get("/help", response_class=HTMLResponse, include_in_schema=False)
 def page_help(request: Request):
     """GUIDE-10: FAQ og kjente feilløsninger."""
