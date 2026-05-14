@@ -219,12 +219,33 @@ def run(spark: SparkSession, config: dict) -> None:
     })
 
 
+def _load_config(path: str) -> dict:
+    """Les config-JSON fra lokal sti eller S3/S3A (SILVER-3)."""
+    if path.startswith(("s3://", "s3a://")):
+        import os
+        import boto3
+        from botocore.client import Config as BotoConfig
+        # s3:// og s3a:// behandles likt — det er bucket+key
+        no_scheme = path.split("://", 1)[1]
+        bucket, key = no_scheme.split("/", 1)
+        s3 = boto3.client(
+            "s3",
+            endpoint_url=os.environ.get("AWS_ENDPOINT_URL", "http://minio.slettix-analytics.svc.cluster.local:9000"),
+            aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID", "admin"),
+            aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY", "changeme"),
+            config=BotoConfig(signature_version="s3v4"),
+        )
+        body = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
+        return json.loads(body)
+    return json.loads(Path(path).read_text())
+
+
 def main():
     parser = argparse.ArgumentParser(description="Bronze → Silver transformation")
-    parser.add_argument("--config", required=True, help="Path to silver config JSON")
+    parser.add_argument("--config", required=True, help="Path to silver config JSON (lokal eller s3a://)")
     args = parser.parse_args()
 
-    config = json.loads(Path(args.config).read_text())
+    config = _load_config(args.config)
 
     spark = (
         SparkSession.builder
