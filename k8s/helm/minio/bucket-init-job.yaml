@@ -78,5 +78,10 @@ spec:
               echo "Oppretter stream-input-mappe..."
               mc cp /dev/null local/raw/stream-input/.domain
 
+              # SILVER-3: config-bucket for pipeline-konfigurasjoner
+              echo "Oppretter config-bucket..."
+              mc mb --ignore-existing local/config
+              mc cp /dev/null local/config/silver/.keep
+
               echo "Mappe-struktur klar."
               mc ls local/

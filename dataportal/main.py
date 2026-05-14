@@ -1710,7 +1710,7 @@ _PIPELINE_TEMPLATES = {
         "tags":        ["transform", "silver"],
         "fields": [
             {"name": "dag_id",       "label": "DAG-ID",           "type": "text",   "placeholder": "mitt_silver_transform", "required": True},
-            {"name": "config_path",  "label": "Konfig-sti",       "type": "text",   "placeholder": "/opt/airflow/spark_conf/silver/domene/tabell.json", "required": True},
+            {"name": "config_path",  "label": "Konfig-sti",       "type": "text",   "placeholder": "s3a://config/silver/<slug>/current.json eller lokal sti", "required": True},
             {"name": "domain",       "label": "Domene",           "type": "text",   "placeholder": "hr", "required": True},
             {"name": "owner",        "label": "Eier",             "type": "text",   "placeholder": "teamet-ditt", "required": True},
             {"name": "schedule",     "label": "Kjøreplan",        "type": "select", "options": ["@daily","@weekly","@monthly","None"], "required": True},
@@ -2270,6 +2270,58 @@ def _save_pipeline_config(dag_id: str, template_id: str, config: dict) -> None:
     )
 
 
+def _save_silver_config(slug: str, config: dict) -> str:
+    """SILVER-3: lagre silver-config-JSON i s3://config/silver/{slug}/.
+
+    Returnerer s3a://-URL-en til current.json. Versjon legges også til
+    history.json (samme mønster som _save_pipeline_config — maks 10).
+    """
+    s3 = _s3_client()
+    now     = datetime.now(tz=timezone.utc).isoformat()
+    payload = {"slug": slug, "config": config, "saved_at": now}
+    s3.put_object(
+        Bucket="config",
+        Key=f"silver/{slug}/current.json",
+        Body=json.dumps(payload, indent=2).encode(),
+        ContentType="application/json",
+    )
+    history: list[dict] = []
+    try:
+        obj = s3.get_object(Bucket="config", Key=f"silver/{slug}/history.json")
+        history = json.loads(obj["Body"].read())
+    except ClientError:
+        pass
+    history.insert(0, payload)
+    history = history[:10]
+    s3.put_object(
+        Bucket="config",
+        Key=f"silver/{slug}/history.json",
+        Body=json.dumps(history, indent=2).encode(),
+        ContentType="application/json",
+    )
+    return f"s3a://config/silver/{slug}/current.json"
+
+
+def _load_silver_config(slug: str) -> dict | None:
+    """SILVER-3: hent gjeldende silver-config fra MinIO."""
+    try:
+        s3  = _s3_client()
+        obj = s3.get_object(Bucket="config", Key=f"silver/{slug}/current.json")
+        return json.loads(obj["Body"].read())
+    except ClientError:
+        return None
+
+
+def _load_silver_config_history(slug: str) -> list[dict]:
+    """SILVER-3: hent versjonshistorikk for en silver-config."""
+    try:
+        s3  = _s3_client()
+        obj = s3.get_object(Bucket="config", Key=f"silver/{slug}/history.json")
+        return json.loads(obj["Body"].read())
+    except ClientError:
+        return []
+
+
 def _load_pipeline_config(dag_id: str) -> dict | None:
     """Last gjeldende pipeline-konfigurasjon fra MinIO."""
     try:
@@ -2751,6 +2803,21 @@ def api_get_pipeline_config(dag_id: str):
     current = _load_pipeline_config(dag_id)
     history = _load_pipeline_history(dag_id)
     return {"current": current, "history": history}
+
+
+@app.get("/api/silver/configs/{slug}", tags=["pipelines"], summary="Hent gjeldende silver-config")
+def api_get_silver_config(slug: str):
+    """SILVER-3: gjeldende silver-config-payload fra s3://config/silver/{slug}/current.json."""
+    current = _load_silver_config(slug)
+    if current is None:
+        raise HTTPException(status_code=404, detail=f"Ingen silver-config funnet for slug='{slug}'")
+    return current
+
+
+@app.get("/api/silver/configs/{slug}/history", tags=["pipelines"], summary="Hent silver-config-historikk")
+def api_get_silver_config_history(slug: str):
+    """SILVER-3: historikk (maks 10 versjoner) for en silver-config."""
+    return {"slug": slug, "history": _load_silver_config_history(slug)}
 
 
 @app.get("/api/pipelines/{dag_id}/status", tags=["pipelines"], summary="Hent Airflow-status for DAG")

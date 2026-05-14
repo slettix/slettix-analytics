@@ -47,6 +47,9 @@ buckets:
   - name: analytics
     policy: none
     purge: false
+  - name: config
+    policy: none
+    purge: false
 
 # ── Ressurser (tilpasset lokal Docker Desktop) ────────────────────────────────
 # PERF-7: hevet fra 256Mi/512Mi → 512Mi/1Gi for å håndtere parallelle kall fra
