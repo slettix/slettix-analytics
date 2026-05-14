@@ -95,6 +95,7 @@ from registry import (  # noqa: E402
 
 import auth  # noqa: E402
 import glossary  # noqa: E402
+import wizard  # noqa: E402
 import notebook_gallery  # noqa: E402
 import help_content  # noqa: E402
 
@@ -3456,6 +3457,65 @@ def page_how_it_works(request: Request):
     return templates.TemplateResponse("how_it_works.html", _template_ctx(request))
 
 
+@app.get("/wizard/analyze", response_class=HTMLResponse, include_in_schema=False)
+def page_wizard_analyze(request: Request):
+    """GUIDE-5: veiviser fra spørsmål til notebook."""
+    user = auth.get_current_user(request)
+    if not user:
+        return RedirectResponse("/login?next=/wizard/analyze", status_code=303)
+    products = [p for p in list_all() if _check_product_access(p, user, None)]
+    return templates.TemplateResponse("wizard_analyze.html", _template_ctx(
+        request,
+        products=products,
+        templates=wizard.ANALYSIS_TEMPLATES,
+    ))
+
+
+@app.post("/api/wizard/analyze", tags=["jupyter"], summary="Generer veiviser-notebook")
+async def api_wizard_analyze(request: Request):
+    user = auth.get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Krever innlogging")
+    body         = await request.json()
+    product_id   = body.get("product_id")
+    template_key = body.get("template")
+    question     = body.get("question") or ""
+
+    if not product_id or not template_key:
+        raise HTTPException(status_code=422, detail="product_id og template kreves")
+    if not wizard.get_template(template_key):
+        raise HTTPException(status_code=400, detail=f"Ukjent template: {template_key}")
+
+    manifest = _resolve_product(product_id)
+    _require_access(manifest, user, None)
+
+    nb       = wizard.build_notebook(manifest, template_key, question=question)
+    ts       = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
+    filename = f"wizard-{template_key}-{_safe_filename(product_id)[len('product_'):]}-{ts}.ipynb"
+    nb_path  = _notebook_path(filename)
+
+    pathlib.Path(NOTEBOOKS_DIR).mkdir(parents=True, exist_ok=True)
+    nb_path.write_text(json.dumps(nb, ensure_ascii=False, indent=1))
+    _push_to_jupyter(filename, nb)
+    auth.track_usage(product_id, "wizard_analyze", user["id"])
+
+    return {"filename": filename, "url": _jupyter_open_url(filename), "template": template_key}
+
+
+@app.get("/api/wizard/dashboard/{product_id}", tags=["analytics"],
+         summary="Generer SQL-template for dashboard-type")
+def api_wizard_dashboard(product_id: str, request: Request, type: str = "table"):
+    user = auth.get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Krever innlogging")
+    manifest = _resolve_product(product_id)
+    _require_access(manifest, user, None)
+    sql = wizard.build_dashboard_sql(manifest, type)
+    url = f"{SUPERSET_EXTERNAL_URL}/sqllab/?sql={urllib.parse.quote(sql)}&dbId={SUPERSET_DB_ID}"
+    auth.track_usage(product_id, "wizard_dashboard", user["id"])
+    return {"sql": sql, "url": url, "type": type}
+
+
 @app.get("/help", response_class=HTMLResponse, include_in_schema=False)
 def page_help(request: Request):
     """GUIDE-10: FAQ og kjente feilløsninger."""
@@ -3937,6 +3997,8 @@ def page_product(request: Request, product_id: str):
         views=views,
         sla_compliance_pct=sla_compliance_pct,
         mttr_hours=mttr_hours,
+        dashboard_types=wizard.DASHBOARD_TYPES,
+        superset_url=SUPERSET_EXTERNAL_URL,
     ))
 
 

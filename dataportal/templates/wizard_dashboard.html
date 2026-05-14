@@ -1,0 +1,80 @@
+{# GUIDE-6: dashboard-veiviser-modal som inkluderes på produktdetaljsiden. #}
+{# Forventer at `manifest`, `dashboard_types` og `superset_url` er tilgjengelig. #}
+
+<div class="modal fade" id="dashboardWizardModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-bar-chart-line me-2"></i>Bygg dashboard for «{{ manifest.name }}»</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted small mb-3">
+          Velg en dashboard-type — vi genererer en SQL-template og åpner Superset SQL Lab
+          med spørringen ferdig utfylt. Derfra kan du bygge chart og lagre til et dashboard.
+        </p>
+
+        <div class="row g-2 mb-3">
+          {% for dt in dashboard_types %}
+          <div class="col-md-6 col-lg-3">
+            <button type="button" class="btn btn-outline-primary w-100 h-100 text-start dashboard-type-btn"
+                    data-type="{{ dt.key }}">
+              <div><i class="bi {{ dt.icon }} me-1"></i><strong>{{ dt.title }}</strong></div>
+              <div class="small text-muted">{{ dt.description }}</div>
+            </button>
+          </div>
+          {% endfor %}
+        </div>
+
+        <div class="dashboard-preview d-none">
+          <label class="form-label small fw-semibold">SQL-template</label>
+          <pre id="dashboard-sql-preview" class="small p-2 mb-3" style="background:#212529; color:#f8f9fa; border-radius:4px; max-height:200px; overflow:auto;"></pre>
+          <div class="d-flex gap-2">
+            <a id="dashboard-open-btn" href="#" target="_blank" class="btn btn-primary">
+              <i class="bi bi-box-arrow-up-right me-1"></i>Åpne i Superset SQL Lab
+            </a>
+            <button type="button" class="btn btn-outline-secondary" id="dashboard-copy-btn">
+              <i class="bi bi-clipboard me-1"></i>Kopier SQL
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  (function () {
+    const productId = {{ manifest.id|tojson }};
+    const preview   = document.querySelector('#dashboardWizardModal .dashboard-preview');
+    const sqlEl     = document.getElementById('dashboard-sql-preview');
+    const openBtn   = document.getElementById('dashboard-open-btn');
+    const copyBtn   = document.getElementById('dashboard-copy-btn');
+
+    document.querySelectorAll('.dashboard-type-btn').forEach(btn => btn.addEventListener('click', async () => {
+      document.querySelectorAll('.dashboard-type-btn').forEach(b => b.classList.replace('btn-primary','btn-outline-primary'));
+      btn.classList.replace('btn-outline-primary','btn-primary');
+      try {
+        const resp = await fetch(`/api/wizard/dashboard/${productId}?type=${btn.dataset.type}`);
+        if (!resp.ok) throw new Error(await resp.text());
+        const data = await resp.json();
+        sqlEl.textContent = data.sql;
+        openBtn.href      = data.url;
+        preview.classList.remove('d-none');
+      } catch (e) {
+        sqlEl.textContent = `Feilet: ${e.message}`;
+      }
+    }));
+
+    if (copyBtn) {
+      copyBtn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(sqlEl.textContent);
+          const orig = copyBtn.innerHTML;
+          copyBtn.innerHTML = '<i class="bi bi-check me-1"></i>Kopiert';
+          setTimeout(() => { copyBtn.innerHTML = orig; }, 1500);
+        } catch (_) {}
+      });
+    }
+  })();
+</script>
