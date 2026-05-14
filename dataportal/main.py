@@ -98,6 +98,7 @@ import glossary  # noqa: E402
 import wizard  # noqa: E402
 import notebook_gallery  # noqa: E402
 import help_content  # noqa: E402
+import schema_intro  # noqa: E402
 
 # ── oppstart ───────────────────────────────────────────────────────────────────
 
@@ -2588,6 +2589,26 @@ def api_get_schema(product_id: str, request: Request, api_key: str | None = Secu
     if schema is None:
         raise HTTPException(status_code=502, detail="Kunne ikke lese schema fra Delta-tabellen")
     return schema
+
+
+@app.get("/api/products/{product_id}/sample", tags=["products"],
+         summary="Schema-introspeksjon med 100-rad sample og payload_json-ekstraksjon")
+def api_get_sample(product_id: str, request: Request, limit: int = 100,
+                   api_key: str | None = Security(_api_key_scheme)):
+    """SILVER-1: leser et lite sample og foreslår kolonner + payload-fields.
+
+    Returnerer `{format, row_count, columns, payload_fields}`. `format` er
+    enten "flat" eller "payload_json"; sistnevnte triggrer payload-flatten-
+    flyt i Silver-wizarden.
+    """
+    manifest = _resolve_product(product_id)
+    user     = auth.get_current_user(request)
+    _require_access(manifest, user, api_key)
+    source_path = manifest.get("source_path")
+    if not source_path:
+        raise HTTPException(status_code=422, detail="Produktet har ingen source_path")
+    limit = max(1, min(limit, 500))
+    return schema_intro.introspect(source_path, limit=limit)
 
 
 @app.get("/api/products/{product_id}/pipeline", tags=["products"], summary="Siste pipeline-kjøring")

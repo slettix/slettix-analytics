@@ -20,6 +20,7 @@ from transform_bronze_to_silver import (  # noqa: E402
     add_silver_metadata,
     apply_casts,
     apply_null_rules,
+    apply_payload_extract,
     drop_bronze_metadata,
 )
 
@@ -139,3 +140,61 @@ class TestAddSilverMetadata:
         df = add_silver_metadata(employees_df)
         null_count = df.filter(F.col("_silver_updated_at").isNull()).count()
         assert null_count == 0
+
+
+# ── apply_payload_extract (SILVER-4) ───────────────────────────────────────
+
+
+@pytest.fixture
+def idp_events_df(spark):
+    """IDP-style Bronze DataFrame med payload_json-kolonne."""
+    data = [
+        ("citizen.created", "2026-05-14T08:00:00", "2026-05-14T08:00:01",
+         '{"citizenId":"abc-1","firstName":"Aksel","municipalityCode":"3446"}'),
+        ("citizen.created", "2026-05-14T08:01:00", "2026-05-14T08:01:01",
+         '{"citizenId":"abc-2","firstName":"Birgit","municipalityCode":"1106"}'),
+        ("citizen.died",    "2026-05-14T08:02:00", "2026-05-14T08:02:01",
+         '{"citizenId":"abc-1","firstName":"Aksel"}'),
+    ]
+    return spark.createDataFrame(
+        data,
+        ["event_type", "event_timestamp", "_ingested_at", "payload_json"],
+    )
+
+
+class TestApplyPayloadExtract:
+    def test_extracts_named_fields(self, idp_events_df):
+        rules = {
+            "from_column": "payload_json",
+            "fields": {
+                "citizen_id":   "$.citizenId",
+                "first_name":   "$.firstName",
+                "municipality": "$.municipalityCode",
+            },
+        }
+        df = apply_payload_extract(idp_events_df, rules)
+        first = df.filter(F.col("citizen_id") == "abc-1").collect()[0]
+        assert first["first_name"]   == "Aksel"
+        assert first["municipality"] == "3446"
+
+    def test_keeps_passthrough_metadata(self, idp_events_df):
+        rules = {"from_column": "payload_json", "fields": {"citizen_id": "$.citizenId"}}
+        df = apply_payload_extract(idp_events_df, rules)
+        cols = set(df.columns)
+        assert "citizen_id"      in cols
+        assert "event_type"      in cols
+        assert "event_timestamp" in cols
+        assert "_ingested_at"    in cols
+        assert "payload_json"    not in cols  # original-kolonnen droppes
+
+    def test_missing_payload_field_returns_null(self, idp_events_df):
+        rules = {"from_column": "payload_json", "fields": {"municipality": "$.municipalityCode"}}
+        df = apply_payload_extract(idp_events_df, rules)
+        died = df.filter(F.col("event_type") == "citizen.died").collect()[0]
+        assert died["municipality"] is None  # citizen.died-eventen har ikke municipalityCode
+
+    def test_missing_from_column_returns_unchanged(self, idp_events_df):
+        rules = {"from_column": "nonexistent", "fields": {"foo": "$.bar"}}
+        df = apply_payload_extract(idp_events_df, rules)
+        assert df.columns == idp_events_df.columns
+        assert df.count() == idp_events_df.count()
