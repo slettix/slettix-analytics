@@ -3597,6 +3597,25 @@ def page_wizard_analyze(request: Request):
     ))
 
 
+@app.get("/wizard/silver", response_class=HTMLResponse, include_in_schema=False)
+def page_wizard_silver(request: Request, source: str | None = None):
+    """SILVER-2: veiviser fra Bronze-produkt til Silver-pipeline."""
+    user = auth.get_current_user(request)
+    if not user:
+        next_url = "/wizard/silver" + (f"?source={source}" if source else "")
+        return RedirectResponse(f"/login?next={urllib.parse.quote(next_url)}", status_code=303)
+    bronze_products = [
+        p for p in list_all()
+        if _check_product_access(p, user, None)
+        and (p.get("source_path", "").startswith(("s3://bronze/", "s3a://bronze/")))
+    ]
+    return templates.TemplateResponse("wizard_silver.html", _template_ctx(
+        request,
+        bronze_products=bronze_products,
+        preselected_id=source or "",
+    ))
+
+
 @app.post("/api/wizard/analyze", tags=["jupyter"], summary="Generer veiviser-notebook")
 async def api_wizard_analyze(request: Request):
     user = auth.get_current_user(request)

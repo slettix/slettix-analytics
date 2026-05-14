@@ -57,6 +57,11 @@
     <button type="button" class="btn btn-sm btn-info" data-bs-toggle="modal" data-bs-target="#dashboardWizardModal">
       <i class="bi bi-magic me-1"></i>Bygg dashboard
     </button>
+    {% if manifest.source_path and (manifest.source_path.startswith('s3://bronze/') or manifest.source_path.startswith('s3a://bronze/')) %}
+    <a href="/wizard/silver?source={{ manifest.id }}" class="btn btn-sm btn-success">
+      <i class="bi bi-arrow-up-right-circle me-1"></i>Lag Silver-produkt
+    </a>
+    {% endif %}
     {% if jupyter_nb_url %}
     <a href="{{ jupyter_nb_url }}" target="_blank" class="btn btn-sm btn-warning">
       <i class="bi bi-journal-code me-1"></i>Åpne notebook
