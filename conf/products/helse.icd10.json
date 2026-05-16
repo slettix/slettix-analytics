@@ -1,0 +1,45 @@
+{
+  "id":           "helse.icd10",
+  "name":         "ICD-10 kodeverk (Helsedirektoratet)",
+  "domain":       "helse",
+  "owner":        "helse-team",
+  "version":      "1.0.0",
+  "description":  "ICD-10 diagnosekodeverket — hierarkisk struktur (KAPITTEL → BLOKK → KODE) med norske og engelske titler, samt flagg for gyldighet som underliggende og ekstern dødsårsak. Refanseprodukt for helse-domenets fakta-tabeller (helse.dar med flere). Versjon 2026.",
+  "source_path":  "s3://silver/helse/icd10",
+  "format":       "delta",
+  "primary_key":  "code",
+  "dag_id":       "helse_silver",
+  "product_type": "reference",
+  "access":       "public",
+  "quality_sla": {
+    "max_null_rate":   0.001,
+    "freshness_hours": 24
+  },
+  "tags": ["helse", "reference", "kodeverk", "icd10", "silver", "wiki:icd10"],
+  "contract": {
+    "slo": {
+      "freshness_hours":   168,
+      "completeness_pct":  99.9
+    },
+    "schema_compatibility": "BACKWARD",
+    "guaranteed_columns": [
+      "code", "parent_code", "type", "name_no",
+      "chapter_code", "block_code",
+      "valid_as_underlying", "valid_as_external", "icd10_version"
+    ]
+  },
+  "source_products": [],
+  "schema": [
+    { "name": "code",                "type": "string",    "nullable": false, "description": "ICD-10 kode (primærnøkkel). KAPITTEL=romertall (I,II,…), BLOKK=intervall (A00-B99), KODE=alfanumerisk (A00, A00.0)" },
+    { "name": "parent_code",         "type": "string",    "nullable": true,  "description": "Forelder i hierarkiet. NULL for KAPITTEL." },
+    { "name": "type",                "type": "string",    "nullable": false, "description": "Nivå i hierarkiet: KAPITTEL | BLOKK | KODE" },
+    { "name": "name_no",             "type": "string",    "nullable": false, "description": "Norsk tittel" },
+    { "name": "name_en",             "type": "string",    "nullable": true,  "description": "Engelsk tittel (fra Helsedirektoratet, kan mangle for noen rader)" },
+    { "name": "chapter_code",        "type": "string",    "nullable": true,  "description": "Romertall for kapittelet raden tilhører (utledet ved hierarkitraversering)" },
+    { "name": "block_code",          "type": "string",    "nullable": true,  "description": "Blokk-intervall raden tilhører (utledet). NULL for KAPITTEL og BLOKK selv." },
+    { "name": "valid_as_underlying", "type": "boolean",   "nullable": false, "description": "Gyldig som underliggende dødsårsak iht. Helsedirektoratet" },
+    { "name": "valid_as_external",   "type": "boolean",   "nullable": false, "description": "Gyldig som ekstern dødsårsak (V/Y/X-koder)" },
+    { "name": "icd10_version",       "type": "string",    "nullable": false, "description": "Kodeverksversjon (per nå: 2026)" },
+    { "name": "_ingested_at",        "type": "timestamp", "nullable": false, "description": "Tidspunkt for siste innlasting" }
+  ]
+}

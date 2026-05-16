@@ -1,0 +1,53 @@
+{
+  "id":           "helse.dar.dodsfall_enriched",
+  "name":         "DAR — Dødsfall (beriket med ICD-10)",
+  "domain":       "helse",
+  "owner":        "helse-team",
+  "version":      "1.0.0",
+  "description":  "Denormalisert Gold-fakta for dødsårsaksregisteret. Én rad per dødsfall med pre-joinet ICD-10-navn og kapittel for underliggende dødsårsak og ekstern årsak (skade + skademekanisme). Brukes til ad-hoc-analyser og BI uten å åpne JSON-strenger.",
+  "source_path":  "s3://gold/helse/dar/dodsfall_enriched",
+  "format":       "delta",
+  "primary_key":  "dodsfall_id",
+  "dag_id":       "helse_dar_gold",
+  "product_type": "analytical",
+  "access":       "restricted",
+  "quality_sla": {
+    "max_null_rate":   0.01,
+    "freshness_hours": 25
+  },
+  "tags": ["helse", "dar", "gold", "icd10", "analytisk"],
+  "contract": {
+    "slo": {
+      "freshness_hours":   25,
+      "completeness_pct":  99
+    },
+    "schema_compatibility": "BACKWARD",
+    "guaranteed_columns": [
+      "dodsfall_id", "person_synt_id",
+      "underliggende_arsak_kode", "underliggende_arsak_navn", "underliggende_arsak_kapittel",
+      "tidspunkt", "klassifisert_tidspunkt"
+    ]
+  },
+  "source_products": ["helse.dar", "helse.icd10"],
+  "schema": [
+    { "name": "dodsfall_id",                    "type": "string",    "nullable": false, "description": "Primærnøkkel — UUID fra DAR" },
+    { "name": "person_synt_id",                 "type": "string",    "nullable": false, "description": "Syntetisk person-ID (ikke ekte fnr)" },
+    { "name": "alder",                          "type": "integer",   "nullable": true,  "description": "Alder ved dødsfall (år)" },
+    { "name": "kjonn",                          "type": "string",    "nullable": true,  "description": "Kjønn: Mann | Kvinne | Ukjent" },
+    { "name": "kommune_kode",                   "type": "string",    "nullable": true,  "description": "Bostedskommune (SSB 4 siffer)" },
+    { "name": "fylke",                          "type": "string",    "nullable": true,  "description": "Bostedsfylke" },
+    { "name": "tidspunkt",                      "type": "string",    "nullable": true,  "description": "Dødstidspunkt (ISO 8601)" },
+    { "name": "klassifisert_tidspunkt",         "type": "string",    "nullable": true,  "description": "Tidspunkt for klassifisering av dødsårsak" },
+    { "name": "icd10_versjon",                  "type": "string",    "nullable": true,  "description": "ICD-10 kodeverksversjon brukt ved klassifisering" },
+    { "name": "underliggende_arsak_kode",       "type": "string",    "nullable": true,  "description": "ICD-10 kode for underliggende dødsårsak" },
+    { "name": "underliggende_arsak_navn",       "type": "string",    "nullable": true,  "description": "Norsk navn (joinet fra helse.icd10)" },
+    { "name": "underliggende_arsak_kapittel",   "type": "string",    "nullable": true,  "description": "Romertall for ICD-10-kapittelet" },
+    { "name": "ekstern_skade_kode",             "type": "string",    "nullable": true,  "description": "ICD-10 skade-kode (S/T) ved ekstern årsak" },
+    { "name": "ekstern_skade_navn",             "type": "string",    "nullable": true,  "description": "Navn på skade (joinet fra helse.icd10)" },
+    { "name": "ekstern_skade_kapittel",         "type": "string",    "nullable": true,  "description": "ICD-10-kapittel for skaden" },
+    { "name": "ekstern_skademekanisme_kode",    "type": "string",    "nullable": true,  "description": "ICD-10 skademekanisme-kode (V/W/X/Y)" },
+    { "name": "ekstern_skademekanisme_navn",    "type": "string",    "nullable": true,  "description": "Navn på skademekanisme (joinet)" },
+    { "name": "ekstern_skademekanisme_kapittel","type": "string",    "nullable": true,  "description": "ICD-10-kapittel for skademekanisme" },
+    { "name": "_gold_updated_at",               "type": "timestamp", "nullable": false, "description": "Tidspunkt rad ble skrevet til Gold" }
+  ]
+}
