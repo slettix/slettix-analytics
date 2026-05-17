@@ -1,0 +1,476 @@
+{% extends "base.html" %}
+{% block title %}Veiviser: Bronze → Silver — Slettix Data Portal{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-3" style="max-width: 1100px;">
+
+  <h1 class="h3 mb-2"><i class="bi bi-magic me-2 text-primary"></i>Veiviser: Bronze → Silver</h1>
+  <p class="text-muted mb-4">
+    Bygger en Silver-pipeline fra et eksisterende Bronze/IDP-produkt. Veiviseren leser et sample,
+    foreslår kolonner og transformasjonsregler, og deployer pipeline + manifest når du er fornøyd.
+  </p>
+
+  <ol class="list-unstyled mb-0">
+
+    {# ── Steg 1: kildeprodukt ── #}
+    <li class="card shadow-sm mb-3" id="step-1">
+      <div class="card-body">
+        <div class="d-flex align-items-center mb-2">
+          <span class="badge rounded-circle bg-primary me-2">1</span>
+          <h2 class="h6 mb-0">Velg Bronze-kildeprodukt</h2>
+        </div>
+        <input id="wiz-product-search" type="text" class="form-control mb-2" placeholder="Filtrer …">
+        <div id="wiz-product-list" class="list-group" style="max-height:240px; overflow-y:auto;">
+          {% for p in bronze_products %}
+          <button type="button" class="list-group-item list-group-item-action wiz-product-item {% if p.id == preselected_id %}active{% endif %}"
+                  data-pid="{{ p.id }}"
+                  data-search="{{ (p.name ~ ' ' ~ p.domain ~ ' ' ~ (p.tags|join(' ')))|lower }}">
+            <div class="d-flex justify-content-between">
+              <div>
+                <div class="fw-semibold">{{ p.name }}</div>
+                <div class="small text-muted">{{ p.domain }} / {{ p.owner }} — <code>{{ p.source_path }}</code></div>
+              </div>
+              <i class="bi bi-arrow-right text-muted"></i>
+            </div>
+          </button>
+          {% endfor %}
+        </div>
+      </div>
+    </li>
+
+    {# ── Steg 2: schema-preview ── #}
+    <li class="card shadow-sm mb-3 d-none" id="step-2">
+      <div class="card-body">
+        <div class="d-flex align-items-center mb-2">
+          <span class="badge rounded-circle bg-primary me-2">2</span>
+          <h2 class="h6 mb-0">Schema-introspeksjon</h2>
+          <span id="wiz-format-badge" class="badge bg-light text-dark ms-2"></span>
+        </div>
+        <div id="wiz-schema-info" class="small text-muted mb-2">Laster …</div>
+        <div id="wiz-schema-preview" class="table-responsive" style="max-height:180px; overflow:auto;"></div>
+      </div>
+    </li>
+
+    {# ── Steg 3: transformasjonsmønster ── #}
+    <li class="card shadow-sm mb-3 d-none" id="step-3">
+      <div class="card-body">
+        <div class="d-flex align-items-center mb-2">
+          <span class="badge rounded-circle bg-primary me-2">3</span>
+          <h2 class="h6 mb-0">Transformasjonsmønster</h2>
+        </div>
+        <div class="row g-2">
+          <div class="col-md-6">
+            <button type="button" class="btn btn-outline-primary w-100 text-start wiz-pattern-btn" data-pattern="simple-clean">
+              <div><i class="bi bi-filter-square me-1"></i><strong>Simple-clean</strong></div>
+              <div class="small text-muted">Bronze-kolonner direkte → cast + null-handling + Delta-merge.</div>
+            </button>
+          </div>
+          <div class="col-md-6">
+            <button type="button" class="btn btn-outline-primary w-100 text-start wiz-pattern-btn" data-pattern="payload-flatten">
+              <div><i class="bi bi-braces me-1"></i><strong>Payload-flatten</strong></div>
+              <div class="small text-muted">Ekstrahér felter fra <code>payload_json</code> via JSON-path.</div>
+            </button>
+          </div>
+        </div>
+      </div>
+    </li>
+
+    {# ── Steg 4: kolonner ── #}
+    <li class="card shadow-sm mb-3 d-none" id="step-4">
+      <div class="card-body">
+        <div class="d-flex align-items-center mb-2">
+          <span class="badge rounded-circle bg-primary me-2">4</span>
+          <h2 class="h6 mb-0">Velg kolonner og regler</h2>
+        </div>
+        <p class="small text-muted mb-2">Velg primary_key (radio). Sett target-navn, cast-type, om null skal droppe rad eller fylles med default. PII-flag styrer maskering i Silver.</p>
+        <div class="table-responsive" style="max-height: 380px; overflow:auto;">
+          <table class="table table-sm small align-middle">
+            <thead class="table-light sticky-top">
+              <tr>
+                <th>Med?</th>
+                <th>PK</th>
+                <th>Kilde</th>
+                <th>Target-navn</th>
+                <th>Type</th>
+                <th>Drop hvis null</th>
+                <th>Fill default</th>
+                <th>PII</th>
+                <th>Sensitivity</th>
+              </tr>
+            </thead>
+            <tbody id="wiz-cols-tbody"></tbody>
+          </table>
+        </div>
+      </div>
+    </li>
+
+    {# ── Steg 5: manifest-felter ── #}
+    <li class="card shadow-sm mb-3 d-none" id="step-5">
+      <div class="card-body">
+        <div class="d-flex align-items-center mb-2">
+          <span class="badge rounded-circle bg-primary me-2">5</span>
+          <h2 class="h6 mb-0">Silver-manifest</h2>
+        </div>
+        <div class="row g-2">
+          <div class="col-md-6">
+            <label class="form-label small">Produkt-ID *</label>
+            <input id="m-id" type="text" class="form-control form-control-sm" placeholder="folkeregister.persons">
+          </div>
+          <div class="col-md-6">
+            <label class="form-label small">Navn *</label>
+            <input id="m-name" type="text" class="form-control form-control-sm" placeholder="Folkeregister — personer">
+          </div>
+          <div class="col-12">
+            <label class="form-label small">Beskrivelse</label>
+            <textarea id="m-description" class="form-control form-control-sm" rows="2"></textarea>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label small">Domene *</label>
+            <input id="m-domain" type="text" class="form-control form-control-sm" placeholder="folkeregister">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label small">Eier *</label>
+            <input id="m-owner" type="text" class="form-control form-control-sm" placeholder="folkeregister-team">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label small">Freshness (timer)</label>
+            <input id="m-freshness" type="number" class="form-control form-control-sm" placeholder="26">
+          </div>
+          <div class="col-md-3">
+            <label class="form-label small">Schema-kompatibilitet</label>
+            <select id="m-schema-compat" class="form-select form-select-sm">
+              <option value="BACKWARD" selected>BACKWARD</option>
+              <option value="FORWARD">FORWARD</option>
+              <option value="FULL">FULL</option>
+              <option value="NONE">NONE</option>
+            </select>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label small">Tilgang</label>
+            <select id="m-access" class="form-select form-select-sm">
+              <option value="public" selected>public</option>
+              <option value="restricted">restricted</option>
+            </select>
+          </div>
+          <div class="col-md-3">
+            <label class="form-label small">Schedule</label>
+            <select id="m-schedule" class="form-select form-select-sm">
+              <option value="@hourly">Hver time</option>
+              <option value="@daily" selected>Daglig</option>
+              <option value="@weekly">Ukentlig</option>
+            </select>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label small">Tags (komma)</label>
+            <input id="m-tags" type="text" class="form-control form-control-sm" placeholder="silver, folkeregister, persons">
+          </div>
+        </div>
+      </div>
+    </li>
+
+    {# ── Steg 6: preview ── #}
+    <li class="card shadow-sm mb-3 d-none" id="step-6">
+      <div class="card-body">
+        <div class="d-flex align-items-center mb-2">
+          <span class="badge rounded-circle bg-primary me-2">6</span>
+          <h2 class="h6 mb-0">Forhåndsvisning</h2>
+          <button id="wiz-refresh-preview" type="button" class="btn btn-sm btn-link ms-auto">Oppdater</button>
+        </div>
+        <div class="row g-2">
+          <div class="col-md-6">
+            <label class="form-label small fw-semibold">Config-JSON</label>
+            <pre id="wiz-config-preview" class="small p-2 mb-0" style="background:#212529; color:#f8f9fa; border-radius:4px; max-height:280px; overflow:auto;"></pre>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label small fw-semibold">Manifest</label>
+            <pre id="wiz-manifest-preview" class="small p-2 mb-0" style="background:#212529; color:#f8f9fa; border-radius:4px; max-height:280px; overflow:auto;"></pre>
+          </div>
+        </div>
+      </div>
+    </li>
+
+    {# ── Steg 7: deploy ── #}
+    <li class="card shadow-sm mb-3 d-none" id="step-7">
+      <div class="card-body">
+        <div class="d-flex align-items-center mb-2">
+          <span class="badge rounded-circle bg-primary me-2">7</span>
+          <h2 class="h6 mb-0">Deploy</h2>
+        </div>
+        <div class="form-check mb-2">
+          <input id="wiz-overwrite" class="form-check-input" type="checkbox">
+          <label class="form-check-label small" for="wiz-overwrite">Overskriv hvis manifestet allerede finnes</label>
+        </div>
+        <button id="wiz-deploy-btn" class="btn btn-primary">
+          <i class="bi bi-rocket-takeoff me-1"></i>Deploy Silver-pipeline
+        </button>
+        <div id="wiz-deploy-result" class="mt-3"></div>
+      </div>
+    </li>
+  </ol>
+</div>
+
+<script>
+  (function () {
+    const state = {pid: null, sample: null, pattern: null, cols: []};
+
+    // ── Steg 1: produkt-velger ──
+    const search = document.getElementById('wiz-product-search');
+    const items  = document.querySelectorAll('.wiz-product-item');
+    search.addEventListener('input', () => {
+      const q = (search.value || '').trim().toLowerCase();
+      items.forEach(el => {
+        el.style.display = !q || (el.dataset.search || '').includes(q) ? '' : 'none';
+      });
+    });
+    items.forEach(el => el.addEventListener('click', () => selectProduct(el)));
+    // Auto-select hvis preselect
+    const pre = document.querySelector('.wiz-product-item.active');
+    if (pre) selectProduct(pre);
+
+    async function selectProduct(el) {
+      items.forEach(x => x.classList.remove('active'));
+      el.classList.add('active');
+      state.pid = el.dataset.pid;
+      // Hent sample
+      document.getElementById('step-2').classList.remove('d-none');
+      document.getElementById('wiz-schema-info').textContent = 'Laster …';
+      const resp = await fetch(`/api/products/${state.pid}/sample?limit=50`);
+      if (!resp.ok) {
+        document.getElementById('wiz-schema-info').textContent = 'Feilet: ' + resp.status;
+        return;
+      }
+      state.sample = await resp.json();
+      renderSchema(state.sample);
+      // Steg 3 dukker opp etter at sample er klar
+      document.getElementById('step-3').classList.remove('d-none');
+    }
+
+    function renderSchema(s) {
+      const fmt = s.format || 'flat';
+      document.getElementById('wiz-format-badge').textContent = fmt === 'payload_json' ? 'IDP-format (payload_json)' : 'Flat-format';
+      document.getElementById('wiz-schema-info').innerHTML =
+        `<strong>${s.row_count || 0}</strong> rader i sample. ${s.columns.length} Bronze-kolonner, ${s.payload_fields?.length || 0} payload-felter.`;
+      const rows = s.columns.map(c => `
+        <tr>
+          <td><code>${c.name}</code></td>
+          <td class="text-muted">${c.type}</td>
+          <td>${(c.null_rate * 100).toFixed(0)}%</td>
+          <td>${c.pii_hint ? '<span class="badge bg-danger">PII</span>' : ''}</td>
+        </tr>`).join('');
+      document.getElementById('wiz-schema-preview').innerHTML = `
+        <table class="table table-sm small"><thead class="table-light"><tr><th>Kolonne</th><th>Type</th><th>Null-rate</th><th>PII?</th></tr></thead><tbody>${rows}</tbody></table>`;
+    }
+
+    // ── Steg 3: pattern ──
+    document.querySelectorAll('.wiz-pattern-btn').forEach(btn => btn.addEventListener('click', () => {
+      document.querySelectorAll('.wiz-pattern-btn').forEach(b => b.classList.replace('btn-primary','btn-outline-primary'));
+      btn.classList.replace('btn-outline-primary','btn-primary');
+      state.pattern = btn.dataset.pattern;
+      buildColumnList();
+      document.getElementById('step-4').classList.remove('d-none');
+      document.getElementById('step-5').classList.remove('d-none');
+      document.getElementById('step-6').classList.remove('d-none');
+      document.getElementById('step-7').classList.remove('d-none');
+    }));
+
+    // ── Steg 4: kolonner ──
+    function buildColumnList() {
+      const sample = state.sample;
+      let src;
+      if (state.pattern === 'payload-flatten') {
+        src = (sample.payload_fields || []).map(f => ({
+          name: f.name, json_path: f.json_path, type: f.inferred_type,
+          null_rate: f.null_rate, pii: f.pii_hint, source: 'payload',
+        }));
+      } else {
+        // simple-clean: ekskluder Bronze-metadata-kolonner
+        const skip = new Set(['_ingested_at','_processed_at','_source_topics','_consumer_group','_raw_value','kafka_topic','kafka_partition','kafka_offset','kafka_timestamp','event_date','payload_json']);
+        src = sample.columns
+          .filter(c => !skip.has(c.name))
+          .map(c => ({name: c.name, json_path: null, type: c.type, null_rate: c.null_rate, pii: c.pii_hint, source: 'flat'}));
+      }
+      state.cols = src.map((c, i) => ({
+        include:    !c.pii,        // skip PII-kolonner som default
+        is_pk:      i === 0,
+        src_name:   c.name,
+        json_path:  c.json_path,
+        target:     c.name,
+        cast:       inferCast(c.type),
+        drop_null:  false,
+        fill:       '',
+        pii:        !!c.pii,
+        sensitivity: c.pii ? 'high' : '',
+      }));
+      renderColumnTable();
+      refreshPreview();
+    }
+
+    function inferCast(t) {
+      const s = (t || '').toLowerCase();
+      if (s.includes('int') || s === 'long') return 'long';
+      if (s.includes('float') || s.includes('double')) return 'double';
+      if (s.includes('date')) return 'date';
+      if (s.includes('time')) return 'timestamp';
+      if (s.includes('bool')) return 'boolean';
+      return 'string';
+    }
+
+    function renderColumnTable() {
+      const tbody = document.getElementById('wiz-cols-tbody');
+      tbody.innerHTML = state.cols.map((c, i) => `
+        <tr>
+          <td><input type="checkbox" class="form-check-input col-include" data-i="${i}" ${c.include?'checked':''}></td>
+          <td><input type="radio" name="pk" class="form-check-input col-pk" data-i="${i}" ${c.is_pk?'checked':''}></td>
+          <td><code class="small">${c.src_name}</code>${c.json_path?'<br><span class="text-muted small">'+c.json_path+'</span>':''}</td>
+          <td><input type="text" class="form-control form-control-sm col-target" data-i="${i}" value="${c.target}"></td>
+          <td>
+            <select class="form-select form-select-sm col-cast" data-i="${i}">
+              ${['string','long','integer','double','boolean','date','timestamp'].map(t => `<option ${t===c.cast?'selected':''}>${t}</option>`).join('')}
+            </select>
+          </td>
+          <td><input type="checkbox" class="form-check-input col-drop" data-i="${i}" ${c.drop_null?'checked':''}></td>
+          <td><input type="text" class="form-control form-control-sm col-fill" data-i="${i}" value="${c.fill}" placeholder="—"></td>
+          <td><input type="checkbox" class="form-check-input col-pii" data-i="${i}" ${c.pii?'checked':''}></td>
+          <td>
+            <select class="form-select form-select-sm col-sens" data-i="${i}">
+              ${['','low','medium','high'].map(s => `<option value="${s}" ${s===c.sensitivity?'selected':''}>${s||'—'}</option>`).join('')}
+            </select>
+          </td>
+        </tr>`).join('');
+      // Bindings
+      tbody.querySelectorAll('input, select').forEach(el => el.addEventListener('change', () => {
+        const i = parseInt(el.dataset.i);
+        const c = state.cols[i];
+        if (el.classList.contains('col-include')) c.include = el.checked;
+        if (el.classList.contains('col-pk'))      state.cols.forEach((x, j) => x.is_pk = (j === i));
+        if (el.classList.contains('col-target'))  c.target = el.value;
+        if (el.classList.contains('col-cast'))    c.cast = el.value;
+        if (el.classList.contains('col-drop'))    c.drop_null = el.checked;
+        if (el.classList.contains('col-fill'))    c.fill = el.value;
+        if (el.classList.contains('col-pii'))     c.pii = el.checked;
+        if (el.classList.contains('col-sens'))    c.sensitivity = el.value;
+        refreshPreview();
+      }));
+    }
+
+    // ── Steg 5: manifest-felter ──
+    ['m-id','m-name','m-description','m-domain','m-owner','m-freshness','m-schema-compat','m-access','m-schedule','m-tags']
+      .forEach(id => document.getElementById(id).addEventListener('input', refreshPreview));
+    document.getElementById('wiz-refresh-preview').addEventListener('click', refreshPreview);
+
+    // ── Bygg config + manifest fra state ──
+    function buildPayload() {
+      const cols = state.cols.filter(c => c.include);
+      const pk   = (cols.find(c => c.is_pk) || cols[0] || {}).target || '';
+      const config = {
+        source:      (state.sample && state.sample.source) || `s3a://${state.pid.replace('.','/')}`,
+        target:      `s3a://silver/${document.getElementById('m-domain').value || 'misc'}/${document.getElementById('m-id').value.split('.').pop() || 'table'}`,
+        primary_key: pk,
+        cast:        {},
+        null_handling: {drop_if_null: [], fill: {}},
+      };
+      // Bytt til faktisk Bronze-source_path fra state.pid (slå opp i kort-data)
+      const src = document.querySelector('.wiz-product-item.active');
+      if (src) {
+        const cardSrcEl = src.querySelector('code');
+        if (cardSrcEl) config.source = cardSrcEl.textContent;
+      }
+      if (state.pattern === 'payload-flatten') {
+        config.payload_extract = {from_column: 'payload_json', fields: {}};
+        cols.forEach(c => {
+          if (c.json_path) config.payload_extract.fields[c.target] = c.json_path;
+          if (c.cast)       config.cast[c.target] = c.cast;
+          if (c.drop_null)  config.null_handling.drop_if_null.push(c.target);
+          if (c.fill !== '')config.null_handling.fill[c.target] = c.fill;
+        });
+      } else {
+        cols.forEach(c => {
+          if (c.cast)       config.cast[c.target] = c.cast;
+          if (c.drop_null)  config.null_handling.drop_if_null.push(c.target);
+          if (c.fill !== '')config.null_handling.fill[c.target] = c.fill;
+        });
+      }
+
+      const id      = document.getElementById('m-id').value.trim();
+      const schema  = cols.map(c => ({
+        name:        c.target,
+        type:        c.cast,
+        nullable:    !c.drop_null,
+        pii:         c.pii,
+        sensitivity: c.sensitivity || undefined,
+      }));
+      const manifest = {
+        id,
+        name:        document.getElementById('m-name').value.trim(),
+        domain:      document.getElementById('m-domain').value.trim(),
+        owner:       document.getElementById('m-owner').value.trim(),
+        description: document.getElementById('m-description').value.trim(),
+        version:     '1.0.0',
+        access:      document.getElementById('m-access').value,
+        quality_sla: {freshness_hours: parseInt(document.getElementById('m-freshness').value) || null},
+        contract:    {schema_compatibility: document.getElementById('m-schema-compat').value},
+        tags:        document.getElementById('m-tags').value.split(',').map(t => t.trim()).filter(Boolean),
+        schema,
+      };
+
+      return {
+        config, manifest,
+        source_product_id: state.pid,
+        schedule:          document.getElementById('m-schedule').value,
+        overwrite:         document.getElementById('wiz-overwrite').checked,
+      };
+    }
+
+    function refreshPreview() {
+      const p = buildPayload();
+      document.getElementById('wiz-config-preview').textContent   = JSON.stringify(p.config, null, 2);
+      document.getElementById('wiz-manifest-preview').textContent = JSON.stringify(p.manifest, null, 2);
+    }
+
+    // ── Steg 7: deploy ──
+    document.getElementById('wiz-deploy-btn').addEventListener('click', async () => {
+      const btn = document.getElementById('wiz-deploy-btn');
+      const out = document.getElementById('wiz-deploy-result');
+      const payload = buildPayload();
+      // Validering
+      for (const f of ['id','name','domain','owner']) {
+        if (!payload.manifest[f]) {
+          out.innerHTML = `<div class="alert alert-warning small mb-0">Manifest mangler felt: <code>${f}</code></div>`;
+          return;
+        }
+      }
+      if (!payload.config.primary_key) {
+        out.innerHTML = '<div class="alert alert-warning small mb-0">Velg en primary_key i steg 4.</div>';
+        return;
+      }
+      btn.disabled = true;
+      btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Deployer …';
+      try {
+        const resp = await fetch('/api/wizard/silver/deploy', {
+          method: 'POST', headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify(payload),
+        });
+        const data = await resp.json();
+        if (!resp.ok) {
+          out.innerHTML = `<div class="alert alert-danger small">${data.detail || resp.status}</div>`;
+        } else {
+          const stepHtml = Object.entries(data.steps || {}).map(([k, v]) =>
+            `<li>${v.ok ? '✅' : '❌'} <strong>${k}</strong>${v.error ? ': ' + v.error : ''}</li>`).join('');
+          out.innerHTML = `
+            <div class="alert alert-success small">
+              <strong>Pipeline deployed!</strong>
+              <ul class="mb-2 mt-1">${stepHtml}</ul>
+              <div>DAG: <code>${data.dag_id || '?'}</code></div>
+              <div>Manifest: <a href="/products/${payload.manifest.id}">${payload.manifest.id}</a></div>
+            </div>`;
+        }
+      } catch (e) {
+        out.innerHTML = `<div class="alert alert-danger small">Nettverksfeil: ${e.message}</div>`;
+      } finally {
+        btn.disabled = false;
+        btn.innerHTML = '<i class="bi bi-rocket-takeoff me-1"></i>Deploy Silver-pipeline';
+      }
+    });
+  })();
+</script>
+{% endblock %}
