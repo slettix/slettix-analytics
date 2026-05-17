@@ -4169,6 +4169,16 @@ def page_catalog(request: Request):
     view_counts = {r["product_id"]: r["views"] for r in auth.get_usage_counts(30)}
 
     # GUIDE-4: rolle-tilpassede landings­widgets — påvirkes av ?persona=… for toggle.
+    # Auto-default ved første besøk: hvis brukeren ikke har persona satt, utled fra
+    # domeneprivilegier (admin/domeneeier → domain_owner, andre → analyst) og persist.
+    if user and not user.get("persona") and not request.query_params.get("persona"):
+        if user.get("role") == "admin" or auth.get_user_domains(user["id"]):
+            default_persona = "domain_owner"
+        else:
+            default_persona = "analyst"
+        auth.set_persona(user["id"], default_persona)
+        user["persona"] = default_persona
+
     persona  = (request.query_params.get("persona") or (user or {}).get("persona") or "analyst")
     if persona not in auth.PERSONAS:
         persona = "analyst"
