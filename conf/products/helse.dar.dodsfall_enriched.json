@@ -29,6 +29,27 @@
     ]
   },
   "source_products": ["helse.dar", "helse.icd10"],
+  "column_lineage": [
+    { "column": "dodsfall_id",                     "sources": [{ "product_id": "helse.dar", "column": "dodsfallId" }] },
+    { "column": "person_synt_id",                  "sources": [{ "product_id": "helse.dar", "column": "personSyntId" }] },
+    { "column": "alder",                           "sources": [{ "product_id": "helse.dar", "column": "alder" }], "transformation": "CAST INT" },
+    { "column": "kjonn",                           "sources": [{ "product_id": "helse.dar", "column": "kjonn" }] },
+    { "column": "kommune_kode",                    "sources": [{ "product_id": "helse.dar", "column": "kommune" }] },
+    { "column": "fylke",                           "sources": [{ "product_id": "helse.dar", "column": "fylke" }] },
+    { "column": "tidspunkt",                       "sources": [{ "product_id": "helse.dar", "column": "tidspunkt" }] },
+    { "column": "klassifisert_tidspunkt",          "sources": [{ "product_id": "helse.dar", "column": "klassifisertTidspunkt" }] },
+    { "column": "icd10_versjon",                   "sources": [{ "product_id": "helse.dar", "column": "icd10Versjon" }] },
+    { "column": "underliggende_arsak_kode",        "sources": [{ "product_id": "helse.dar", "column": "underliggendeArsak" }], "transformation": "get_json_object($.icd10Kode)" },
+    { "column": "underliggende_arsak_navn",        "sources": [{ "product_id": "helse.icd10", "column": "name_no" }],      "transformation": "LEFT JOIN helse.icd10 ON code = underliggende_arsak_kode" },
+    { "column": "underliggende_arsak_kapittel",    "sources": [{ "product_id": "helse.icd10", "column": "chapter_code" }], "transformation": "LEFT JOIN helse.icd10 ON code = underliggende_arsak_kode" },
+    { "column": "ekstern_skade_kode",              "sources": [{ "product_id": "helse.dar", "column": "eksternArsak" }], "transformation": "get_json_object($.skadeKode)" },
+    { "column": "ekstern_skade_navn",              "sources": [{ "product_id": "helse.icd10", "column": "name_no" }],      "transformation": "LEFT JOIN helse.icd10 ON code = ekstern_skade_kode" },
+    { "column": "ekstern_skade_kapittel",          "sources": [{ "product_id": "helse.icd10", "column": "chapter_code" }], "transformation": "LEFT JOIN helse.icd10 ON code = ekstern_skade_kode" },
+    { "column": "ekstern_skademekanisme_kode",     "sources": [{ "product_id": "helse.dar", "column": "eksternArsak" }], "transformation": "get_json_object($.skademekanismeKode)" },
+    { "column": "ekstern_skademekanisme_navn",     "sources": [{ "product_id": "helse.icd10", "column": "name_no" }],      "transformation": "LEFT JOIN helse.icd10 ON code = ekstern_skademekanisme_kode" },
+    { "column": "ekstern_skademekanisme_kapittel", "sources": [{ "product_id": "helse.icd10", "column": "chapter_code" }], "transformation": "LEFT JOIN helse.icd10 ON code = ekstern_skademekanisme_kode" },
+    { "column": "_gold_updated_at",                "sources": [], "transformation": "current_timestamp()" }
+  ],
   "schema": [
     { "name": "dodsfall_id",                    "type": "string",    "nullable": false, "description": "Primærnøkkel — UUID fra DAR" },
     { "name": "person_synt_id",                 "type": "string",    "nullable": false, "description": "Syntetisk person-ID (ikke ekte fnr)" },

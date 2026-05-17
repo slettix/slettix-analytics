@@ -27,6 +27,14 @@
     ]
   },
   "source_products": ["helse.dar", "helse.icd10"],
+  "column_lineage": [
+    { "column": "dodsfall_id",      "sources": [{ "product_id": "helse.dar",   "column": "dodsfallId" }] },
+    { "column": "sekvens",          "sources": [{ "product_id": "helse.dar",   "column": "medvirkendeArsaker" }], "transformation": "explode(medvirkendeArsaker).sekvens" },
+    { "column": "icd10_kode",       "sources": [{ "product_id": "helse.dar",   "column": "medvirkendeArsaker" }], "transformation": "explode(medvirkendeArsaker).icd10Kode" },
+    { "column": "icd10_navn",       "sources": [{ "product_id": "helse.icd10", "column": "name_no" }],            "transformation": "LEFT JOIN helse.icd10 ON code = icd10_kode" },
+    { "column": "icd10_kapittel",   "sources": [{ "product_id": "helse.icd10", "column": "chapter_code" }],       "transformation": "LEFT JOIN helse.icd10 ON code = icd10_kode" },
+    { "column": "_gold_updated_at", "sources": [], "transformation": "current_timestamp()" }
+  ],
   "schema": [
     { "name": "dodsfall_id",      "type": "string",    "nullable": false, "description": "Referanse til dødsfall (FK til helse.dar.dodsfall_enriched.dodsfall_id)" },
     { "name": "sekvens",          "type": "integer",   "nullable": true,  "description": "Posisjon i medvirkende-listen som angitt av DAR (1 = først)" },
