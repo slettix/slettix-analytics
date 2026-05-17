@@ -4484,7 +4484,8 @@ def page_platform(request: Request):
             "color":      "#C72C48",
             "bg":         "#fdeaed",
             "ext_url":    MINIO_EXTERNAL_URL,
-            "health_url": f"{MINIO_ENDPOINT.replace(':9000', ':9001')}/minio/health/live",
+            # Health-endepunktet ligger på S3 API-porten (9000), ikke konsoll-porten (9001).
+            "health_url": f"{MINIO_ENDPOINT}/minio/health/live",
             "port":       "9001",
         },
     ]

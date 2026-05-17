@@ -1,0 +1,46 @@
+{
+  "id":           "helse.dar.medvirkende_arsaker",
+  "name":         "DAR — Medvirkende dødsårsaker (bridge)",
+  "domain":       "helse",
+  "owner":        "helse-team",
+  "version":      "1.0.0",
+  "description":  "M:N-bridge mellom dødsfall og medvirkende ICD-10-årsaker. JSON-arrayen `medvirkendeArsaker` fra Silver eksploderes til én rad per (dødsfall, kode) og beriket med navn/kapittel fra helse.icd10. Brukes til spørringer som 'hvor ofte forekommer kode X som medvirkende'.",
+  "source_path":  "s3://gold/helse/dar/medvirkende_arsaker",
+  "format":       "delta",
+  "primary_key":  "dodsfall_id",
+  "dag_id":       "helse_dar_gold",
+  "product_type": "analytical",
+  "access":       "restricted",
+  "quality_sla": {
+    "max_null_rate":   0.01,
+    "freshness_hours": 25
+  },
+  "tags": ["helse", "dar", "gold", "icd10", "bridge"],
+  "contract": {
+    "slo": {
+      "freshness_hours":   25,
+      "completeness_pct":  99
+    },
+    "schema_compatibility": "BACKWARD",
+    "guaranteed_columns": [
+      "dodsfall_id", "sekvens", "icd10_kode", "icd10_navn", "icd10_kapittel"
+    ]
+  },
+  "source_products": ["helse.dar", "helse.icd10"],
+  "column_lineage": [
+    { "column": "dodsfall_id",      "sources": [{ "product_id": "helse.dar",   "column": "dodsfallId" }] },
+    { "column": "sekvens",          "sources": [{ "product_id": "helse.dar",   "column": "medvirkendeArsaker" }], "transformation": "explode(medvirkendeArsaker).sekvens" },
+    { "column": "icd10_kode",       "sources": [{ "product_id": "helse.dar",   "column": "medvirkendeArsaker" }], "transformation": "explode(medvirkendeArsaker).icd10Kode" },
+    { "column": "icd10_navn",       "sources": [{ "product_id": "helse.icd10", "column": "name_no" }],            "transformation": "LEFT JOIN helse.icd10 ON code = icd10_kode" },
+    { "column": "icd10_kapittel",   "sources": [{ "product_id": "helse.icd10", "column": "chapter_code" }],       "transformation": "LEFT JOIN helse.icd10 ON code = icd10_kode" },
+    { "column": "_gold_updated_at", "sources": [], "transformation": "current_timestamp()" }
+  ],
+  "schema": [
+    { "name": "dodsfall_id",      "type": "string",    "nullable": false, "description": "Referanse til dødsfall (FK til helse.dar.dodsfall_enriched.dodsfall_id)" },
+    { "name": "sekvens",          "type": "integer",   "nullable": true,  "description": "Posisjon i medvirkende-listen som angitt av DAR (1 = først)" },
+    { "name": "icd10_kode",       "type": "string",    "nullable": false, "description": "ICD-10 kode (FK til helse.icd10.code)" },
+    { "name": "icd10_navn",       "type": "string",    "nullable": true,  "description": "Norsk navn (joinet fra helse.icd10)" },
+    { "name": "icd10_kapittel",   "type": "string",    "nullable": true,  "description": "ICD-10-kapittel-romertall" },
+    { "name": "_gold_updated_at", "type": "timestamp", "nullable": false, "description": "Tidspunkt rad ble skrevet til Gold" }
+  ]
+}
