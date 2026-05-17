@@ -120,7 +120,9 @@ default_args = {
 with DAG(
     dag_id="helse_dar_gold",
     description="DAR Gold: denormalisert dødsfall_enriched + medvirkende-bridge, beriket med ICD-10",
-    schedule="@daily",
+    # Kjøres kl 06:00 UTC — etter helse_dar (Silver, 05:00) som er etter
+    # folkeregister_silver (02:00) — gir tid til at oppstrømsdata er klar.
+    schedule="0 6 * * *",
     start_date=datetime(2024, 1, 15),
     catchup=False,
     default_args=default_args,

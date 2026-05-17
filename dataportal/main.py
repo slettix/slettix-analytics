@@ -1932,6 +1932,9 @@ def _fetch_api(**context):
 
     elif template_id == "silver_transform":
         config_path = config.get("config_path", "/opt/airflow/spark_conf/silver/data.json")
+        # K8s metadata.name må følge DNS-1123 — kun [a-z0-9-]. dag_id kan
+        # inneholde understrek (gyldig i Airflow), så vi saniterer for CRD-navn.
+        spark_app_name = re.sub(r"[^a-z0-9-]", "-", dag_id.lower())[:50]
         # SparkKubernetesOperator i stedet for SparkSubmitOperator — spawner egen
         # Spark-driver/executor-pod med slettix-analytics/spark:3.5.8-image som
         # har Delta/Hadoop/S3A-JARs bakt inn. Unngår OOM på Airflow-worker-pod.
@@ -1939,7 +1942,7 @@ def _fetch_api(**context):
 apiVersion: sparkoperator.k8s.io/v1beta2
 kind: SparkApplication
 metadata:
-  name: {dag_id}-{{{{ ds_nodash }}}}
+  name: {spark_app_name}-{{{{ ds_nodash }}}}
   namespace: slettix-analytics
 spec:
   type: Python
@@ -1986,7 +1989,7 @@ spec:
     - name: jobs
       configMap:
         name: airflow-jobs
-'''.format(dag_id=dag_id, config_path=config_path)
+'''.format(spark_app_name=spark_app_name, config_path=config_path)
         body = f'''from airflow.providers.cncf.kubernetes.operators.spark_kubernetes import SparkKubernetesOperator
 
 _SPARK_APP = """{spark_app}"""
