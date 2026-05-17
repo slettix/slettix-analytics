@@ -106,6 +106,7 @@ spec:
 
 _DODSFALL_ENRICHED_APP    = _spark_app("helse-dar-dodsfall-enriched", "helse_dar_dodsfall_enriched.py")
 _MEDVIRKENDE_ARSAKER_APP  = _spark_app("helse-dar-medvirkende",       "helse_dar_medvirkende_arsaker.py")
+_VALIDATE_QUALITY_APP     = _spark_app("helse-dar-validate-quality",  "helse_dar_validate_quality.py")
 
 
 default_args = {
@@ -145,5 +146,14 @@ with DAG(
         execution_timeout=timedelta(minutes=20),
     )
 
+    validate_quality = SparkKubernetesOperator(
+        task_id="validate_quality",
+        namespace=SPARK_NS,
+        application_file=_VALIDATE_QUALITY_APP,
+        kubernetes_conn_id="kubernetes_default",
+        do_xcom_push=False,
+        execution_timeout=timedelta(minutes=15),
+    )
+
     # Sekvensielt — unngår NodeNotReady-press på Docker Desktop-klusteret
-    dodsfall_enriched >> medvirkende_arsaker
+    dodsfall_enriched >> medvirkende_arsaker >> validate_quality
