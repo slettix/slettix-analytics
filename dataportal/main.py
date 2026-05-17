@@ -866,6 +866,40 @@ def _k8s_get(path: str) -> dict:
     return resp.json()
 
 
+def _rollout_restart_deployment(name: str, namespace: str = "slettix-analytics") -> str:
+    """Trigger rolling restart på en Deployment ved å patche
+    `spec.template.metadata.annotations.kubectl.kubernetes.io/restartedAt`.
+
+    Returnerer "ok" / "skipped (ikke i cluster)" / feilmelding. Best-effort
+    — feiler ikke kalleren hvis patch-kallet svikter. Krever rolle med
+    deployments[<name>]/get,patch i namespacet.
+    """
+    try:
+        token = pathlib.Path(_K8S_TOKEN_FILE).read_text().strip()
+    except FileNotFoundError:
+        return "skipped (ikke i cluster)"
+    now = datetime.now(tz=timezone.utc).isoformat()
+    patch = {"spec": {"template": {"metadata": {"annotations": {
+        "kubectl.kubernetes.io/restartedAt": now,
+    }}}}}
+    try:
+        resp = httpx.patch(
+            f"{_K8S_API_BASE}/apis/apps/v1/namespaces/{namespace}/deployments/{name}",
+            headers={
+                "Authorization": f"Bearer {token}",
+                "Content-Type":  "application/strategic-merge-patch+json",
+            },
+            json=patch,
+            verify=_K8S_CA_FILE,
+            timeout=10.0,
+        )
+        if resp.status_code >= 400:
+            return f"feilet: {resp.status_code} {resp.text[:200]}"
+        return "ok"
+    except Exception as exc:
+        return f"feilet: {exc}"
+
+
 def _patch_dag_configmap(dag_id: str, code: str) -> str:
     """Patcher airflow-dags ConfigMap med generert DAG-kode.
 
@@ -1898,21 +1932,74 @@ def _fetch_api(**context):
 
     elif template_id == "silver_transform":
         config_path = config.get("config_path", "/opt/airflow/spark_conf/silver/data.json")
-        body = f'''from airflow.providers.apache.spark.operators.spark_submit import SparkSubmitOperator
+        # SparkKubernetesOperator i stedet for SparkSubmitOperator — spawner egen
+        # Spark-driver/executor-pod med slettix-analytics/spark:3.5.8-image som
+        # har Delta/Hadoop/S3A-JARs bakt inn. Unngår OOM på Airflow-worker-pod.
+        spark_app = '''
+apiVersion: sparkoperator.k8s.io/v1beta2
+kind: SparkApplication
+metadata:
+  name: {dag_id}-{{{{ ds_nodash }}}}
+  namespace: slettix-analytics
+spec:
+  type: Python
+  mode: cluster
+  image: slettix-analytics/spark:3.5.8
+  imagePullPolicy: IfNotPresent
+  mainApplicationFile: "local:///opt/spark/jobs/transform_bronze_to_silver.py"
+  arguments:
+    - "--config"
+    - "{config_path}"
+  sparkVersion: "3.5.8"
+  restartPolicy:
+    type: Never
+  sparkConf:
+    "spark.sql.extensions": "io.delta.sql.DeltaSparkSessionExtension"
+    "spark.sql.catalog.spark_catalog": "org.apache.spark.sql.delta.catalog.DeltaCatalog"
+    "spark.hadoop.fs.s3a.endpoint": "http://minio.slettix-analytics.svc.cluster.local:9000"
+    "spark.hadoop.fs.s3a.path.style.access": "true"
+    "spark.hadoop.fs.s3a.impl": "org.apache.hadoop.fs.s3a.S3AFileSystem"
+    "spark.hadoop.fs.s3a.connection.ssl.enabled": "false"
+    "spark.hadoop.fs.s3a.aws.credentials.provider": "com.amazonaws.auth.DefaultAWSCredentialsProviderChain"
+    "spark.sql.shuffle.partitions": "8"
+  driver:
+    cores: 1
+    memory: "1g"
+    memoryOverhead: "256m"
+    serviceAccount: spark
+    env:
+      - {{name: AWS_ACCESS_KEY_ID, valueFrom: {{secretKeyRef: {{name: slettix-credentials, key: minio-root-user}}}}}}
+      - {{name: AWS_SECRET_ACCESS_KEY, valueFrom: {{secretKeyRef: {{name: slettix-credentials, key: minio-root-password}}}}}}
+    volumeMounts:
+      - {{name: jobs, mountPath: /opt/spark/jobs, readOnly: true}}
+  executor:
+    instances: 1
+    cores: 1
+    memory: "1g"
+    memoryOverhead: "256m"
+    env:
+      - {{name: AWS_ACCESS_KEY_ID, valueFrom: {{secretKeyRef: {{name: slettix-credentials, key: minio-root-user}}}}}}
+      - {{name: AWS_SECRET_ACCESS_KEY, valueFrom: {{secretKeyRef: {{name: slettix-credentials, key: minio-root-password}}}}}}
+    volumeMounts:
+      - {{name: jobs, mountPath: /opt/spark/jobs, readOnly: true}}
+  volumes:
+    - name: jobs
+      configMap:
+        name: airflow-jobs
+'''.format(dag_id=dag_id, config_path=config_path)
+        body = f'''from airflow.providers.cncf.kubernetes.operators.spark_kubernetes import SparkKubernetesOperator
 
-{_SPARK_CONF_BLOCK}
+_SPARK_APP = """{spark_app}"""
 
 {_default_args}
 {_dag_open}
-    transform = SparkSubmitOperator(
+    transform = SparkKubernetesOperator(
         task_id="bronze_to_silver",
-        application="/opt/airflow/spark_jobs/transform_bronze_to_silver.py",
-        conn_id="spark_default",
-        packages=DELTA_JARS,
-        conf=SPARK_CONF,
-        application_args=["--config", "{config_path}"],
-        name="{dag_id}",
-        execution_timeout=timedelta(minutes=20),
+        namespace="slettix-analytics",
+        application_file=_SPARK_APP,
+        kubernetes_conn_id="kubernetes_default",
+        do_xcom_push=False,
+        execution_timeout=timedelta(minutes=30),
     )
 '''
 
@@ -2766,6 +2853,8 @@ async def api_create_pipeline(request: Request, api_key: str | None = Security(_
         _save_pipeline_config(dag_id, template_id, config)
         # Pusher DAG-koden inn i airflow-dags ConfigMap så Airflow plukker den opp.
         configmap_status = _patch_dag_configmap(dag_id, code)
+        # Trigger rolling restart så init-container kopierer ny DAG inn i pod-en.
+        scheduler_restart = _rollout_restart_deployment("airflow-scheduler") if configmap_status == "ok" else "skipped (cm-patch feilet)"
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Kunne ikke opprette DAG: {exc}")
     return {
@@ -2773,6 +2862,7 @@ async def api_create_pipeline(request: Request, api_key: str | None = Security(_
         "dag_id":            dag_id,
         "dag_file":          str(dag_path),
         "configmap_status":  configmap_status,
+        "scheduler_restart_status": scheduler_restart,
     }
 
 
@@ -2790,11 +2880,19 @@ async def api_update_pipeline(dag_id: str, request: Request, api_key: str | None
     try:
         code     = _generate_dag_from_template(template_id, config)
         dag_path = pathlib.Path(DAGS_DIR) / f"{dag_id}.py"
+        dag_path.parent.mkdir(parents=True, exist_ok=True)
         dag_path.write_text(code, encoding="utf-8")
         _save_pipeline_config(dag_id, template_id, config)
+        configmap_status  = _patch_dag_configmap(dag_id, code)
+        scheduler_restart = _rollout_restart_deployment("airflow-scheduler") if configmap_status == "ok" else "skipped (cm-patch feilet)"
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Kunne ikke oppdatere DAG: {exc}")
-    return {"status": "redeployed", "dag_id": dag_id}
+    return {
+        "status":                  "redeployed",
+        "dag_id":                  dag_id,
+        "configmap_status":        configmap_status,
+        "scheduler_restart_status": scheduler_restart,
+    }
 
 
 @app.get("/api/pipelines/{dag_id}/config", tags=["pipelines"], summary="Hent pipeline-konfigurasjon")
@@ -3762,6 +3860,14 @@ async def api_wizard_silver_deploy(request: Request):
     cm_status = _patch_dag_configmap(dag_id, dag_code)
     status["steps"]["configmap_patch"] = {"ok": cm_status == "ok", "status": cm_status}
     status["configmap_status"] = cm_status
+
+    # ── Steg 3b: rolling restart av scheduler så ny DAG plukkes opp ───────
+    if cm_status == "ok":
+        restart_status = _rollout_restart_deployment("airflow-scheduler")
+    else:
+        restart_status = "skipped (cm-patch feilet)"
+    status["steps"]["scheduler_restart"] = {"ok": restart_status == "ok", "status": restart_status}
+    status["scheduler_restart_status"] = restart_status
 
     # ── Steg 4 + 5: bygg og registrer Silver-manifestet ───────────────────
     silver_manifest = {
