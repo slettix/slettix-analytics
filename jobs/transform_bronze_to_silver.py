@@ -219,25 +219,42 @@ def run(spark: SparkSession, config: dict) -> None:
     })
 
 
-def _load_config(path: str) -> dict:
-    """Les config-JSON fra lokal sti eller S3/S3A (SILVER-3)."""
+def _load_config(path: str, spark: SparkSession | None = None) -> dict:
+    """Les config-JSON fra lokal sti eller S3/S3A (SILVER-3).
+
+    For s3://-stier brukes Spark sin egen `wholeTextFiles`-reader, som
+    arver s3a-konfigen fra SparkSession. Det unngår avhengighet til
+    boto3 i Spark-imaget.
+
+    Wizardens deploy lagrer payloaden som
+    `{slug, config: {...}, saved_at}` — funksjonen pakker ut `config`
+    så den faktiske transformasjons-configen returneres uansett format.
+    """
     if path.startswith(("s3://", "s3a://")):
-        import os
-        import boto3
-        from botocore.client import Config as BotoConfig
-        # s3:// og s3a:// behandles likt — det er bucket+key
-        no_scheme = path.split("://", 1)[1]
-        bucket, key = no_scheme.split("/", 1)
-        s3 = boto3.client(
-            "s3",
-            endpoint_url=os.environ.get("AWS_ENDPOINT_URL", "http://minio.slettix-analytics.svc.cluster.local:9000"),
-            aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID", "admin"),
-            aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY", "changeme"),
-            config=BotoConfig(signature_version="s3v4"),
-        )
-        body = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
-        return json.loads(body)
-    return json.loads(Path(path).read_text())
+        s3a_path = path.replace("s3://", "s3a://", 1)
+        if spark is None:
+            spark = SparkSession.builder.getOrCreate()
+        rdd = spark.sparkContext.wholeTextFiles(s3a_path)
+        contents = rdd.collect()
+        if not contents:
+            raise FileNotFoundError(f"Fant ikke config-fil på {s3a_path}")
+        raw = json.loads(contents[0][1])
+    else:
+        raw = json.loads(Path(path).read_text())
+
+    if isinstance(raw, dict) and "source" not in raw and isinstance(raw.get("config"), dict):
+        cfg = raw["config"]
+    else:
+        cfg = raw
+
+    # Spark s3a-driveren registreres bare for `s3a://`. Normaliserer eldre
+    # configs som bruker `s3://` for source/target slik at Delta-leseren
+    # finner riktig FileSystem-impl.
+    for key in ("source", "target"):
+        val = cfg.get(key)
+        if isinstance(val, str) and val.startswith("s3://"):
+            cfg[key] = val.replace("s3://", "s3a://", 1)
+    return cfg
 
 
 def main():
@@ -245,14 +262,16 @@ def main():
     parser.add_argument("--config", required=True, help="Path to silver config JSON (lokal eller s3a://)")
     args = parser.parse_args()
 
-    config = _load_config(args.config)
-
+    # SparkSession opprettes først — _load_config trenger den for å lese
+    # s3a://-stier via Spark sin egen reader.
     spark = (
         SparkSession.builder
-        .appName(f"bronze_to_silver:{config['target'].split('/')[-1]}")
+        .appName("bronze_to_silver")
         .getOrCreate()
     )
     spark.sparkContext.setLogLevel("WARN")
+
+    config = _load_config(args.config, spark=spark)
 
     run(spark, config)
     spark.stop()

@@ -1970,6 +1970,8 @@ spec:
     memory: "1g"
     memoryOverhead: "256m"
     serviceAccount: spark
+    labels:
+      version: "3.5.8"
     env:
       - {{name: AWS_ACCESS_KEY_ID, valueFrom: {{secretKeyRef: {{name: slettix-credentials, key: minio-root-user}}}}}}
       - {{name: AWS_SECRET_ACCESS_KEY, valueFrom: {{secretKeyRef: {{name: slettix-credentials, key: minio-root-password}}}}}}
@@ -1980,6 +1982,8 @@ spec:
     cores: 1
     memory: "1g"
     memoryOverhead: "256m"
+    labels:
+      version: "3.5.8"
     env:
       - {{name: AWS_ACCESS_KEY_ID, valueFrom: {{secretKeyRef: {{name: slettix-credentials, key: minio-root-user}}}}}}
       - {{name: AWS_SECRET_ACCESS_KEY, valueFrom: {{secretKeyRef: {{name: slettix-credentials, key: minio-root-password}}}}}}
