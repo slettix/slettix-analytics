@@ -27,6 +27,12 @@ from datetime import datetime, timezone
 from pyspark.sql import SparkSession
 from pyspark.sql import functions as F
 
+# Task feiler kun hvis NOEN tabell scorer under denne terskelen, eller hvis
+# en hel pipeline-feil oppstår. Score >= terskel logges som warning men lar
+# nedstrøms-tasks fortsette — score skrives uansett til quality_results
+# slik at Observerbarhet-siden viser dagsformen.
+CRITICAL_SCORE_THRESHOLD = 70.0
+
 
 def _write_json_to_s3a(spark: SparkSession, key: str, body: bytes) -> None:
     """Skriv enkeltfil til s3a://gold/<key> via Hadoop FileSystem API.
@@ -102,7 +108,11 @@ def main() -> None:
     )
     spark.sparkContext.setLogLevel("WARN")
 
-    overall_failed = 0
+    # Sporing for å avgjøre om task skal feile:
+    # - critical_failures: pipeline-feil eller score < CRITICAL_SCORE_THRESHOLD
+    # - warnings: noen expectations feiler, men score er over terskel
+    critical_failures = 0
+    warnings = 0
 
     for check in CHECKS:
         product_id = check["product_id"]
@@ -137,7 +147,10 @@ def main() -> None:
                 "failures":           failures,
             }
             if failures:
-                overall_failed += 1
+                if quality_result["score_pct"] < CRITICAL_SCORE_THRESHOLD:
+                    critical_failures += 1
+                else:
+                    warnings += 1
         except Exception as exc:
             print(f"Validering av {product_id} feilet: {exc}")
             quality_result = {
@@ -150,7 +163,8 @@ def main() -> None:
                 "row_count":          None,
                 "failures":           [{"expectation": "pipeline", "error": str(exc)}],
             }
-            overall_failed += 1
+            # Pipeline-feil (kunne ikke lese tabell osv) er alltid kritisk
+            critical_failures += 1
 
         ts_key = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
         body   = json.dumps(quality_result, indent=2).encode()
@@ -171,7 +185,8 @@ def main() -> None:
 
     spark.stop()
 
-    if overall_failed > 0:
+    print(f"Oppsummering: {critical_failures} kritisk, {warnings} warnings (terskel={CRITICAL_SCORE_THRESHOLD}%)")
+    if critical_failures > 0:
         raise SystemExit(1)
 
 
