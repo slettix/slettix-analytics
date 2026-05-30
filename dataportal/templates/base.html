@@ -311,7 +311,7 @@
 
 {# ── Utled aktiv seksjon og underside fra URL ── #}
 {% set path = request.url.path %}
-{% if path == '/' or path.startswith('/products') or path == '/browse' %}
+{% if path == '/katalog' or path.startswith('/products') or path == '/browse' %}
   {% set section = 'katalog' %}
 {% elif path == '/create-analytical' %}
   {% set section = 'bygg' %}
@@ -368,16 +368,21 @@
     {# ─ Katalog ─ #}
     <div class="sidebar-section-label">Oppdag</div>
 
-    <a href="/" class="sidebar-link {% if section == 'katalog' and path == '/' %}active{% endif %}">
+    <a href="/" class="sidebar-link {% if path == '/' %}active{% endif %}">
+      <i class="bi bi-house link-icon"></i>
+      Forside
+    </a>
+
+    <a href="/katalog" class="sidebar-link {% if section == 'katalog' and path == '/katalog' %}active{% endif %}">
       <i class="bi bi-grid link-icon"></i>
       Datakatalog
     </a>
     {% if section == 'katalog' %}
     <div class="sidebar-sub">
-      <a href="/" class="sidebar-link {% if path == '/' and not request.query_params.get('tab') %}active{% endif %}">
+      <a href="/katalog" class="sidebar-link {% if path == '/katalog' and not request.query_params.get('tab') %}active{% endif %}">
         <i class="bi bi-box link-icon"></i>Kildeprodukter
       </a>
-      <a href="/?tab=analytical" class="sidebar-link {% if request.query_params.get('tab') == 'analytical' %}active{% endif %}">
+      <a href="/katalog?tab=analytical" class="sidebar-link {% if request.query_params.get('tab') == 'analytical' %}active{% endif %}">
         <i class="bi bi-graph-up link-icon"></i>Analytiske produkter
       </a>
       <a href="/browse" class="sidebar-link {% if path == '/browse' %}active{% endif %}">
@@ -408,6 +413,12 @@
       <a href="/wizard/analyze" class="sidebar-link {% if path == '/wizard/analyze' %}active{% endif %}">
         <i class="bi bi-magic link-icon"></i>Veiviser: analyse
         <span class="link-help" data-bs-toggle="tooltip" title="Steg-for-steg fra spørsmål til ferdig notebook i Jupyter.">
+          <i class="bi bi-question-circle"></i>
+        </span>
+      </a>
+      <a href="/wizard/agent" class="sidebar-link {% if path == '/wizard/agent' %}active{% endif %}">
+        <i class="bi bi-stars link-icon text-success"></i>Agent-veiviser
+        <span class="link-help" data-bs-toggle="tooltip" title="Still et spørsmål — agenten genererer en notebook med svaret automatisk.">
           <i class="bi bi-question-circle"></i>
         </span>
       </a>

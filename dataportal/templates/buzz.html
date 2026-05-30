@@ -1,0 +1,434 @@
+{% extends "base.html" %}
+{% block title %}Slettix Analytics — i dag{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center mb-3 flex-wrap gap-2">
+  <div>
+    <h1 class="h3 mb-0">
+      Slettix Analytics
+      {% if current_user %}<span class="text-muted small">— hei, {{ current_user.username }}</span>{% endif %}
+    </h1>
+    <p class="text-muted mb-0 small">Hva er nytt på plattformen siste uke?</p>
+  </div>
+  <div class="ms-auto">
+    <span id="freshness-pill" class="badge bg-light text-muted border d-none">
+      <i class="bi bi-clock-history me-1"></i><span id="freshness-text">…</span>
+    </span>
+  </div>
+</div>
+
+{# ── Tom-tilstand ── #}
+<div id="empty-state" class="alert alert-light border d-none text-center py-5">
+  <i class="bi bi-moon-stars fs-1 text-muted d-block mb-2"></i>
+  <h5 class="mb-2">Plattformen er stille akkurat nå</h5>
+  <p class="text-muted mb-3">Ingen aktivitet å rapportere siste 7 dager. Utforsk katalogen for å komme i gang.</p>
+  <a href="/katalog" class="btn btn-primary"><i class="bi bi-collection me-1"></i>Åpne katalogen</a>
+</div>
+
+{# ── Widget-grid ── #}
+<div id="widget-grid" class="d-none">
+
+  {# ── Topprad — 3 like kolonner på md+, stack på sm ── #}
+  <div class="row g-3 mb-3">
+
+    {# ── A1: Plattform-puls ── #}
+    <div class="col-md-4">
+      <div class="card shadow-sm h-100">
+        <div class="card-body">
+          <h6 class="text-muted text-uppercase small mb-3"><i class="bi bi-broadcast me-1"></i>Plattform-puls</h6>
+          <div class="row g-2 text-center">
+            <div class="col-6">
+              <div class="display-6 fw-bold text-primary" id="pp-products">—</div>
+              <div class="small text-muted">produkter</div>
+            </div>
+            <div class="col-6">
+              <div class="display-6 fw-bold text-primary" id="pp-domains">—</div>
+              <div class="small text-muted">domener</div>
+            </div>
+            <div class="col-6 mt-3">
+              <div class="h4 mb-0 text-success" id="pp-new">—</div>
+              <div class="small text-muted">nye siste 7d</div>
+            </div>
+            <div class="col-6 mt-3">
+              <div class="h4 mb-0 text-info" id="pp-users">—</div>
+              <div class="small text-muted">aktive brukere</div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    {# ── A3 / E1: Min uke (returnerende) eller Start her (ny bruker / utlogget) ── #}
+    <div class="col-md-4">
+      <div class="card shadow-sm h-100" id="personal-card">
+        <div class="card-body" id="personal-body">
+          <h6 class="text-muted text-uppercase small mb-3"><i class="bi bi-person-circle me-1"></i>Min uke</h6>
+          <p class="small text-muted mb-0">Laster…</p>
+        </div>
+      </div>
+    </div>
+
+    {# ── A2: Helse-overblikk ── #}
+    <div class="col-md-4">
+      <div class="card shadow-sm h-100">
+        <div class="card-body">
+          <h6 class="text-muted text-uppercase small mb-3"><i class="bi bi-heart-pulse me-1"></i>Helse-overblikk</h6>
+          <div class="row g-2 text-center">
+            <div class="col-6">
+              <div class="display-6 fw-bold" id="h-sla">—</div>
+              <div class="small text-muted">SLA-compliance</div>
+            </div>
+            <div class="col-6">
+              <div class="display-6 fw-bold" id="h-quality">—</div>
+              <div class="small text-muted">snitt-kvalitet</div>
+            </div>
+            <div class="col-12 mt-3">
+              <span id="h-incidents-badge" class="badge fs-6 px-3 py-2">
+                <span id="h-incidents">—</span> aktive incidents
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  {# ── Mellom-rad: B1 Trending + B3 Nye publiseringer ── #}
+  <div class="row g-3 mb-3">
+
+    {# ── B1: Trending ↑ ── #}
+    <div class="col-md-6">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-white">
+          <h6 class="mb-0"><i class="bi bi-graph-up-arrow me-1 text-success"></i>Trender denne uka</h6>
+        </div>
+        <ul class="list-group list-group-flush" id="trending-list">
+          <li class="list-group-item text-muted small">Laster…</li>
+        </ul>
+      </div>
+    </div>
+
+    {# ── B3: Nye publiseringer ── #}
+    <div class="col-md-6">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-white">
+          <h6 class="mb-0"><i class="bi bi-stars me-1 text-primary"></i>Nye publiseringer</h6>
+        </div>
+        <ul class="list-group list-group-flush" id="publications-list">
+          <li class="list-group-item text-muted small">Laster…</li>
+        </ul>
+      </div>
+    </div>
+
+  </div>
+
+  {# ── Bunn-rad: C1 Hva andre spør om + D1 Trenger oppmerksomhet ── #}
+  <div class="row g-3 mb-3">
+
+    {# ── C1: Populære agent-spørsmål ── #}
+    <div class="col-md-6">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-white">
+          <h6 class="mb-0"><i class="bi bi-chat-quote me-1 text-info"></i>Hva andre spør om</h6>
+        </div>
+        <ul class="list-group list-group-flush" id="questions-list">
+          <li class="list-group-item text-muted small">Laster…</li>
+        </ul>
+      </div>
+    </div>
+
+    {# ── D1: Trenger oppmerksomhet ── #}
+    <div class="col-md-6">
+      <div class="card shadow-sm h-100">
+        <div class="card-header bg-white">
+          <h6 class="mb-0"><i class="bi bi-exclamation-triangle me-1 text-warning"></i>Trenger oppmerksomhet</h6>
+        </div>
+        <ul class="list-group list-group-flush" id="incidents-list">
+          <li class="list-group-item text-muted small">Laster…</li>
+        </ul>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+
+<style>
+  .border-dashed { border: 1px dashed #ced4da !important; }
+</style>
+
+<script>
+const IS_LOGGED_IN = {% if current_user %}true{% else %}false{% endif %};
+
+async function loadBuzz() {
+  try {
+    const r = await fetch("/api/buzz/snapshot");
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const data = await r.json();
+
+    if (data.empty || !data.platform_totals) {
+      document.getElementById("empty-state").classList.remove("d-none");
+      return;
+    }
+
+    renderFreshness(data.generated_at);
+    renderPlatformPulse(data.platform_totals);
+    renderHealth(data.health || {});
+    renderTrending(data.trending_up || []);
+    renderPublications(data.recent_publications || []);
+    renderQuestions(data.popular_questions || []);
+    renderIncidents(data.incidents || []);
+
+    document.getElementById("widget-grid").classList.remove("d-none");
+
+    // Parallelt: last personlig "Min uke" eller fallback til onboarding
+    loadPersonal();
+  } catch (err) {
+    document.getElementById("empty-state").classList.remove("d-none");
+    console.error("Kunne ikke laste buzz-snapshot:", err);
+  }
+}
+
+function renderFreshness(generatedAt) {
+  if (!generatedAt) return;
+  const pill = document.getElementById("freshness-pill");
+  const txt  = document.getElementById("freshness-text");
+  const updateText = () => {
+    const diffMs = Date.now() - new Date(generatedAt).getTime();
+    const mins   = Math.floor(diffMs / 60000);
+    if (mins < 1)        txt.textContent = "oppdatert nå";
+    else if (mins < 60)  txt.textContent = `oppdatert for ${mins} min siden`;
+    else                 txt.textContent = `oppdatert for ${Math.floor(mins/60)}t ${mins%60}min siden`;
+  };
+  updateText();
+  pill.classList.remove("d-none");
+  setInterval(updateText, 60_000);
+}
+
+function renderPlatformPulse(totals) {
+  document.getElementById("pp-products").textContent = totals.products ?? 0;
+  document.getElementById("pp-domains").textContent  = totals.domains ?? 0;
+  document.getElementById("pp-new").textContent      = "+" + (totals.new_products_7d ?? 0);
+  document.getElementById("pp-users").textContent    = totals.active_users_7d ?? 0;
+}
+
+function renderHealth(health) {
+  const sla     = health.sla_compliance_pct;
+  const quality = health.avg_quality_pct;
+  const inc     = health.active_incidents ?? 0;
+
+  const slaEl  = document.getElementById("h-sla");
+  const qualEl = document.getElementById("h-quality");
+  slaEl.textContent  = sla !== null && sla !== undefined ? sla + "%" : "—";
+  qualEl.textContent = quality !== null && quality !== undefined ? quality + "%" : "—";
+
+  // Farge basert på terskel
+  slaEl.className  = "display-6 fw-bold " + (sla >= 95 ? "text-success" : sla >= 80 ? "text-warning" : "text-danger");
+  qualEl.className = "display-6 fw-bold " + (quality >= 90 ? "text-success" : quality >= 70 ? "text-warning" : "text-danger");
+
+  const badge = document.getElementById("h-incidents-badge");
+  document.getElementById("h-incidents").textContent = inc;
+  badge.className = "badge fs-6 px-3 py-2 " + (
+    inc === 0 ? "bg-success" :
+    inc <= 3  ? "bg-warning text-dark" :
+                "bg-danger"
+  );
+}
+
+// ── B1: Trending ──────────────────────────────────────────────────────────
+function renderTrending(items) {
+  const ul = document.getElementById("trending-list");
+  if (!items.length) {
+    ul.innerHTML = '<li class="list-group-item text-muted small text-center py-3"><em>Ingen tydelige trender denne uka.</em></li>';
+    return;
+  }
+  ul.innerHTML = items.slice(0, 5).map(t => `
+    <li class="list-group-item d-flex align-items-center justify-content-between"
+        title="${t.usage_window} bruk siste 7d (mot ${t.usage_prev} uken før)">
+      <a href="/products/${encodeURIComponent(t.product_id)}" class="text-decoration-none text-body">
+        <i class="bi bi-arrow-up text-success me-1"></i><code class="small">${escapeHtml(t.product_id)}</code>
+      </a>
+      <span class="badge bg-success-subtle text-success border border-success-subtle">+${t.delta_pct}%</span>
+    </li>
+  `).join("");
+}
+
+// ── B3: Nye publiseringer ─────────────────────────────────────────────────
+function renderPublications(items) {
+  const ul = document.getElementById("publications-list");
+  if (!items.length) {
+    ul.innerHTML = '<li class="list-group-item text-muted small text-center py-3"><em>Ingen nye publiseringer siste 14 dager.</em></li>';
+    return;
+  }
+  ul.innerHTML = items.slice(0, 8).map(p => {
+    const eventLabel = p.event === "new" ? "ny" : "v" + (p.version || "?");
+    const eventClass = p.event === "new" ? "bg-success" : "bg-primary";
+    return `
+      <li class="list-group-item">
+        <div class="d-flex align-items-center justify-content-between">
+          <a href="/products/${encodeURIComponent(p.product_id)}" class="text-decoration-none text-body">
+            <code class="small">${escapeHtml(p.product_id)}</code>
+          </a>
+          <span class="badge ${eventClass}" title="${escapeHtml(p.event)}">${eventLabel}</span>
+        </div>
+        <small class="text-muted" title="${p.at}">
+          ${relativeTime(p.at)}${p.by ? ' · ' + escapeHtml(p.by) : ''}
+        </small>
+      </li>
+    `;
+  }).join("");
+}
+
+// ── C1: Populære agent-spørsmål ───────────────────────────────────────────
+function renderQuestions(items) {
+  const ul = document.getElementById("questions-list");
+  if (!items.length) {
+    ul.innerHTML = '<li class="list-group-item text-muted small text-center py-3"><em>Ingen populære spørsmål enda. Vær den første — still et spørsmål via <a href="/wizard/agent">Agent-veiviseren</a>.</em></li>';
+    return;
+  }
+  ul.innerHTML = items.slice(0, 5).map(q => {
+    const products = (q.product_ids || []).join(",");
+    const url      = `/wizard/agent?products=${encodeURIComponent(products)}`;
+    const prodTags = (q.product_ids || []).map(p => `<code class="small">${escapeHtml(p)}</code>`).join(" ");
+    return `
+      <li class="list-group-item">
+        <div class="d-flex align-items-start justify-content-between gap-2">
+          <a href="${url}" class="text-decoration-none text-body flex-grow-1">
+            "${escapeHtml(q.question)}"
+          </a>
+          <span class="badge bg-light text-dark border" title="${q.likes} 👍">👍 ${q.likes}</span>
+        </div>
+        ${prodTags ? `<small class="text-muted">${prodTags}</small>` : ''}
+      </li>
+    `;
+  }).join("");
+}
+
+// ── D1: Incidents ─────────────────────────────────────────────────────────
+function renderIncidents(items) {
+  const ul = document.getElementById("incidents-list");
+  if (!items.length) {
+    ul.innerHTML = '<li class="list-group-item text-success small text-center py-3"><i class="bi bi-check-circle me-1"></i>Ingen aktive problemer — alt grønt 🟢</li>';
+    return;
+  }
+  ul.innerHTML = items.slice(0, 8).map(i => {
+    const cls = i.type === "quality" ? "text-warning" : "text-danger";
+    const ico = i.type === "quality" ? "bi-shield-exclamation" : "bi-clock-history";
+    const lab = i.type === "quality" ? "kvalitet" : "SLA-brudd";
+    return `
+      <li class="list-group-item">
+        <div class="d-flex align-items-center justify-content-between gap-2">
+          <a href="/products/${encodeURIComponent(i.product_id)}" class="text-decoration-none text-body">
+            <i class="bi ${ico} ${cls} me-1"></i><code class="small">${escapeHtml(i.product_id)}</code>
+          </a>
+          <span class="badge bg-light ${cls} border">${lab}</span>
+        </div>
+        <small class="text-muted">${escapeHtml(i.detail || "")}</small>
+      </li>
+    `;
+  }).join("");
+}
+
+// ── Hjelpere ──────────────────────────────────────────────────────────────
+function escapeHtml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+                  .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+
+function relativeTime(iso) {
+  if (!iso) return "";
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diffMs / 60_000);
+  if (mins < 1)       return "akkurat nå";
+  if (mins < 60)      return `for ${mins} min siden`;
+  const hours = Math.floor(mins / 60);
+  if (hours < 24)     return `for ${hours}t siden`;
+  const days = Math.floor(hours / 24);
+  if (days === 1)     return "i går";
+  if (days < 14)      return `for ${days} dager siden`;
+  return new Date(iso).toLocaleDateString("nb-NO");
+}
+
+// ── A3 / E1: Min uke / Onboarding ─────────────────────────────────────────
+async function loadPersonal() {
+  // Utlogget bruker → vis utlogget-CTA umiddelbart
+  if (!IS_LOGGED_IN) {
+    renderLoggedOut();
+    return;
+  }
+  try {
+    const r = await fetch("/api/buzz/personal");
+    if (r.status === 401) { renderLoggedOut(); return; }
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const data = await r.json();
+    if (data.is_new_user) renderOnboarding(data);
+    else                  renderMinUke(data);
+  } catch (err) {
+    document.getElementById("personal-body").innerHTML = `
+      <h6 class="text-muted text-uppercase small mb-3"><i class="bi bi-person-circle me-1"></i>Min uke</h6>
+      <p class="small text-danger mb-0">Kunne ikke laste personlig oversikt: ${escapeHtml(err.message)}</p>`;
+  }
+}
+
+function renderMinUke(d) {
+  const domains = (d.top_domains || []).slice(0, 3);
+  const domainsHtml = domains.length
+    ? domains.map(t => `<li class="small"><code>${escapeHtml(t.domain)}</code> · <span class="text-muted">${t.views} ${t.views === 1 ? 'visning' : 'visninger'}</span></li>`).join("")
+    : '<li class="small text-muted"><em>Ingen domene-aktivitet siste 7d</em></li>';
+
+  document.getElementById("personal-body").innerHTML = `
+    <h6 class="text-muted text-uppercase small mb-3"><i class="bi bi-person-circle me-1"></i>Min uke</h6>
+    <div class="row g-2 text-center mb-2">
+      <div class="col-4">
+        <div class="h4 mb-0 text-primary">${d.products_viewed_7d}</div>
+        <div class="small text-muted">sett</div>
+      </div>
+      <div class="col-4">
+        <div class="h4 mb-0 text-success">${d.new_to_user_7d}</div>
+        <div class="small text-muted">nye for deg</div>
+      </div>
+      <div class="col-4">
+        <div class="h4 mb-0 text-info">${d.questions_asked_7d}</div>
+        <div class="small text-muted">spørsmål</div>
+      </div>
+    </div>
+    ${domains.length ? '<hr class="my-2">' : ''}
+    <div class="small text-muted mb-1">Topp domener:</div>
+    <ul class="list-unstyled mb-0">${domainsHtml}</ul>`;
+}
+
+function renderOnboarding(d) {
+  document.getElementById("personal-body").innerHTML = `
+    <h6 class="text-muted text-uppercase small mb-3"><i class="bi bi-stars me-1 text-success"></i>Start her</h6>
+    <p class="small mb-3">Velkommen til Slettix Analytics! Her er tre måter å komme i gang:</p>
+    <ol class="ps-3 small mb-0">
+      <li class="mb-2">
+        <a href="/katalog" class="text-decoration-none">Utforsk katalogen</a>
+        <div class="text-muted">— finn dataprodukter du kan analysere</div>
+      </li>
+      <li class="mb-2">
+        <a href="/wizard/agent" class="text-decoration-none">Still et spørsmål med AI</a>
+        <div class="text-muted">— agenten genererer en notebook med svaret</div>
+      </li>
+      <li>
+        <a href="${SUPERSET_URL || '/'}" class="text-decoration-none">Lag dashboard i Superset</a>
+        <div class="text-muted">— visualiser data i SQL-Lab</div>
+      </li>
+    </ol>`;
+}
+
+function renderLoggedOut() {
+  document.getElementById("personal-body").innerHTML = `
+    <h6 class="text-muted text-uppercase small mb-3"><i class="bi bi-box-arrow-in-right me-1"></i>Bli med</h6>
+    <p class="small mb-3">Logg inn for å se personlig aktivitet og bruke AI-veiviseren.</p>
+    <a href="/login?next=/buzz" class="btn btn-sm btn-primary w-100">
+      <i class="bi bi-box-arrow-in-right me-1"></i>Logg inn
+    </a>`;
+}
+
+const SUPERSET_URL = {{ superset_url | tojson }};
+
+loadBuzz();
+</script>
+{% endblock %}

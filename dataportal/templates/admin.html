@@ -293,6 +293,67 @@
   </div>
 </div>
 {% endif %}
+
+{# ── API-nøkler ── #}
+<div class="card mb-4">
+  <div class="card-header bg-white fw-semibold d-flex align-items-center">
+    <i class="bi bi-key-fill me-2"></i>API-nøkler
+    <span class="text-muted small ms-2">Eksterne tjenester som dataportalen bruker</span>
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm mb-0 align-middle">
+      <thead class="table-light">
+        <tr>
+          <th>Navn</th>
+          <th>Beskrivelse</th>
+          <th>Status</th>
+          <th>Sist endret</th>
+          <th class="text-end">Handling</th>
+        </tr>
+      </thead>
+      <tbody id="api-keys-tbody">
+        <tr><td colspan="5" class="text-muted text-center py-3">Laster…</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+{# ── Modal: Sett API-nøkkel ── #}
+<div class="modal fade" id="apiKeyModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-key me-2"></i>Oppdater <span id="apikey-label"></span></h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="small text-muted mb-3" id="apikey-description"></p>
+        <p class="small">
+          Hent nøkkel fra
+          <a id="apikey-docs" href="#" target="_blank" rel="noopener">leverandørens konsoll</a>.
+        </p>
+        <div class="mb-3">
+          <label for="apikey-value" class="form-label">Ny verdi</label>
+          <input type="password" class="form-control" id="apikey-value" autocomplete="off"
+                 placeholder="lim inn nøkkelen her">
+          <small class="text-muted">
+            Verdien lagres i k8s-secreten <code>slettix-credentials</code> og
+            sendes som env-variabel <code id="apikey-envvar"></code> til
+            <code id="apikey-deploy"></code>-podden.
+          </small>
+        </div>
+        <div id="apikey-error" class="alert alert-danger d-none"></div>
+        <div id="apikey-success" class="alert alert-success d-none"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Avbryt</button>
+        <button type="button" class="btn btn-primary" id="apikey-save">
+          <i class="bi bi-save me-1"></i>Lagre og restart
+        </button>
+      </div>
+    </div>
+  </div>
+</div>
 {% endblock %}
 
 {% block scripts %}
@@ -386,5 +447,85 @@
     if (resp.ok) location.reload();
     else alert("Kunne ikke legge til domeneprivilegium.");
   });
+
+  // ── API-nøkler ─────────────────────────────────────────────────────────
+  let CURRENT_KEY = null;
+  const apiKeyModal = new bootstrap.Modal(document.getElementById("apiKeyModal"));
+
+  function fmtDate(iso) {
+    if (!iso) return "—";
+    try { return new Date(iso).toLocaleString("nb-NO"); } catch { return iso; }
+  }
+
+  async function loadApiKeys() {
+    const tbody = document.getElementById("api-keys-tbody");
+    try {
+      const r = await fetch("/api/admin/api-keys");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const data = await r.json();
+      tbody.innerHTML = (data.keys || []).map(k => `
+        <tr>
+          <td><strong>${k.label}</strong><br><code class="small text-muted">${k.env_var}</code></td>
+          <td class="small text-muted">${k.description}</td>
+          <td>${k.is_set
+            ? '<span class="badge bg-success"><i class="bi bi-check-lg me-1"></i>Satt</span>'
+            : '<span class="badge bg-warning text-dark"><i class="bi bi-exclamation-triangle me-1"></i>Mangler</span>'}</td>
+          <td class="small text-muted">${k.last_updated_by ? k.last_updated_by + ' · ' + fmtDate(k.last_updated_at) : '—'}</td>
+          <td class="text-end">
+            <button class="btn btn-sm btn-outline-primary edit-apikey-btn"
+                    data-name="${k.name}" data-label="${k.label}" data-desc="${k.description}"
+                    data-docs="${k.docs_url}" data-envvar="${k.env_var}" data-deploy="${k.deployment}">
+              <i class="bi bi-pencil me-1"></i>${k.is_set ? 'Endre' : 'Sett'}
+            </button>
+          </td>
+        </tr>
+      `).join("");
+      tbody.querySelectorAll(".edit-apikey-btn").forEach(btn => {
+        btn.addEventListener("click", () => openApiKeyModal(btn.dataset));
+      });
+    } catch (err) {
+      tbody.innerHTML = `<tr><td colspan="5" class="text-danger small">Kunne ikke laste: ${err.message}</td></tr>`;
+    }
+  }
+
+  function openApiKeyModal(d) {
+    CURRENT_KEY = d.name;
+    document.getElementById("apikey-label").textContent = d.label;
+    document.getElementById("apikey-description").textContent = d.desc;
+    document.getElementById("apikey-docs").href = d.docs;
+    document.getElementById("apikey-envvar").textContent = d.envvar;
+    document.getElementById("apikey-deploy").textContent = d.deploy;
+    document.getElementById("apikey-value").value = "";
+    document.getElementById("apikey-error").classList.add("d-none");
+    document.getElementById("apikey-success").classList.add("d-none");
+    apiKeyModal.show();
+  }
+
+  document.getElementById("apikey-save").addEventListener("click", async () => {
+    const value = document.getElementById("apikey-value").value;
+    const errEl = document.getElementById("apikey-error");
+    const okEl  = document.getElementById("apikey-success");
+    errEl.classList.add("d-none");
+    okEl.classList.add("d-none");
+
+    if (!value.trim()) { errEl.textContent = "Verdi kan ikke være tom."; errEl.classList.remove("d-none"); return; }
+    try {
+      const r = await fetch(`/api/admin/api-keys/${CURRENT_KEY}`, {
+        method:  "PUT",
+        headers: {"Content-Type": "application/json"},
+        body:    JSON.stringify({value}),
+      });
+      const body = await r.json();
+      if (!r.ok) { errEl.textContent = body.detail || ("HTTP " + r.status); errEl.classList.remove("d-none"); return; }
+      okEl.innerHTML = `Lagret. Restart av <code>${body.deployment}</code>: <strong>${body.restart_status}</strong>. Siden laster på nytt om 3 sek …`;
+      okEl.classList.remove("d-none");
+      setTimeout(() => { apiKeyModal.hide(); loadApiKeys(); }, 3000);
+    } catch (err) {
+      errEl.textContent = "Nettverksfeil: " + err.message;
+      errEl.classList.remove("d-none");
+    }
+  });
+
+  loadApiKeys();
 </script>
 {% endblock %}

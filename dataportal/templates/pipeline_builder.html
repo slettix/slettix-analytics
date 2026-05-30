@@ -25,14 +25,17 @@
   <div class="row g-4">
     {% for tid, tmpl in templates.items() %}
     <div class="col-md-6 col-lg-4">
-      <div class="card h-100 template-card {% if tmpl.streaming %}border-warning{% endif %}" data-template="{{ tid }}" style="cursor:pointer;">
+      <div class="card h-100 template-card {% if tmpl.streaming %}border-warning{% elif tmpl.external_route %}border-success{% endif %}" data-template="{{ tid }}" style="cursor:pointer;">
         <div class="card-body">
           <div class="d-flex align-items-center mb-3">
-            <i class="bi {{ tmpl.icon }} fs-3 me-3 {% if tmpl.streaming %}text-warning{% else %}text-primary{% endif %}"></i>
+            <i class="bi {{ tmpl.icon }} fs-3 me-3 {% if tmpl.streaming %}text-warning{% elif tmpl.external_route %}text-success{% else %}text-primary{% endif %}"></i>
             <div>
               <h6 class="mb-0 fw-bold">{{ tmpl.label }}</h6>
               {% if tmpl.streaming %}
               <span class="badge bg-warning text-dark me-1" style="font-size:.6rem;"><i class="bi bi-broadcast me-1"></i>Streaming</span>
+              {% endif %}
+              {% if tmpl.external_route %}
+              <span class="badge bg-success me-1" style="font-size:.6rem;"><i class="bi bi-magic me-1"></i>Veiviser</span>
               {% endif %}
               {% for tag in tmpl.tags %}
               <span class="badge bg-light text-dark border me-1" style="font-size:.6rem;">{{ tag }}</span>
@@ -42,9 +45,15 @@
           <p class="text-muted small mb-0">{{ tmpl.description }}</p>
         </div>
         <div class="card-footer bg-white border-top-0">
+          {% if tmpl.external_route %}
+          <a href="{{ tmpl.external_route }}" class="btn btn-sm btn-success w-100">
+            <i class="bi bi-box-arrow-up-right me-1"></i>Åpne veiviser
+          </a>
+          {% else %}
           <button class="btn btn-sm {% if tmpl.streaming %}btn-warning{% else %}btn-primary{% endif %} w-100 select-template-btn" data-template="{{ tid }}">
             <i class="bi bi-arrow-right me-1"></i>Velg denne malen
           </button>
+          {% endif %}
         </div>
       </div>
     </div>

@@ -85,6 +85,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.security import APIKeyHeader
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool
 
 sys.path.insert(0, "/opt/dataportal/jobs")
 from registry import (  # noqa: E402
@@ -99,6 +100,10 @@ import wizard  # noqa: E402
 import notebook_gallery  # noqa: E402
 import help_content  # noqa: E402
 import schema_intro  # noqa: E402
+import agent  # noqa: E402  — AGENT-2/3 pure helpers
+import agent_orchestrator  # noqa: E402  — AGENT-1 Claude-kall, cache, notebook-bygging
+import admin_secrets  # noqa: E402  — administrer API-nøkler via UI
+import buzz  # noqa: E402  — BUZZ-1 pre-computing-aggregat
 
 # ── oppstart ───────────────────────────────────────────────────────────────────
 
@@ -513,6 +518,32 @@ def _require_access(manifest: dict, user: dict | None, api_key: str | None) -> N
             status_code=403,
             detail="Tilgang nektet. Logg inn og be om tilgang, eller bruk gyldig API-nøkkel.",
         )
+
+
+def _filter_accessible(
+    product_ids: list[str],
+    user: dict | None,
+    api_key: str | None,
+) -> tuple[list[dict], list[str]]:
+    """AGENT-3: del input-IDene i (tilgjengelige manifester, blokkerte IDer).
+
+    Brukes av agentic-veiviseren (epic #165) før prompt-build. En blokkert ID
+    er enten ukjent eller noe brukeren mangler tilgang til — orchestratoren
+    skiller ikke mellom de to (begge fører til 403).
+    """
+    accessible: list[dict] = []
+    blocked: list[str] = []
+    for pid in product_ids:
+        try:
+            manifest = get(pid)
+        except KeyError:
+            blocked.append(pid)
+            continue
+        if _check_product_access(manifest, user, api_key):
+            accessible.append(manifest)
+        else:
+            blocked.append(pid)
+    return accessible, blocked
 
 
 def _require_admin_api(user: dict | None) -> None:
@@ -1737,11 +1768,25 @@ _PIPELINE_TEMPLATES = {
             {"name": "retries",      "label": "Antall forsøk",    "type": "number", "default": "2"},
         ],
     },
+    "silver_wizard": {
+        "label":         "Silver-veiviser (Bronze → Silver, ny config)",
+        "icon":          "bi-magic",
+        "description":   "Steg-for-steg-veiviser som leser et Bronze-produkt, introspekterer JSON-payload "
+                         "automatisk og lar deg velge payload-felter, cast-regler og null-handling. "
+                         "Lagrer en ny config i MinIO og deployer Silver-DAG-en samtidig. "
+                         "Velg denne når du IKKE har en config fra før (typisk: nytt IDP-produkt fra Kafka).",
+        "tags":          ["veiviser", "silver", "ny-config", "schema-introspection"],
+        "external_route": "/wizard/silver",
+        "fields": [],
+    },
     "silver_transform": {
-        "label":       "Silver-transformasjon",
+        "label":       "Silver-transformasjon (eksisterende config)",
         "icon":        "bi-funnel",
-        "description": "Rens og valider bronze-data til silver med konfigurerbare transformasjonsregler",
-        "tags":        ["transform", "silver"],
+        "description": "Deploy en Silver-DAG som bruker en config som ALLEREDE finnes "
+                       "(typisk på s3a://config/silver/<slug>/current.json). Bruk denne når du har "
+                       "håndredigert configen eller vil re-deploye en eksisterende. "
+                       "Trenger du å lage configen fra bunnen, bruk «Silver-veiviser» i stedet.",
+        "tags":        ["transform", "silver", "eksisterende-config"],
         "fields": [
             {"name": "dag_id",       "label": "DAG-ID",           "type": "text",   "placeholder": "mitt_silver_transform", "required": True},
             {"name": "config_path",  "label": "Konfig-sti",       "type": "text",   "placeholder": "s3a://config/silver/<slug>/current.json eller lokal sti", "required": True},
@@ -1932,9 +1977,11 @@ def _fetch_api(**context):
 
     elif template_id == "silver_transform":
         config_path = config.get("config_path", "/opt/airflow/spark_conf/silver/data.json")
+        product_id  = config.get("product_id", dag_id)
         # K8s metadata.name må følge DNS-1123 — kun [a-z0-9-]. dag_id kan
         # inneholde understrek (gyldig i Airflow), så vi saniterer for CRD-navn.
         spark_app_name = re.sub(r"[^a-z0-9-]", "-", dag_id.lower())[:50]
+        validate_app_name = (spark_app_name + "-vq")[:50]
         # SparkKubernetesOperator i stedet for SparkSubmitOperator — spawner egen
         # Spark-driver/executor-pod med slettix-analytics/spark:3.5.8-image som
         # har Delta/Hadoop/S3A-JARs bakt inn. Unngår OOM på Airflow-worker-pod.
@@ -1970,6 +2017,8 @@ spec:
     memory: "1g"
     memoryOverhead: "256m"
     serviceAccount: spark
+    labels:
+      version: "3.5.8"
     env:
       - {{name: AWS_ACCESS_KEY_ID, valueFrom: {{secretKeyRef: {{name: slettix-credentials, key: minio-root-user}}}}}}
       - {{name: AWS_SECRET_ACCESS_KEY, valueFrom: {{secretKeyRef: {{name: slettix-credentials, key: minio-root-password}}}}}}
@@ -1980,6 +2029,8 @@ spec:
     cores: 1
     memory: "1g"
     memoryOverhead: "256m"
+    labels:
+      version: "3.5.8"
     env:
       - {{name: AWS_ACCESS_KEY_ID, valueFrom: {{secretKeyRef: {{name: slettix-credentials, key: minio-root-user}}}}}}
       - {{name: AWS_SECRET_ACCESS_KEY, valueFrom: {{secretKeyRef: {{name: slettix-credentials, key: minio-root-password}}}}}}
@@ -1990,20 +2041,45 @@ spec:
       configMap:
         name: airflow-jobs
 '''.format(spark_app_name=spark_app_name, config_path=config_path)
+        # Andre SparkApplication: kjør silver_validate_quality.py mot samme config.
+        # Bruker samme volumeMounts/credentials/sparkConf som transform-jobben.
+        validate_app = spark_app.replace(
+            f"name: {spark_app_name}-",
+            f"name: {validate_app_name}-",
+        ).replace(
+            "mainApplicationFile: \"local:///opt/spark/jobs/transform_bronze_to_silver.py\"",
+            "mainApplicationFile: \"local:///opt/spark/jobs/silver_validate_quality.py\"",
+        ).replace(
+            f'arguments:\n    - "--config"\n    - "{config_path}"',
+            f'arguments:\n    - "--config"\n    - "{config_path}"\n    - "--product-id"\n    - "{product_id}"',
+        )
         body = f'''from airflow.providers.cncf.kubernetes.operators.spark_kubernetes import SparkKubernetesOperator
 
-_SPARK_APP = """{spark_app}"""
+_SPARK_APP_TRANSFORM = """{spark_app}"""
+
+_SPARK_APP_VALIDATE  = """{validate_app}"""
 
 {_default_args}
 {_dag_open}
     transform = SparkKubernetesOperator(
         task_id="bronze_to_silver",
         namespace="slettix-analytics",
-        application_file=_SPARK_APP,
+        application_file=_SPARK_APP_TRANSFORM,
         kubernetes_conn_id="kubernetes_default",
         do_xcom_push=False,
         execution_timeout=timedelta(minutes=30),
     )
+
+    validate_quality = SparkKubernetesOperator(
+        task_id="validate_quality",
+        namespace="slettix-analytics",
+        application_file=_SPARK_APP_VALIDATE,
+        kubernetes_conn_id="kubernetes_default",
+        do_xcom_push=False,
+        execution_timeout=timedelta(minutes=15),
+    )
+
+    transform >> validate_quality
 '''
 
     elif template_id == "gold_aggregate":
@@ -3497,6 +3573,176 @@ def api_get_user_domains(user_id: str, request: Request):
     return {"user_id": user_id, "domains": auth.get_user_domains(user_id)}
 
 
+# ── Intern API for BUZZ-1 pre-computing-DAG (epic #177) ───────────────────────
+
+
+@app.get("/api/internal/usage-snapshot", tags=["admin"],
+         summary="BUZZ-1: usage-aggregat for pre-computing-DAG (kun via PORTAL_API_KEY)")
+def api_internal_usage_snapshot(request: Request, days: int = 7):
+    """Returnerer aggregerte usage-events for BUZZ-1-DAG-en.
+
+    Beskyttet av PORTAL_API_KEY (ingen brukerinnlogging) — kalles fra inne
+    i clusteret av airflow-worker-poden. Ikke ment for sluttbrukere.
+    """
+    api_key = request.headers.get("X-API-Key")
+    if api_key != PORTAL_API_KEY:
+        raise HTTPException(status_code=401, detail="Krever gyldig PORTAL_API_KEY")
+
+    now    = datetime.now(tz=timezone.utc)
+    end    = now.isoformat()
+    start  = (now - timedelta(days=days)).isoformat()
+    prev_s = (now - timedelta(days=2 * days)).isoformat()
+
+    return {
+        "window_days":         days,
+        "window_end":          end,
+        "active_users_window": auth.distinct_active_users(start, end),
+        "by_product_window":   auth.usage_by_product_in_window(start, end),
+        "by_product_prev":     auth.usage_by_product_in_window(prev_s, start),
+    }
+
+
+@app.post("/api/internal/buzz-compute", tags=["admin"],
+          summary="BUZZ-1: aggreger og skriv buzz_metrics-snapshot til MinIO")
+async def api_internal_buzz_compute(request: Request):
+    """Triggeres av Airflow-DAG-en `03_buzz_metrics` hver time. Kjører
+    aggregeringen in-process (dataportalen har allerede pandas + deltalake +
+    boto3 + registry warm i minne — unngår OOM som ferske airflow-workers får).
+    """
+    api_key = request.headers.get("X-API-Key")
+    if api_key != PORTAL_API_KEY:
+        raise HTTPException(status_code=401, detail="Krever gyldig PORTAL_API_KEY")
+
+    summary = await run_in_threadpool(
+        buzz.compute_and_write,
+        s3_client_factory=_s3_client,
+        list_all_fn=list_all,
+        list_versions_fn=list_versions,
+        usage_by_window_fn=auth.usage_by_product_in_window,
+        active_users_fn=auth.distinct_active_users,
+        window_days=7,
+    )
+    buzz.invalidate_snapshot_cache()
+    logging.getLogger(__name__).info(json.dumps({"event": "buzz_compute_done", **summary}))
+    return summary
+
+
+# ── Buzz-forsiden (epic #177) ─────────────────────────────────────────────────
+
+
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+def page_buzz(request: Request):
+    """BUZZ-8: 'What's buzzing'-forside. Tok over `/` fra eksisterende katalog
+    som er flyttet til `/katalog`."""
+    return templates.TemplateResponse("buzz.html", _template_ctx(request))
+
+
+@app.get("/api/buzz/snapshot", tags=["analytics"], summary="BUZZ-2: hent siste buzz-snapshot")
+async def api_buzz_snapshot(request: Request):
+    """Returnerer pre-computed buzz-metrics for forsiden. Cachet 5 min."""
+    data = await run_in_threadpool(buzz.get_snapshot_cached, _s3_client)
+    return data
+
+
+@app.get("/api/buzz/personal", tags=["analytics"], summary="BUZZ-3: personlig 'Min uke'-aggregat")
+def api_buzz_personal(request: Request):
+    """Personlig usage-aggregat for innlogget bruker. Beregnes live fra SQLite —
+    raskt nok siden vi kun spør mot egen bruker.
+
+    Returnerer:
+      - products_viewed_7d
+      - new_to_user_7d
+      - questions_asked_7d
+      - top_domains: [{domain, views}, ...] (joinet med registry)
+      - is_new_user: true hvis < 5 totale views (utløser onboarding-widget i UI)
+    """
+    user = auth.get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Krever innlogging")
+
+    summary = auth.usage_summary_by_user(user["id"], days=7)
+
+    # Join product_id → domain for top_domains.
+    products_by_id = {p["id"]: p for p in list_all()}
+    domain_counts: dict[str, int] = {}
+    for entry in summary["product_views_window"]:
+        product = products_by_id.get(entry["product_id"])
+        if not product:
+            continue
+        domain = product.get("domain") or "(ukjent)"
+        domain_counts[domain] = domain_counts.get(domain, 0) + entry["views"]
+    top_domains = sorted(
+        [{"domain": d, "views": v} for d, v in domain_counts.items()],
+        key=lambda x: x["views"], reverse=True,
+    )[:5]
+
+    is_new_user = summary["products_viewed_ever"] < 5
+
+    return {
+        "products_viewed_7d":  summary["products_viewed_window"],
+        "new_to_user_7d":      summary["new_to_user_window"],
+        "questions_asked_7d":  summary["questions_asked_window"],
+        "top_domains":         top_domains,
+        "is_new_user":         is_new_user,
+    }
+
+
+# ── Admin: API-nøkler ─────────────────────────────────────────────────────────
+
+
+@app.get("/api/admin/api-keys", tags=["admin"], summary="List administrerbare API-nøkler (admin)")
+def api_list_api_keys(request: Request):
+    """Returnerer status for hver administrert nøkkel — uten å eksponere verdier."""
+    user = auth.get_current_user(request)
+    _require_admin_api(user)
+    return {"keys": admin_secrets.list_managed_keys()}
+
+
+@app.put("/api/admin/api-keys/{name}", tags=["admin"], summary="Oppdater API-nøkkel (admin)")
+async def api_update_api_key(name: str, request: Request):
+    """Oppdaterer en administrert API-nøkkel og restarter tilhørende deployment.
+
+    Body: { "value": "..." }
+    Returnerer { ok, message, restart_status }
+    """
+    user = auth.get_current_user(request)
+    _require_admin_api(user)
+
+    body  = await request.json()
+    value = (body.get("value") or "").strip()
+    if not value:
+        raise HTTPException(status_code=422, detail="value er påkrevd")
+
+    now_iso = datetime.now(tz=timezone.utc).isoformat()
+    ok, msg = admin_secrets.update_key(
+        name=name,
+        value=value,
+        updated_by=user["username"],
+        now_iso=now_iso,
+    )
+    if not ok:
+        raise HTTPException(status_code=502 if "k8s" in msg else 400, detail=msg)
+
+    # Logg uten verdien
+    logging.getLogger(__name__).info(json.dumps({
+        "event":      "api_key_updated",
+        "key_name":   name,
+        "updated_by": user["username"],
+    }))
+
+    # Rolling restart av tilhørende deployment så nye env vars hentes
+    deployment = admin_secrets.deployment_for(name)
+    restart_status = _rollout_restart_deployment(deployment) if deployment else "no-deployment"
+
+    return {
+        "ok":              True,
+        "message":         "API-nøkkel oppdatert",
+        "updated_at":      now_iso,
+        "deployment":      deployment,
+        "restart_status":  restart_status,
+    }
+
+
 # ── UI: HTML-sider ─────────────────────────────────────────────────────────────
 
 def _check_service(url: str, timeout: float = 2.0) -> bool:
@@ -3717,6 +3963,34 @@ def page_wizard_silver(request: Request, source: str | None = None):
     ))
 
 
+@app.get("/wizard/agent", response_class=HTMLResponse, include_in_schema=False)
+def page_wizard_agent(request: Request, products: str | None = None):
+    """AGENT-8: agent-veiviser-UI. Lister kun produkter brukeren har tilgang til.
+
+    Query-parameter `products=<id1>,<id2>` (AGENT-9) forhåndsutfyller velgeren.
+    """
+    user = auth.get_current_user(request)
+    if not user:
+        next_url = "/wizard/agent" + (f"?products={products}" if products else "")
+        return RedirectResponse(f"/login?next={urllib.parse.quote(next_url)}", status_code=303)
+
+    # Send minimum produkt-info til klienten — kun det som trengs for søk og chips.
+    accessible_products = [
+        {"id": p["id"], "name": p.get("name", p["id"]), "domain": p.get("domain", "")}
+        for p in list_all()
+        if _check_product_access(p, user, None)
+    ]
+    preselected = [pid for pid in (products or "").split(",") if pid.strip()][:3]
+
+    return templates.TemplateResponse("wizard_agent.html", _template_ctx(
+        request,
+        products=accessible_products,
+        preselected_ids=preselected,
+        model_choices=agent_orchestrator.MODEL_CHOICES,
+        default_model=agent_orchestrator.DEFAULT_MODEL_KEY,
+    ))
+
+
 @app.post("/api/wizard/analyze", tags=["jupyter"], summary="Generer veiviser-notebook")
 async def api_wizard_analyze(request: Request):
     user = auth.get_current_user(request)
@@ -3760,6 +4034,24 @@ def api_wizard_dashboard(product_id: str, request: Request, type: str = "table")
     url = f"{SUPERSET_EXTERNAL_URL}/sqllab/?sql={urllib.parse.quote(sql)}&dbId={SUPERSET_DB_ID}"
     auth.track_usage(product_id, "wizard_dashboard", user["id"])
     return {"sql": sql, "url": url, "type": type}
+
+
+def _freshness_hours_from_schedule(schedule: str | None) -> int | None:
+    """Avled rimelig freshness_hours-SLA fra Airflow-schedule-strengen.
+
+    Lagt på en buffer per type: f.eks. @daily → 25t (24t kjøreintervall + 1t for
+    sen jobb). Brukes av silver-wizard når brukeren ikke eksplisitt setter SLA.
+    Returnerer None for skedulering som ikke har klar ferskhets-tolkning
+    (None, @once, cron-uttrykk) — da hopper 02_sla_monitor over produktet."""
+    if not schedule:
+        return None
+    mapping = {
+        "@hourly":   2,
+        "@daily":   25,
+        "@weekly": 192,
+        "@monthly": 768,
+    }
+    return mapping.get(schedule)
 
 
 @app.post("/api/wizard/silver/deploy", tags=["pipelines"],
@@ -3842,6 +4134,7 @@ async def api_wizard_silver_deploy(request: Request):
     try:
         dag_config = {
             "dag_id":      dag_id,
+            "product_id":  product_id,
             "config_path": config_url,
             "domain":      manifest_in["domain"],
             "owner":       manifest_in["owner"],
@@ -3873,6 +4166,11 @@ async def api_wizard_silver_deploy(request: Request):
     status["scheduler_restart_status"] = restart_status
 
     # ── Steg 4 + 5: bygg og registrer Silver-manifestet ───────────────────
+    freshness_hours = _freshness_hours_from_schedule(schedule)
+    existing_sla    = (manifest_in.get("quality_sla") or {})
+    existing_slo    = ((manifest_in.get("contract") or {}).get("slo") or {})
+    # Brukerens egen SLA-verdi vinner; ellers avled fra schedule.
+    effective_freshness = existing_sla.get("freshness_hours") or existing_slo.get("freshness_hours") or freshness_hours
     silver_manifest = {
         **manifest_in,
         "source_path":    silver_config["target"],
@@ -3882,6 +4180,11 @@ async def api_wizard_silver_deploy(request: Request):
         "source_products": [source_product_id],
         "dag_id":          dag_id,
     }
+    if effective_freshness is not None:
+        silver_manifest["quality_sla"] = {**existing_sla, "freshness_hours": effective_freshness}
+        contract = {**(manifest_in.get("contract") or {})}
+        contract["slo"] = {**existing_slo, "freshness_hours": effective_freshness}
+        silver_manifest["contract"] = contract
     # Column-lineage: hver target-kolonne får kildereferanse til Bronze-produktet.
     # For payload-extract bruker vi json_path som ledetråd; ellers samme kolonnenavn.
     payload_extract = silver_config.get("payload_extract") or {}
@@ -3908,6 +4211,352 @@ async def api_wizard_silver_deploy(request: Request):
         status["manifest_status"] = "failed"
 
     return status
+
+
+# ── Agentic AI-veiviser (epic #165) ────────────────────────────────────────────
+
+
+@app.post("/api/wizard/agent/ask", tags=["pipelines"],
+          summary="AGENT-1: generer notebook fra spørsmål + valgte dataprodukter")
+async def api_wizard_agent_ask(request: Request):
+    """Orkestratoren bak agent-veiviseren.
+
+    Body:
+      {
+        "product_ids":  ["helse.kreftregisteret", ...],   # 1–3 produkter
+        "question":     "fritekst-spørsmål",
+        "model":        "haiku" | "sonnet" | "opus",       # default sonnet
+        "accept_pii":   false                               # må være true hvis PII
+      }
+
+    Returnerer:
+      { request_id, answer_summary, generated_code_preview, notebook_url,
+        product_versions, model_used, input_tokens, output_tokens }
+
+    V1-avgrensning: notebook GENERERES og lagres til Jupyter, men eksekveres
+    IKKE i dataportal-poden. Brukeren klikker "Åpne i Jupyter" og kjører Run All.
+    """
+    user    = auth.get_current_user(request)
+    api_key = request.headers.get("X-API-Key")
+    if not user and api_key != PORTAL_API_KEY:
+        raise HTTPException(status_code=401, detail="Krever innlogging eller API-nøkkel")
+
+    body        = await request.json()
+    product_ids = body.get("product_ids") or []
+    question    = (body.get("question") or "").strip()
+    model_key   = (body.get("model") or agent_orchestrator.DEFAULT_MODEL_KEY).lower()
+    accept_pii  = bool(body.get("accept_pii", False))
+
+    # ── Validering ────────────────────────────────────────────────────────
+    if not isinstance(product_ids, list) or not (1 <= len(product_ids) <= 3):
+        raise HTTPException(status_code=422, detail="product_ids må være en liste med 1–3 elementer")
+    if not question:
+        raise HTTPException(status_code=422, detail="question er påkrevd")
+    if model_key not in agent_orchestrator.MODEL_CHOICES:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Ugyldig modellvalg. Gyldige: {', '.join(agent_orchestrator.MODEL_CHOICES)}"
+        )
+
+    # ── AGENT-3: tilgangsfilter ──────────────────────────────────────────
+    accessible, blocked = _filter_accessible(product_ids, user, api_key)
+    if blocked:
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "message":  "Tilgang nektet til ett eller flere produkter",
+                "blocked":  blocked,
+            },
+        )
+
+    # ── AGENT-3: PII-vakt ────────────────────────────────────────────────
+    if agent.has_pii(accessible) and not accept_pii:
+        raise HTTPException(
+            status_code=428,
+            detail={
+                "message":      "Valgte produkter inneholder PII. Bekreft eksplisitt for å fortsette.",
+                "pii_columns":  agent.pii_columns(accessible),
+            },
+        )
+
+    # ── AGENT-4: row-count-vakt ──────────────────────────────────────────
+    row_counts: dict[str, int] = {}
+    total_rows = 0
+    for m in accessible:
+        n = agent_orchestrator.estimate_row_count(
+            m["source_path"], schema_intro._STORAGE_OPTIONS
+        )
+        if n is None:
+            # Ukjent → vi gambler og tillater. Bedre UX enn å blokkere ved
+            # transient lesefeil mot MinIO.
+            continue
+        row_counts[m["id"]] = n
+        total_rows += n
+
+    if total_rows > agent_orchestrator.ROW_COUNT_LIMIT:
+        candidates = agent.find_candidate_gold_products(accessible, list_all())
+        raise HTTPException(
+            status_code=413,
+            detail={
+                "message": (
+                    f"Valgte produkter har totalt {total_rows:,} rader, som "
+                    f"overskrider grensen på {agent_orchestrator.ROW_COUNT_LIMIT:,} "
+                    f"for direkte agent-analyse. Vurder å bruke et Gold-aggregat "
+                    f"med samme domene, eller raffiner spørsmålet (f.eks. begrens "
+                    f"tidsrom eller kommune)."
+                ),
+                "total_rows":               total_rows,
+                "row_counts_by_product":    row_counts,
+                "limit":                    agent_orchestrator.ROW_COUNT_LIMIT,
+                "candidate_gold_products":  candidates,
+            },
+        )
+
+    # ── Hent sample-data per produkt (best-effort) ───────────────────────
+    samples_by_id: dict[str, dict] = {}
+    for m in accessible:
+        try:
+            samples_by_id[m["id"]] = schema_intro.introspect(m["source_path"], limit=5)
+        except Exception as exc:
+            logging.getLogger(__name__).warning(
+                "Kunne ikke lese sample for %s: %s", m["id"], exc
+            )
+            samples_by_id[m["id"]] = {"error": str(exc), "columns": []}
+
+    # ── AGENT-2: bygg system-prompt ──────────────────────────────────────
+    system_prompt = agent.build_agent_prompt(accessible, samples_by_id, question)
+    model_id      = agent_orchestrator.resolve_model_id(model_key)
+
+    # ── Sjekk Claude-config sent — først etter tilgangsfilter ────────────
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY er ikke konfigurert")
+
+    # ── Kall Claude ──────────────────────────────────────────────────────
+    try:
+        agent_resp = await run_in_threadpool(
+            agent_orchestrator.call_claude,
+            api_key=ANTHROPIC_API_KEY,
+            model_id=model_id,
+            system_prompt=system_prompt,
+            question=question,
+        )
+    except ValueError as exc:
+        # Skjemafeil i Claude-respons — typisk en LLM-feil, ikke vår
+        raise HTTPException(
+            status_code=502,
+            detail=f"AI-respons kunne ikke tolkes: {exc}",
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Claude-kall feilet: {exc}")
+
+    # ── Bygg og lagre notebook ───────────────────────────────────────────
+    nb = agent_orchestrator.build_notebook(
+        cells=agent_resp.cells,
+        question=question,
+        product_ids=product_ids,
+    )
+    request_id = agent_orchestrator.make_request_id()
+    ts         = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
+    filename   = f"agent_{request_id}_{ts}.ipynb"
+    nb_path    = _notebook_path(filename)
+    pathlib.Path(NOTEBOOKS_DIR).mkdir(parents=True, exist_ok=True)
+    nb_path.write_text(json.dumps(nb, ensure_ascii=False, indent=1))
+    _push_to_jupyter(filename, nb)
+
+    # ── Cache kontekst for AGENT-7 feedback ──────────────────────────────
+    generated_code = agent_orchestrator.extract_generated_code(agent_resp.cells)
+    answer_preview = agent_resp.summary[:500]
+    ctx = agent_orchestrator.RequestContext(
+        request_id=       request_id,
+        user_id=          user["id"] if user else None,
+        product_ids=      product_ids,
+        product_versions= {m["id"]: m.get("version", "1.0.0") for m in accessible},
+        question=         question,
+        model_key=        model_key,
+        model_id=         model_id,
+        system_prompt=    system_prompt,
+        generated_code=   generated_code,
+        answer_preview=   answer_preview,
+    )
+    agent_orchestrator.cache_put(ctx)
+
+    if user:
+        auth.track_usage("__platform__", "agent_ask", user["id"])
+
+    return {
+        "request_id":             request_id,
+        "answer_summary":         agent_resp.summary,
+        "generated_code_preview": generated_code[:2000],
+        "notebook_url":           _jupyter_open_url(filename),
+        "notebook_filename":      filename,
+        "product_versions":       ctx.product_versions,
+        "model_used":             model_key,
+        "model_id":               model_id,
+        "input_tokens":           agent_resp.input_tokens,
+        "output_tokens":          agent_resp.output_tokens,
+        "cell_count":             len(agent_resp.cells),
+    }
+
+
+@app.post("/api/wizard/agent/feedback", tags=["pipelines"],
+          summary="AGENT-7: lagre 👍/👎-feedback for et agent-svar")
+async def api_wizard_agent_feedback(request: Request):
+    """Lagrer feedback til s3://gold/agent_feedback/<ts>_<request_id>.json.
+
+    Body: { request_id, rating: "thumbs_up"|"thumbs_down", comment? }
+    Returnerer 202 ved suksess, 404 hvis request_id er ukjent (utløpt fra cache).
+    """
+    user    = auth.get_current_user(request)
+    api_key = request.headers.get("X-API-Key")
+    if not user and api_key != PORTAL_API_KEY:
+        raise HTTPException(status_code=401, detail="Krever innlogging eller API-nøkkel")
+
+    body       = await request.json()
+    request_id = (body.get("request_id") or "").strip()
+    rating     = body.get("rating")
+    comment    = (body.get("comment") or "").strip()
+
+    if not request_id:
+        raise HTTPException(status_code=422, detail="request_id er påkrevd")
+    if rating not in ("thumbs_up", "thumbs_down"):
+        raise HTTPException(status_code=422, detail="rating må være 'thumbs_up' eller 'thumbs_down'")
+
+    ctx = agent_orchestrator.cache_get(request_id)
+    if not ctx:
+        raise HTTPException(
+            status_code=404,
+            detail="request_id er ukjent eller har gått ut på dato (5 min TTL)",
+        )
+
+    now     = datetime.now(tz=timezone.utc)
+    ts_key  = now.strftime("%Y%m%dT%H%M%S")
+    payload = {
+        "request_id":       ctx.request_id,
+        "submitted_at":     now.isoformat(),
+        "user_id":          ctx.user_id,
+        "product_ids":      ctx.product_ids,
+        "product_versions": ctx.product_versions,
+        "question":         ctx.question,
+        "model_key":        ctx.model_key,
+        "model_id":         ctx.model_id,
+        "generated_code":   ctx.generated_code,
+        "answer_preview":   ctx.answer_preview,
+        "rating":           rating,
+        "comment":          comment,
+    }
+
+    try:
+        _s3_client().put_object(
+            Bucket="gold",
+            Key=f"agent_feedback/{ts_key}_{request_id}.json",
+            Body=json.dumps(payload, ensure_ascii=False, indent=2).encode(),
+            ContentType="application/json",
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Kunne ikke lagre feedback: {exc}")
+
+    if user:
+        auth.track_usage("__platform__", "agent_feedback", user["id"])
+
+    return JSONResponse(status_code=202, content={"ok": True, "stored_key": f"agent_feedback/{ts_key}_{request_id}.json"})
+
+
+@app.get("/api/products/{product_id}/explain", tags=["analytics"],
+         summary="AGENT-5: AI-forklaring av et dataprodukt (24t MinIO-cache)")
+async def api_product_explain(product_id: str, request: Request):
+    """Returnerer naturlig-språk-forklaring (markdown) av et dataprodukt.
+
+    Bruker AGENT-3 sin tilgangsfilter og cacher per (product_id + version) i
+    24t på s3://gold/agent_explanations/. Bruker Haiku-modellen (billigste)
+    siden oppgaven er deskriptiv.
+    """
+    user    = auth.get_current_user(request)
+    api_key = request.headers.get("X-API-Key")
+    if not user and api_key != PORTAL_API_KEY:
+        raise HTTPException(status_code=401, detail="Krever innlogging eller API-nøkkel")
+
+    # ── Manifest + tilgangskontroll ──────────────────────────────────────
+    accessible, blocked = _filter_accessible([product_id], user, api_key)
+    if blocked:
+        raise HTTPException(status_code=403, detail=f"Tilgang nektet til {product_id}")
+    if not accessible:
+        raise HTTPException(status_code=404, detail=f"Produkt {product_id} ikke funnet")
+    manifest = accessible[0]
+    version  = manifest.get("version", "1.0.0")
+
+    # ── Cache-oppslag i MinIO ────────────────────────────────────────────
+    cache_key = f"agent_explanations/{product_id}_v{version}.json"
+    s3        = _s3_client()
+    log       = logging.getLogger(__name__)
+    try:
+        obj    = s3.get_object(Bucket="gold", Key=cache_key)
+        cached = json.loads(obj["Body"].read())
+        log.info(json.dumps({"event": "agent_explain_cache_hit", "product_id": product_id, "version": version}))
+        return {
+            "explanation_markdown": cached["explanation_markdown"],
+            "cached":               True,
+            "generated_at":         cached.get("generated_at"),
+        }
+    except ClientError as exc:
+        if exc.response.get("Error", {}).get("Code") not in ("NoSuchKey", "404"):
+            log.warning("Uventet cache-feil for %s: %s", product_id, exc)
+        # Cache-miss — vi går videre til Claude
+    except Exception as exc:
+        log.warning("Cache-lese-feil for %s: %s — fortsetter til Claude", product_id, exc)
+
+    log.info(json.dumps({"event": "agent_explain_cache_miss", "product_id": product_id, "version": version}))
+
+    if not ANTHROPIC_API_KEY:
+        raise HTTPException(status_code=503, detail="ANTHROPIC_API_KEY er ikke konfigurert")
+
+    # ── Hent sample-data (best-effort) ───────────────────────────────────
+    try:
+        sample = schema_intro.introspect(manifest["source_path"], limit=5)
+    except Exception as exc:
+        log.warning("Sample-lesing feilet for %s: %s", product_id, exc)
+        sample = None
+
+    # ── Kall Claude ──────────────────────────────────────────────────────
+    try:
+        markdown, input_tokens, output_tokens = await run_in_threadpool(
+            agent_orchestrator.call_claude_explain,
+            api_key=ANTHROPIC_API_KEY,
+            manifest=manifest,
+            sample=sample,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Claude-kall feilet: {exc}")
+
+    # ── Lagre i cache (best-effort) ──────────────────────────────────────
+    now = datetime.now(tz=timezone.utc)
+    payload = {
+        "product_id":           product_id,
+        "version":              version,
+        "generated_at":         now.isoformat(),
+        "explanation_markdown": markdown,
+        "input_tokens":         input_tokens,
+        "output_tokens":        output_tokens,
+    }
+    try:
+        s3.put_object(
+            Bucket="gold",
+            Key=cache_key,
+            Body=json.dumps(payload, ensure_ascii=False, indent=2).encode(),
+            ContentType="application/json",
+        )
+    except Exception as exc:
+        log.warning("Kunne ikke lagre forklaring-cache for %s: %s", product_id, exc)
+
+    if user:
+        auth.track_usage(product_id, "agent_explain", user["id"])
+
+    return {
+        "explanation_markdown": markdown,
+        "cached":               False,
+        "generated_at":         now.isoformat(),
+        "input_tokens":         input_tokens,
+        "output_tokens":        output_tokens,
+    }
 
 
 @app.get("/help", response_class=HTMLResponse, include_in_schema=False)
@@ -4151,7 +4800,7 @@ def health_check():
     return {"status": "ok"}
 
 
-@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+@app.get("/katalog", response_class=HTMLResponse, include_in_schema=False)
 def page_catalog(request: Request):
     user     = auth.get_current_user(request)
     products = [

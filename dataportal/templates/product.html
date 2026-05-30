@@ -6,7 +6,7 @@
 {# ── breadcrumb ── #}
 <nav aria-label="breadcrumb" class="mb-3">
   <ol class="breadcrumb">
-    <li class="breadcrumb-item"><a href="/">Katalog</a></li>
+    <li class="breadcrumb-item"><a href="/katalog">Katalog</a></li>
     <li class="breadcrumb-item active">{{ manifest.name }}</li>
   </ol>
 </nav>
@@ -56,6 +56,14 @@
     </a>
     <button type="button" class="btn btn-sm btn-info" data-bs-toggle="modal" data-bs-target="#dashboardWizardModal">
       <i class="bi bi-magic me-1"></i>Bygg dashboard
+    </button>
+    <a href="/wizard/agent?products={{ manifest.id }}" class="btn btn-sm btn-success">
+      <i class="bi bi-stars me-1"></i>Lag analyse med AI
+    </a>
+    <button type="button" class="btn btn-sm btn-outline-success"
+            data-bs-toggle="modal" data-bs-target="#explainModal"
+            id="explain-btn" data-product-id="{{ manifest.id }}">
+      <i class="bi bi-chat-square-text me-1"></i>Forklar med AI
     </button>
     {% if manifest.source_path and (manifest.source_path.startswith('s3://bronze/') or manifest.source_path.startswith('s3a://bronze/')) %}
     <a href="/wizard/silver?source={{ manifest.id }}" class="btn btn-sm btn-success">
@@ -946,6 +954,112 @@ FROM delta_scan('{{ manifest.source_path }}');</pre>
 
   </div>{# /col-lg-4 #}
 </div>
+
+{# ── AGENT-10: Modal "Forklar med AI" (epic #165) ── #}
+<div class="modal fade" id="explainModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-stars me-2 text-success"></i>AI-forklaring</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div id="explain-loading" class="text-center py-4 d-none">
+          <div class="spinner-border text-success"></div>
+          <p class="mt-3 mb-0 text-muted small">Henter forklaring fra AI… <span id="explain-elapsed">0</span>s</p>
+        </div>
+        <div id="explain-error" class="alert alert-danger d-none"></div>
+        <div id="explain-content" class="d-none"></div>
+        <div id="explain-meta" class="small text-muted mt-3 d-none"></div>
+      </div>
+      <div class="modal-footer">
+        <button id="explain-retry" type="button" class="btn btn-outline-secondary d-none">
+          <i class="bi bi-arrow-clockwise me-1"></i>Forsøk på nytt
+        </button>
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Lukk</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/marked@13/marked.min.js"></script>
+<script>
+(function() {
+  const explainBtn   = document.getElementById("explain-btn");
+  const modalEl      = document.getElementById("explainModal");
+  if (!explainBtn || !modalEl) return;
+
+  const loadingEl = document.getElementById("explain-loading");
+  const errorEl   = document.getElementById("explain-error");
+  const contentEl = document.getElementById("explain-content");
+  const metaEl    = document.getElementById("explain-meta");
+  const elapsedEl = document.getElementById("explain-elapsed");
+  const retryBtn  = document.getElementById("explain-retry");
+  const productId = explainBtn.dataset.productId;
+  let timer = null;
+
+  modalEl.addEventListener("shown.bs.modal", () => {
+    if (!contentEl.classList.contains("d-none")) return;  // ikke re-fetch hvis vi allerede har innhold
+    fetchExplanation();
+  });
+
+  retryBtn.addEventListener("click", () => fetchExplanation());
+
+  async function fetchExplanation() {
+    errorEl.classList.add("d-none");
+    contentEl.classList.add("d-none");
+    metaEl.classList.add("d-none");
+    retryBtn.classList.add("d-none");
+    loadingEl.classList.remove("d-none");
+    elapsedEl.textContent = "0";
+    const start = Date.now();
+    timer = setInterval(() => {
+      elapsedEl.textContent = Math.floor((Date.now() - start) / 1000);
+    }, 1000);
+
+    try {
+      const resp = await fetch(`/api/products/${encodeURIComponent(productId)}/explain`);
+      clearInterval(timer);
+      loadingEl.classList.add("d-none");
+
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({detail: resp.statusText}));
+        errorEl.textContent = "Feil: " + (typeof body.detail === "string" ? body.detail : JSON.stringify(body.detail));
+        errorEl.classList.remove("d-none");
+        retryBtn.classList.remove("d-none");
+        return;
+      }
+      const data = await resp.json();
+      const html = window.marked ? marked.parse(data.explanation_markdown) : escapeMd(data.explanation_markdown);
+      contentEl.innerHTML = html;
+      contentEl.classList.remove("d-none");
+      const metaParts = [];
+      if (data.cached) metaParts.push(`<i class="bi bi-cloud-arrow-down"></i> Cachet svar — generert ${formatDate(data.generated_at)}`);
+      else             metaParts.push(`<i class="bi bi-cpu"></i> Generert nå — Haiku-modellen (${(data.input_tokens || 0) + (data.output_tokens || 0)} tokens)`);
+      metaEl.innerHTML = metaParts.join(" · ");
+      metaEl.classList.remove("d-none");
+      retryBtn.classList.remove("d-none");
+    } catch (err) {
+      clearInterval(timer);
+      loadingEl.classList.add("d-none");
+      errorEl.textContent = "Nettverksfeil: " + err.message;
+      errorEl.classList.remove("d-none");
+      retryBtn.classList.remove("d-none");
+    }
+  }
+
+  function escapeMd(s) {
+    const div = document.createElement("div");
+    div.textContent = s;
+    return "<pre style='white-space: pre-wrap;'>" + div.innerHTML + "</pre>";
+  }
+
+  function formatDate(iso) {
+    if (!iso) return "";
+    try { return new Date(iso).toLocaleString("nb-NO"); } catch { return iso; }
+  }
+})();
+</script>
 {% endblock %}
 
 {# ── Modal: AI-generert beskrivelse ── #}

@@ -169,9 +169,18 @@ def upsert_to_silver(spark: SparkSession, df: DataFrame, target: str, primary_ke
         log.info(f"Created Silver table at {target} with {df.count()} rows")
 
 
+def _normalize_s3_path(path: str) -> str:
+    """Normaliser s3:// → s3a:// — jobben har kun S3A-driveren konfigurert
+    via spark.hadoop.fs.s3a.*. Wizarden lagrer paths som s3:// i configen,
+    så vi normaliserer ved bruk i stedet for å kreve at den endres."""
+    if isinstance(path, str) and path.startswith("s3://"):
+        return "s3a://" + path[len("s3://"):]
+    return path
+
+
 def run(spark: SparkSession, config: dict) -> None:
-    source           = config["source"]
-    target           = config["target"]
+    source           = _normalize_s3_path(config["source"])
+    target           = _normalize_s3_path(config["target"])
     primary_key      = config["primary_key"]
     null_rules       = config.get("null_handling", {})
     cast_rules       = config.get("cast", {})
@@ -219,25 +228,30 @@ def run(spark: SparkSession, config: dict) -> None:
     })
 
 
-def _load_config(path: str) -> dict:
-    """Les config-JSON fra lokal sti eller S3/S3A (SILVER-3)."""
+def _load_config(spark, path: str) -> dict:
+    """Les config-JSON fra lokal sti eller S3/S3A (SILVER-3).
+
+    For S3-stier brukes Spark/Hadoop S3A — som allerede er konfigurert
+    via spark.hadoop.fs.s3a.*-conf — slik at vi unngår en separat
+    boto3-avhengighet i Spark-imaget."""
     if path.startswith(("s3://", "s3a://")):
-        import os
-        import boto3
-        from botocore.client import Config as BotoConfig
-        # s3:// og s3a:// behandles likt — det er bucket+key
-        no_scheme = path.split("://", 1)[1]
-        bucket, key = no_scheme.split("/", 1)
-        s3 = boto3.client(
-            "s3",
-            endpoint_url=os.environ.get("AWS_ENDPOINT_URL", "http://minio.slettix-analytics.svc.cluster.local:9000"),
-            aws_access_key_id=os.environ.get("AWS_ACCESS_KEY_ID", "admin"),
-            aws_secret_access_key=os.environ.get("AWS_SECRET_ACCESS_KEY", "changeme"),
-            config=BotoConfig(signature_version="s3v4"),
-        )
-        body = s3.get_object(Bucket=bucket, Key=key)["Body"].read()
-        return json.loads(body)
-    return json.loads(Path(path).read_text())
+        # S3A er den eneste konfigurerte S3-driveren i jobben; normaliser
+        # s3:// → s3a:// så Hadoop ikke faller tilbake på s3n eller feiler.
+        if path.startswith("s3://"):
+            path = "s3a://" + path[len("s3://"):]
+        # wholetext må settes via reader-kwarg (ikke .option(...)) — som boolsk
+        # via .option() konverteres True → "True", og Spark krever "true".
+        content = spark.read.text(path, wholetext=True).collect()[0][0]
+        data = json.loads(content)
+    else:
+        data = json.loads(Path(path).read_text())
+    # Silver-wizarden lagrer alltid en wrapper i s3://config/silver/{slug}/current.json:
+    #   {"slug": ..., "config": {...selve config...}, "saved_at": ...}
+    # (jf. dataportal/main.py:_save_silver_config). Unwrappe når wrapperen er der,
+    # så lokale flate test-configer fortsatt funker uten endring.
+    if isinstance(data, dict) and "config" in data and isinstance(data["config"], dict):
+        return data["config"]
+    return data
 
 
 def main():
@@ -245,15 +259,18 @@ def main():
     parser.add_argument("--config", required=True, help="Path to silver config JSON (lokal eller s3a://)")
     args = parser.parse_args()
 
-    config = _load_config(args.config)
-
+    # SparkSession må bygges før config kan leses fra S3A — Hadoop-driveren
+    # lever i JVM-en og initialiseres med sessionen. AppName avledes derfor
+    # fra config-slug-en (foreldermappen) i stedet for target-tabellen.
+    config_slug = Path(args.config).parent.name or "config"
     spark = (
         SparkSession.builder
-        .appName(f"bronze_to_silver:{config['target'].split('/')[-1]}")
+        .appName(f"bronze_to_silver:{config_slug}")
         .getOrCreate()
     )
     spark.sparkContext.setLogLevel("WARN")
 
+    config = _load_config(spark, args.config)
     run(spark, config)
     spark.stop()
 
