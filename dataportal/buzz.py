@@ -217,6 +217,26 @@ def _write_snapshot(s3, snapshot: dict) -> None:
         log.warning("historikk-trimming feilet (ufarlig): %s", exc)
 
 
+def _calc_recent_projects(top_n: int = 5) -> list[dict]:
+    """PRJ-15: hent top N nylig aktive prosjekter (offentlig metadata)."""
+    try:
+        import projects
+        rows = projects.list_all_projects(include_archived=False)[:top_n]
+        return [
+            {
+                "slug":        p["slug"],
+                "name":        p["name"],
+                "description": (p.get("description") or "")[:140],
+                "updated_at":  p["updated_at"],
+                "created_at":  p["created_at"],
+            }
+            for p in rows
+        ]
+    except Exception as exc:
+        log.warning("Kunne ikke hente prosjekter for buzz: %s", exc)
+        return []
+
+
 def compute_and_write(
     s3_client_factory,
     list_all_fn,
@@ -262,6 +282,7 @@ def compute_and_write(
         "recent_publications":  recent_pubs,
         "popular_questions":    _calc_popular_questions(s3, top_n=5),
         "incidents":            incidents,
+        "recent_projects":      _calc_recent_projects(top_n=5),
     }
 
     _write_snapshot(s3, snapshot)

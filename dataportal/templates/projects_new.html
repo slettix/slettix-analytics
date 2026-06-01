@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Nytt prosjekt — Slettix Analytics{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-3" style="max-width: 700px;">
+  <nav aria-label="breadcrumb" class="mb-3">
+    <ol class="breadcrumb">
+      <li class="breadcrumb-item"><a href="/prosjekter">Prosjekter</a></li>
+      <li class="breadcrumb-item active">Nytt prosjekt</li>
+    </ol>
+  </nav>
+
+  <h1 class="h3 mb-3"><i class="bi bi-plus-circle me-2"></i>Nytt analyseprosjekt</h1>
+
+  <div class="card shadow-sm">
+    <div class="card-body">
+      <form id="create-project-form">
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Navn <span class="text-danger">*</span></label>
+          <input id="p-name" type="text" class="form-control" required maxlength="120"
+                 placeholder="f.eks. Kreft &amp; bostedsmønster Q2 2026">
+          <small class="text-muted">Slug: <code id="slug-preview">—</code></small>
+        </div>
+
+        <div class="mb-3">
+          <label class="form-label fw-semibold">Beskrivelse</label>
+          <textarea id="p-description" class="form-control" rows="4"
+                    placeholder="Hva er hypotesen / formålet med prosjektet?"></textarea>
+          <small class="text-muted">Synlig for alle (metadata er offentlig). Selve artefakt-innholdet krever medlemskap.</small>
+        </div>
+
+        <div id="create-error" class="alert alert-danger d-none"></div>
+
+        <div class="d-flex gap-2">
+          <a href="/prosjekter" class="btn btn-outline-secondary">Avbryt</a>
+          <button type="submit" id="create-btn" class="btn btn-success ms-auto">
+            <i class="bi bi-check-lg me-1"></i>Opprett prosjekt
+          </button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <div class="text-muted small mt-3">
+    <i class="bi bi-info-circle me-1"></i>Du blir automatisk owner. Andre brukere kan inviteres som contributor/viewer fra detaljsiden.
+  </div>
+</div>
+
+<script>
+const nameInput   = document.getElementById("p-name");
+const slugPreview = document.getElementById("slug-preview");
+
+function slugify(s) {
+  return (s || "").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 50) || "prosjekt";
+}
+nameInput.addEventListener("input", () => {
+  slugPreview.textContent = slugify(nameInput.value);
+});
+
+document.getElementById("create-project-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const errEl = document.getElementById("create-error");
+  const btn   = document.getElementById("create-btn");
+  errEl.classList.add("d-none");
+  btn.disabled = true;
+
+  try {
+    const r = await fetch("/api/projects", {
+      method: "POST",
+      headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({
+        name:        document.getElementById("p-name").value,
+        description: document.getElementById("p-description").value,
+      }),
+    });
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      throw new Error(body.detail || ("HTTP " + r.status));
+    }
+    const data = await r.json();
+    window.location.href = "/prosjekter/" + encodeURIComponent(data.slug);
+  } catch (err) {
+    errEl.textContent = "Kunne ikke opprette: " + err.message;
+    errEl.classList.remove("d-none");
+    btn.disabled = false;
+  }
+});
+</script>
+{% endblock %}

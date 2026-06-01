@@ -65,6 +65,17 @@
             id="explain-btn" data-product-id="{{ manifest.id }}">
       <i class="bi bi-chat-square-text me-1"></i>Forklar med AI
     </button>
+    {% if current_user %}
+    {# PRJ-14: legg til i prosjekt #}
+    <div class="dropdown">
+      <button class="btn btn-sm btn-outline-primary dropdown-toggle" data-bs-toggle="dropdown">
+        <i class="bi bi-folder-plus me-1"></i>Legg til i prosjekt
+      </button>
+      <ul class="dropdown-menu dropdown-menu-end" id="add-to-project-menu" data-product-id="{{ manifest.id }}" data-product-name="{{ manifest.name or manifest.id }}">
+        <li><span class="dropdown-item-text text-muted small">Laster…</span></li>
+      </ul>
+    </div>
+    {% endif %}
     {% if manifest.source_path and (manifest.source_path.startswith('s3://bronze/') or manifest.source_path.startswith('s3a://bronze/')) %}
     <a href="/wizard/silver?source={{ manifest.id }}" class="btn btn-sm btn-success">
       <i class="bi bi-arrow-up-right-circle me-1"></i>Lag Silver-produkt
@@ -1428,6 +1439,73 @@ FROM delta_scan('{{ manifest.source_path }}');</pre>
       }
     });
   })();
+</script>
+
+{# PRJ-14: legg til dataprodukt i prosjekt — dropdown fylles ved første åpning #}
+<script>
+(function() {
+  const menu = document.getElementById("add-to-project-menu");
+  if (!menu) return;
+  const productId   = menu.dataset.productId;
+  const productName = menu.dataset.productName;
+  let loaded = false;
+
+  function escapeHtml(s) {
+    return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+  }
+
+  async function loadProjects() {
+    if (loaded) return;
+    loaded = true;
+    try {
+      const r = await fetch("/api/projects?filter=mine");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+      const data = await r.json();
+      const projects = (data.projects || []).filter(p => p.status === "active");
+      if (!projects.length) {
+        menu.innerHTML = `
+          <li><span class="dropdown-item-text text-muted small">Ingen aktive prosjekter</span></li>
+          <li><hr class="dropdown-divider"></li>
+          <li><a class="dropdown-item" href="/prosjekter/ny"><i class="bi bi-plus-circle me-1"></i>Opprett nytt</a></li>`;
+        return;
+      }
+      menu.innerHTML = projects.map(p => `
+        <li><a class="dropdown-item add-to-prj-btn" href="#" data-slug="${escapeHtml(p.slug)}" data-name="${escapeHtml(p.name)}">
+          <i class="bi bi-folder me-1"></i>${escapeHtml(p.name)}
+        </a></li>`).join("") +
+        '<li><hr class="dropdown-divider"></li>' +
+        '<li><a class="dropdown-item small text-muted" href="/prosjekter/ny"><i class="bi bi-plus-circle me-1"></i>Nytt prosjekt</a></li>';
+
+      menu.querySelectorAll(".add-to-prj-btn").forEach(a => {
+        a.addEventListener("click", async (e) => {
+          e.preventDefault();
+          const slug = a.dataset.slug;
+          const r = await fetch(`/api/projects/${slug}/artifacts`, {
+            method: "POST", headers: {"Content-Type":"application/json"},
+            body: JSON.stringify({
+              artifact_type: "dataproduct",
+              title:         productName,
+              ref_id:        productId,
+              description:   `Lagt til fra produktsiden`,
+            }),
+          });
+          if (r.ok) {
+            // Enkel toast — bruker alert for V1
+            alert(`Lagt til "${productName}" i prosjekt ${a.dataset.name}`);
+          } else {
+            const b = await r.json().catch(() => ({}));
+            alert("Kunne ikke legge til: " + (b.detail || ("HTTP " + r.status)));
+          }
+        });
+      });
+    } catch (err) {
+      menu.innerHTML = `<li><span class="dropdown-item-text text-danger small">Feil: ${escapeHtml(err.message)}</span></li>`;
+    }
+  }
+
+  // Last ved første åpning av dropdown
+  menu.parentElement.addEventListener("show.bs.dropdown", loadProjects);
+})();
 </script>
 
 {% if has_access and dashboard_types %}

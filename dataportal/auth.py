@@ -141,6 +141,11 @@ def init_db() -> None:
         if row[0] == 0:
             _create_user_inner(conn, "admin", "admin@slettix.local", "admin", role="admin")
 
+    # PRJ-1 (epic #199): migrer analyseprosjekt-tabellene. Sirkulær import
+    # løses ved å importere her, ikke på modul-nivå.
+    import projects  # noqa: WPS433
+    projects.init_project_schema()
+
 
 def _create_user_inner(conn, username: str, email: str, password: str, role: str = "user") -> dict:
     user_id = str(uuid.uuid4())

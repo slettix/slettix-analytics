@@ -80,7 +80,7 @@ import httpx
 from botocore.client import Config
 from botocore.exceptions import ClientError
 from deltalake import DeltaTable
-from fastapi import FastAPI, Form, HTTPException, Request, Security
+from fastapi import FastAPI, Form, HTTPException, Request, Response, Security
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from fastapi.security import APIKeyHeader
@@ -104,6 +104,7 @@ import agent  # noqa: E402  — AGENT-2/3 pure helpers
 import agent_orchestrator  # noqa: E402  — AGENT-1 Claude-kall, cache, notebook-bygging
 import admin_secrets  # noqa: E402  — administrer API-nøkler via UI
 import buzz  # noqa: E402  — BUZZ-1 pre-computing-aggregat
+import projects  # noqa: E402  — analyseprosjekter (epic #199)
 
 # ── oppstart ───────────────────────────────────────────────────────────────────
 
@@ -3687,6 +3688,443 @@ def api_buzz_personal(request: Request):
     }
 
 
+# ── Analyseprosjekter (epic #199, PRJ-2/3/4/5) ────────────────────────────────
+
+
+def _project_or_404(slug: str) -> dict:
+    p = projects.get_project(slug)
+    if not p:
+        raise HTTPException(status_code=404, detail=f"Prosjekt '{slug}' ikke funnet")
+    return p
+
+
+def _require_member(project: dict, user: dict | None, min_role: str = "viewer") -> None:
+    """403 hvis bruker ikke har minst min_role. Admin alltid OK."""
+    if not user:
+        raise HTTPException(status_code=401, detail="Krever innlogging")
+    if user.get("role") == "admin":
+        return
+    role = projects.get_role(project["id"], user["id"])
+    if not role:
+        raise HTTPException(status_code=403, detail="Krever medlemskap i prosjektet")
+    rank = {"viewer": 0, "contributor": 1, "owner": 2}
+    if rank.get(role, -1) < rank.get(min_role, 0):
+        raise HTTPException(status_code=403, detail=f"Krever rolle '{min_role}' eller høyere (du har '{role}')")
+
+
+def _require_owner(project: dict, user: dict | None) -> None:
+    _require_member(project, user, min_role="owner")
+
+
+# ── PRJ-2: CRUD ──────────────────────────────────────────────────────────────
+
+@app.post("/api/projects", tags=["projects"], summary="PRJ-2: Opprett nytt analyseprosjekt")
+async def api_create_project(request: Request):
+    user = auth.get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Krever innlogging")
+    body = await request.json()
+    name = (body.get("name") or "").strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="name er påkrevd")
+    try:
+        new = projects.create_project(
+            name=name,
+            owner_id=user["id"],
+            description=body.get("description") or "",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    # PRJ-16: opprett Jupyter-mappe best-effort (logger ved feil, men feiler
+    # ikke opprettelsen — prosjektet kan eksistere uten mappen og man kan
+    # lage den senere)
+    jupyter_url = _create_project_jupyter_folder(new["slug"])
+    return {**new, "jupyter_folder_url": jupyter_url}
+
+
+@app.get("/api/projects", tags=["projects"], summary="PRJ-2: List prosjekter (metadata er public)")
+def api_list_projects(request: Request,
+                       filter: str | None = None,
+                       include_archived: bool = False):
+    """filter='mine' returnerer kun prosjekter brukeren er medlem av."""
+    user = auth.get_current_user(request)
+    if filter == "mine":
+        if not user:
+            raise HTTPException(status_code=401, detail="Krever innlogging")
+        return {"projects": projects.list_user_projects(user["id"], include_archived=include_archived)}
+    return {"projects": projects.list_all_projects(include_archived=include_archived)}
+
+
+@app.get("/api/projects/{slug}", tags=["projects"], summary="PRJ-2: Hent prosjekt-metadata")
+def api_get_project(slug: str, request: Request):
+    """Metadata er offentlig — alle innloggede kan se. Artefakter krever medlemskap."""
+    p = _project_or_404(slug)
+    user = auth.get_current_user(request)
+    membership_role = None
+    if user:
+        membership_role = projects.get_role(p["id"], user["id"])
+        if user.get("role") == "admin" and not membership_role:
+            membership_role = "admin"
+    return {**p, "my_role": membership_role}
+
+
+@app.patch("/api/projects/{slug}", tags=["projects"], summary="PRJ-2: Rediger prosjekt (kun owner)")
+async def api_update_project(slug: str, request: Request):
+    p = _project_or_404(slug)
+    user = auth.get_current_user(request)
+    _require_owner(p, user)
+    body = await request.json()
+    try:
+        return projects.update_project(
+            slug,
+            name=body.get("name"),
+            description=body.get("description"),
+            actor_id=user["id"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.post("/api/projects/{slug}/archive", tags=["projects"], summary="PRJ-2: Arkivér prosjekt (kun owner)")
+def api_archive_project(slug: str, request: Request):
+    p = _project_or_404(slug)
+    user = auth.get_current_user(request)
+    _require_owner(p, user)
+    return projects.archive_project(slug, actor_id=user["id"])
+
+
+@app.post("/api/projects/{slug}/unarchive", tags=["projects"], summary="PRJ-2: Gjenåpne arkivert prosjekt (kun owner)")
+def api_unarchive_project(slug: str, request: Request):
+    p = _project_or_404(slug)
+    user = auth.get_current_user(request)
+    _require_owner(p, user)
+    return projects.unarchive_project(slug, actor_id=user["id"])
+
+
+@app.delete("/api/projects/{slug}", tags=["projects"], summary="PRJ-2: Slett prosjekt permanent (kun owner)")
+def api_delete_project(slug: str, request: Request, confirm: bool = False):
+    """Permanent sletting. Krever ?confirm=true for å forhindre uhell."""
+    p = _project_or_404(slug)
+    user = auth.get_current_user(request)
+    _require_owner(p, user)
+    if not confirm:
+        raise HTTPException(status_code=400, detail="Krever ?confirm=true for å bekrefte permanent sletting")
+    projects.delete_project(slug, actor_id=user["id"])
+    return JSONResponse(status_code=204, content=None)
+
+
+# ── PRJ-3: Medlemmer ─────────────────────────────────────────────────────────
+
+@app.get("/api/projects/{slug}/members", tags=["projects"], summary="PRJ-3: List medlemmer")
+def api_list_members(slug: str, request: Request):
+    p = _project_or_404(slug)
+    user = auth.get_current_user(request)
+    _require_member(p, user)  # leser+ kan se medlemslisten
+    return {"members": projects.list_members(p["id"])}
+
+
+@app.post("/api/projects/{slug}/members", tags=["projects"], summary="PRJ-3: Invitér medlem (kun owner)")
+async def api_add_member(slug: str, request: Request):
+    p = _project_or_404(slug)
+    user = auth.get_current_user(request)
+    _require_owner(p, user)
+    body    = await request.json()
+    user_id = body.get("user_id")
+    role    = body.get("role", "viewer")
+    if not user_id:
+        raise HTTPException(status_code=422, detail="user_id er påkrevd")
+    if not auth.get_user_by_id(user_id):
+        raise HTTPException(status_code=404, detail=f"Bruker '{user_id}' finnes ikke")
+    try:
+        return projects.add_member(p["id"], user_id, role, actor_id=user["id"])
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.patch("/api/projects/{slug}/members/{user_id}", tags=["projects"], summary="PRJ-3: Endre rolle (kun owner)")
+async def api_change_role(slug: str, user_id: str, request: Request):
+    p = _project_or_404(slug)
+    user = auth.get_current_user(request)
+    _require_owner(p, user)
+    body = await request.json()
+    new_role = body.get("role")
+    if not new_role:
+        raise HTTPException(status_code=422, detail="role er påkrevd")
+    try:
+        ok = projects.change_role(p["id"], user_id, new_role, actor_id=user["id"])
+        if not ok:
+            raise HTTPException(status_code=404, detail=f"Bruker '{user_id}' er ikke medlem")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+    return {"project_id": p["id"], "user_id": user_id, "role": new_role}
+
+
+@app.delete("/api/projects/{slug}/members/{user_id}", tags=["projects"], summary="PRJ-3: Fjern medlem")
+def api_remove_member(slug: str, user_id: str, request: Request):
+    """Owner kan fjerne andre; medlem kan selv-fjerne. Owner kan ikke fjernes — bruk transfer-ownership."""
+    p = _project_or_404(slug)
+    user = auth.get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Krever innlogging")
+    is_admin = user.get("role") == "admin"
+    is_self  = user["id"] == user_id
+    is_owner = projects.get_role(p["id"], user["id"]) == "owner"
+    if not (is_admin or is_self or is_owner):
+        raise HTTPException(status_code=403, detail="Krever owner-rolle eller du må fjerne deg selv")
+    try:
+        ok = projects.remove_member(p["id"], user_id, actor_id=user["id"])
+        if not ok:
+            raise HTTPException(status_code=404, detail=f"Bruker '{user_id}' er ikke medlem")
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    return JSONResponse(status_code=204, content=None)
+
+
+@app.post("/api/projects/{slug}/members/transfer-ownership", tags=["projects"], summary="PRJ-3: Overfør eierskap")
+async def api_transfer_ownership(slug: str, request: Request):
+    p = _project_or_404(slug)
+    user = auth.get_current_user(request)
+    _require_owner(p, user)
+    body = await request.json()
+    new_owner_id = body.get("new_owner_id")
+    if not new_owner_id:
+        raise HTTPException(status_code=422, detail="new_owner_id er påkrevd")
+    if not auth.get_user_by_id(new_owner_id):
+        raise HTTPException(status_code=404, detail=f"Bruker '{new_owner_id}' finnes ikke")
+    projects.transfer_ownership(p["id"], new_owner_id, actor_id=user["id"])
+    return projects.get_project(slug)
+
+
+# ── PRJ-4: Artefakter ────────────────────────────────────────────────────────
+
+@app.get("/api/projects/{slug}/artifacts", tags=["projects"], summary="PRJ-4: List artefakter (krever medlemskap)")
+def api_list_artifacts(slug: str, request: Request, artifact_type: str | None = None):
+    p = _project_or_404(slug)
+    user = auth.get_current_user(request)
+    _require_member(p, user)
+    return {"artifacts": projects.list_artifacts(p["id"], artifact_type=artifact_type)}
+
+
+@app.post("/api/projects/{slug}/artifacts", tags=["projects"], summary="PRJ-4: Legg til artefakt (krever contributor+)")
+async def api_add_artifact(slug: str, request: Request):
+    p = _project_or_404(slug)
+    user = auth.get_current_user(request)
+    _require_member(p, user, min_role="contributor")
+    body = await request.json()
+    try:
+        return projects.add_artifact(
+            project_id=p["id"],
+            artifact_type=body.get("artifact_type") or "",
+            title=body.get("title") or "",
+            ref_url=body.get("ref_url"),
+            ref_id=body.get("ref_id"),
+            description=body.get("description") or "",
+            tags=body.get("tags") or [],
+            added_by=user["id"],
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc))
+
+
+@app.delete("/api/projects/{slug}/artifacts/{artifact_id}", tags=["projects"], summary="PRJ-4: Fjern artefakt")
+def api_remove_artifact(slug: str, artifact_id: str, request: Request):
+    p = _project_or_404(slug)
+    user = auth.get_current_user(request)
+    _require_member(p, user, min_role="contributor")
+    ok = projects.remove_artifact(p["id"], artifact_id, actor_id=user["id"])
+    if not ok:
+        raise HTTPException(status_code=404, detail="Artefakt finnes ikke i prosjektet")
+    return JSONResponse(status_code=204, content=None)
+
+
+# ── PRJ-5: Aktivitetsfeed ────────────────────────────────────────────────────
+
+@app.get("/api/projects/{slug}/activity", tags=["projects"], summary="PRJ-5: Aktivitetsfeed (krever medlemskap)")
+def api_project_activity(slug: str, request: Request, limit: int = 50):
+    p = _project_or_404(slug)
+    user = auth.get_current_user(request)
+    _require_member(p, user)
+    return {"events": projects.list_events(p["id"], limit=limit)}
+
+
+def _create_project_jupyter_folder(slug: str) -> str | None:
+    """PRJ-16: opprett /projects/<slug>/ i Jupyter Contents API. Best-effort —
+    returnerer mappens URL ved suksess, None ved feil."""
+    try:
+        path = f"projects/{slug}"
+        _HTTPX_CLIENT.put(
+            f"{JUPYTER_URL}/api/contents/{path}",
+            json={"type": "directory", "format": None, "content": None},
+            timeout=10,
+        )
+        return f"{JUPYTER_EXTERNAL_URL}/lab/tree/{path}"
+    except Exception as exc:
+        logging.getLogger(__name__).warning("Jupyter-mappe for %s feilet: %s", slug, exc)
+        return None
+
+
+def _maybe_attach_to_active_project(
+    request: Request,
+    artifact_type: str,
+    title: str,
+    *,
+    ref_url: str | None = None,
+    ref_id: str | None = None,
+    description: str = "",
+    tags: list[str] | None = None,
+) -> dict | None:
+    """PRJ-12/13/14-helper: hvis brukeren er i prosjektrom OG har contributor+,
+    legg til artefakt automatisk. Returner artefakt-dict ved suksess, None ved
+    no-op. Feilet auto-attach (f.eks. utløpt cookie) logges men kraskjer ikke.
+    """
+    p = get_active_project(request)
+    if not p:
+        return None
+    user = auth.get_current_user(request)
+    if not user:
+        return None
+    role = projects.get_role(p["id"], user["id"])
+    if role not in ("owner", "contributor"):
+        return None
+    try:
+        return projects.add_artifact(
+            project_id=p["id"],
+            artifact_type=artifact_type,
+            title=title,
+            ref_url=ref_url,
+            ref_id=ref_id,
+            description=description,
+            tags=tags or [],
+            added_by=user["id"],
+        )
+    except Exception as exc:
+        logging.getLogger(__name__).warning(
+            "auto-attach til prosjekt %s feilet (%s): %s", p["slug"], artifact_type, exc
+        )
+        return None
+
+
+@app.get("/api/users/search", tags=["projects"], summary="Lett brukersøk (innlogget bruker)")
+def api_users_search(request: Request, q: str | None = None, limit: int = 20):
+    """Returnerer brukere som matcher q i username eller email. Brukes av
+    invitér-modalen i PRJ-11 — alle innloggede kan søke (ikke admin-only)."""
+    user = auth.get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Krever innlogging")
+    needle = (q or "").lower().strip()
+    matches = []
+    for u in auth.list_users():
+        if not needle or needle in u["username"].lower() or needle in (u.get("email", "")).lower():
+            matches.append({"id": u["id"], "username": u["username"], "email": u.get("email")})
+        if len(matches) >= limit:
+            break
+    return {"users": matches}
+
+
+# ── PRJ-8/9/10: UI-pages for prosjekter ──────────────────────────────────────
+
+@app.get("/prosjekter", response_class=HTMLResponse, include_in_schema=False)
+def page_projects_browse(request: Request, filter: str | None = None,
+                          include_archived: bool = False):
+    """PRJ-8: Browse-side. Henter data live via /api/projects."""
+    return templates.TemplateResponse("projects_browse.html", _template_ctx(
+        request,
+        filter=filter,
+        show_archived=include_archived,
+    ))
+
+
+@app.get("/prosjekter/ny", response_class=HTMLResponse, include_in_schema=False)
+def page_projects_new(request: Request):
+    """PRJ-9: Opprett-skjema. Krever auth."""
+    user = auth.get_current_user(request)
+    if not user:
+        return RedirectResponse(f"/login?next={urllib.parse.quote('/prosjekter/ny')}", status_code=303)
+    return templates.TemplateResponse("projects_new.html", _template_ctx(request))
+
+
+@app.get("/prosjekter/{slug}", response_class=HTMLResponse, include_in_schema=False)
+def page_projects_detail(request: Request, slug: str):
+    """PRJ-10: Detaljside med tabs. Metadata public; artefakt-innhold krever medlemskap."""
+    p = projects.get_project(slug)
+    if not p:
+        raise HTTPException(status_code=404, detail=f"Prosjekt '{slug}' ikke funnet")
+    user = auth.get_current_user(request)
+    my_role = None
+    if user:
+        my_role = projects.get_role(p["id"], user["id"])
+        if user.get("role") == "admin" and not my_role:
+            my_role = "admin"
+    # Jinja-templaten trenger created_at som datetime for relativ-tid-utregning
+    created_dt = None
+    try:
+        created_dt = datetime.fromisoformat(p["created_at"])
+    except Exception:
+        pass
+    return templates.TemplateResponse("projects_detail.html", _template_ctx(
+        request,
+        project={**p, "created_at_dt": created_dt},
+        my_role=my_role,
+        now=datetime.now(tz=timezone.utc),
+    ))
+
+
+# ── PRJ-6: Prosjektrom-context ───────────────────────────────────────────────
+# En aktiv prosjekt-context lagres som session-cookie. Wizards (agent,
+# pipeline-builder, osv.) leser den og auto-attach genererte artefakter
+# til pågående prosjekt. Cookie er ikke httponly så client-side-JS kan
+# vise relevante banner og overstyre flyt.
+
+_ACTIVE_PROJECT_COOKIE = "active_project"
+
+
+def _read_active_project_slug(request: Request) -> str | None:
+    return request.cookies.get(_ACTIVE_PROJECT_COOKIE)
+
+
+def get_active_project(request: Request) -> dict | None:
+    """Returner aktivt prosjekt-objekt eller None. Brukes av template-ctx
+    og av wizards som vil auto-attach artefakter."""
+    slug = _read_active_project_slug(request)
+    if not slug:
+        return None
+    return projects.get_project(slug)
+
+
+@app.post("/api/projects/{slug}/enter", tags=["projects"], summary="PRJ-6: Gå inn i prosjektrom")
+def api_enter_project(slug: str, request: Request, response: Response):
+    """Setter active_project-cookie. Krever contributor+-medlemskap — viewers
+    kan ikke gå inn (de oppretter ikke artefakter uansett)."""
+    p = _project_or_404(slug)
+    user = auth.get_current_user(request)
+    _require_member(p, user, min_role="contributor")
+    response.set_cookie(
+        key=_ACTIVE_PROJECT_COOKIE,
+        value=slug,
+        max_age=None,          # session-bound (slettes når browser lukkes)
+        httponly=False,        # JS må kunne lese — wizards-frontend bruker den
+        samesite="lax",
+        secure=False,           # dev/test-cluster; enable i prod via reverse proxy
+    )
+    return {"active_project": slug, "name": p["name"], "my_role": projects.get_role(p["id"], user["id"])}
+
+
+@app.post("/api/projects/leave", tags=["projects"], summary="PRJ-6: Forlat aktivt prosjektrom")
+def api_leave_project(request: Request, response: Response):
+    response.delete_cookie(_ACTIVE_PROJECT_COOKIE)
+    return {"active_project": None}
+
+
+@app.get("/api/projects/current", tags=["projects"], summary="PRJ-6: Hent aktivt prosjekt (eller null)")
+def api_current_project(request: Request):
+    p = get_active_project(request)
+    if not p:
+        return {"active_project": None}
+    user = auth.get_current_user(request)
+    my_role = projects.get_role(p["id"], user["id"]) if user else None
+    return {"active_project": p["slug"], "name": p["name"], "my_role": my_role}
+
+
 # ── Admin: API-nøkler ─────────────────────────────────────────────────────────
 
 
@@ -3772,12 +4210,13 @@ def _superset_sqllab_url(manifest: dict, schema: list[dict] | None = None) -> st
 def _template_ctx(request: Request, **kwargs) -> dict:
     """Felles malkontekst med innlogget bruker og globale URL-er."""
     return {
-        "request":      request,
-        "current_user": auth.get_current_user(request),
-        "airflow_url":  AIRFLOW_EXTERNAL_URL,
-        "jupyter_url":  JUPYTER_EXTERNAL_URL,
-        "superset_url": SUPERSET_EXTERNAL_URL,
-        "minio_url":    MINIO_EXTERNAL_URL,
+        "request":        request,
+        "current_user":   auth.get_current_user(request),
+        "active_project": get_active_project(request),
+        "airflow_url":    AIRFLOW_EXTERNAL_URL,
+        "jupyter_url":    JUPYTER_EXTERNAL_URL,
+        "superset_url":   SUPERSET_EXTERNAL_URL,
+        "minio_url":      MINIO_EXTERNAL_URL,
         **kwargs,
     }
 
@@ -4210,6 +4649,18 @@ async def api_wizard_silver_deploy(request: Request):
         status["steps"]["register_manifest"] = {"ok": False, "error": str(exc)}
         status["manifest_status"] = "failed"
 
+    # PRJ-13: auto-attach Silver-produktet som dataprodukt-artefakt i pågående prosjekt
+    auto_attached = _maybe_attach_to_active_project(
+        request,
+        artifact_type="dataproduct",
+        title=silver_manifest.get("name") or product_id,
+        ref_id=product_id,
+        description=f"Generert av silver-wizard (kilde: {source_product_id})",
+        tags=["silver-wizard"],
+    )
+    if auto_attached:
+        status["auto_attached_to_project"] = True
+
     return status
 
 
@@ -4383,6 +4834,16 @@ async def api_wizard_agent_ask(request: Request):
     if user:
         auth.track_usage("__platform__", "agent_ask", user["id"])
 
+    # PRJ-12: auto-attach til aktivt prosjekt hvis brukeren er i prosjektrom
+    auto_attached = _maybe_attach_to_active_project(
+        request,
+        artifact_type="notebook",
+        title=question[:120],
+        ref_url=_jupyter_open_url(filename),
+        description=f"Generert av agent-veiviseren ({model_key}). Spørsmål: {question}",
+        tags=["agent-generert"],
+    )
+
     return {
         "request_id":             request_id,
         "answer_summary":         agent_resp.summary,
@@ -4395,6 +4856,10 @@ async def api_wizard_agent_ask(request: Request):
         "input_tokens":           agent_resp.input_tokens,
         "output_tokens":          agent_resp.output_tokens,
         "cell_count":             len(agent_resp.cells),
+        "auto_attached_to":       auto_attached and {
+            "project_slug": (get_active_project(request) or {}).get("slug"),
+            "artifact_id":  auto_attached["id"],
+        },
     }
 
 

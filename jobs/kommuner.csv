@@ -1,0 +1,358 @@
+fylke;fylkesnummer;kommunenavn;kommunenr;gammelt_kommunenr
+Oslo;03;Oslo;0301;0301
+Rogaland;11;Eigersund;1101;1101
+Rogaland;11;Stavanger;1103;1103
+Rogaland;11;Haugesund;1106;1106
+Rogaland;11;Sandnes;1108;1108
+Rogaland;11;Sokndal;1111;1111
+Rogaland;11;Lund;1112;1112
+Rogaland;11;Bjerkreim;1114;1114
+Rogaland;11;Hå;1119;1119
+Rogaland;11;Klepp;1120;1120
+Rogaland;11;Time;1121;1121
+Rogaland;11;Gjesdal;1122;1122
+Rogaland;11;Sola;1124;1124
+Rogaland;11;Randaberg;1127;1127
+Rogaland;11;Strand;1130;1130
+Rogaland;11;Hjelmeland;1133;1133
+Rogaland;11;Suldal;1134;1134
+Rogaland;11;Sauda;1135;1135
+Rogaland;11;Kvitsøy;1144;1144
+Rogaland;11;Bokn;1145;1145
+Rogaland;11;Tysvær;1146;1146
+Rogaland;11;Karmøy;1149;1149
+Rogaland;11;Utsira;1151;1151
+Rogaland;11;Vindafjord;1160;1160
+Møre og Romsdal;15;Kristiansund;1505;1505
+Møre og Romsdal;15;Molde;1506;1506
+Møre og Romsdal;15;Ålesund;1508;1507
+Møre og Romsdal;15;Vanylven;1511;1511
+Møre og Romsdal;15;Sande;1514;1514
+Møre og Romsdal;15;Herøy;1515;1515
+Møre og Romsdal;15;Ulstein;1516;1516
+Møre og Romsdal;15;Hareid;1517;1517
+Møre og Romsdal;15;Ørsta;1520;1520
+Møre og Romsdal;15;Stranda;1525;1525
+Møre og Romsdal;15;Sykkylven;1528;1528
+Møre og Romsdal;15;Sula;1531;1531
+Møre og Romsdal;15;Giske;1532;1532
+Møre og Romsdal;15;Vestnes;1535;1535
+Møre og Romsdal;15;Rauma;1539;1539
+Møre og Romsdal;15;Aukra;1547;1547
+Møre og Romsdal;15;Averøy;1554;1554
+Møre og Romsdal;15;Gjemnes;1557;1557
+Møre og Romsdal;15;Tingvoll;1560;1560
+Møre og Romsdal;15;Sunndal;1563;1563
+Møre og Romsdal;15;Surnadal;1566;1566
+Møre og Romsdal;15;Smøla;1573;1573
+Møre og Romsdal;15;Aure;1576;1576
+Møre og Romsdal;15;Volda;1577;1577
+Møre og Romsdal;15;Fjord;1578;1578
+Møre og Romsdal;15;Hustadvika;1579;1579
+Møre og Romsdal;15;Haram;1580;*
+Nordland - Nordlánnda;18;Bodø;1804;1804
+Nordland - Nordlánnda;18;Narvik;1806;1806
+Nordland - Nordlánnda;18;Bindal;1811;1811
+Nordland - Nordlánnda;18;Sømna;1812;1812
+Nordland - Nordlánnda;18;Brønnøy;1813;1813
+Nordland - Nordlánnda;18;Vega;1815;1815
+Nordland - Nordlánnda;18;Vevelstad;1816;1816
+Nordland - Nordlánnda;18;Herøy;1818;1818
+Nordland - Nordlánnda;18;Alstahaug;1820;1820
+Nordland - Nordlánnda;18;Leirfjord;1822;1822
+Nordland - Nordlánnda;18;Vefsn;1824;1824
+Nordland - Nordlánnda;18;Grane;1825;1825
+Nordland - Nordlánnda;18;Aarborte - Hattfjelldal;1826;1826
+Nordland - Nordlánnda;18;Dønna;1827;1827
+Nordland - Nordlánnda;18;Nesna;1828;1828
+Nordland - Nordlánnda;18;Hemnes;1832;1832
+Nordland - Nordlánnda;18;Rana;1833;1833
+Nordland - Nordlánnda;18;Lurøy;1834;1834
+Nordland - Nordlánnda;18;Træna;1835;1835
+Nordland - Nordlánnda;18;Rødøy;1836;1836
+Nordland - Nordlánnda;18;Meløy;1837;1837
+Nordland - Nordlánnda;18;Gildeskål;1838;1838
+Nordland - Nordlánnda;18;Beiarn;1839;1839
+Nordland - Nordlánnda;18;Saltdal;1840;1840
+Nordland - Nordlánnda;18;Fauske - Fuossko;1841;1841
+Nordland - Nordlánnda;18;Sørfold;1845;1845
+Nordland - Nordlánnda;18;Steigen;1848;1848
+Nordland - Nordlánnda;18;Lødingen;1851;1851
+Nordland - Nordlánnda;18;Evenes - Evenášši;1853;1853
+Nordland - Nordlánnda;18;Røst;1856;1856
+Nordland - Nordlánnda;18;Værøy;1857;1857
+Nordland - Nordlánnda;18;Flakstad;1859;1859
+Nordland - Nordlánnda;18;Vestvågøy;1860;1860
+Nordland - Nordlánnda;18;Vågan;1865;1865
+Nordland - Nordlánnda;18;Hadsel;1866;1866
+Nordland - Nordlánnda;18;Bø;1867;1867
+Nordland - Nordlánnda;18;Øksnes;1868;1868
+Nordland - Nordlánnda;18;Sortland - Suortá;1870;1870
+Nordland - Nordlánnda;18;Andøy;1871;1871
+Nordland - Nordlánnda;18;Moskenes;1874;1874
+Nordland - Nordlánnda;18;Hábmer - Hamarøy;1875;1875
+Østfold;31;Halden;3101;3001
+Østfold;31;Moss;3103;3002
+Østfold;31;Sarpsborg;3105;3003
+Østfold;31;Fredrikstad;3107;3004
+Østfold;31;Hvaler;3110;3011
+Østfold;31;Råde;3112;3017
+Østfold;31;Våler;3114;3018
+Østfold;31;Skiptvet;3116;3015
+Østfold;31;Indre Østfold;3118;3014
+Østfold;31;Rakkestad;3120;3016
+Østfold;31;Marker;3122;3013
+Østfold;31;Aremark;3124;3012
+Akershus;32;Bærum;3201;3024
+Akershus;32;Asker;3203;3025
+Akershus;32;Lillestrøm;3205;3030
+Akershus;32;Nordre Follo;3207;3020
+Akershus;32;Ullensaker;3209;3033
+Akershus;32;Nesodden;3212;3023
+Akershus;32;Frogn;3214;3022
+Akershus;32;Vestby;3216;3019
+Akershus;32;Ås;3218;3021
+Akershus;32;Enebakk;3220;3028
+Akershus;32;Lørenskog;3222;3029
+Akershus;32;Rælingen;3224;3027
+Akershus;32;Aurskog-Høland;3226;3026
+Akershus;32;Nes;3228;3034
+Akershus;32;Gjerdrum;3230;3032
+Akershus;32;Nittedal;3232;3031
+Akershus;32;Lunner;3234;3054
+Akershus;32;Jevnaker;3236;3053
+Akershus;32;Nannestad;3238;3036
+Akershus;32;Eidsvoll;3240;3035
+Akershus;32;Hurdal;3242;3037
+Buskerud;33;Drammen;3301;3005
+Buskerud;33;Kongsberg;3303;3006
+Buskerud;33;Ringerike;3305;3007
+Buskerud;33;Hole;3310;3038
+Buskerud;33;Lier;3312;3049
+Buskerud;33;Øvre Eiker;3314;3048
+Buskerud;33;Modum;3316;3047
+Buskerud;33;Krødsherad;3318;3046
+Buskerud;33;Flå;3320;3039
+Buskerud;33;Nesbyen;3322;3040
+Buskerud;33;Gol;3324;3041
+Buskerud;33;Hemsedal;3326;3042
+Buskerud;33;Ål;3328;3043
+Buskerud;33;Hol;3330;3044
+Buskerud;33;Sigdal;3332;3045
+Buskerud;33;Flesberg;3334;3050
+Buskerud;33;Rollag;3336;3051
+Buskerud;33;Nore og Uvdal;3338;3052
+Innlandet;34;Kongsvinger;3401;3401
+Innlandet;34;Hamar;3403;3403
+Innlandet;34;Lillehammer;3405;3405
+Innlandet;34;Gjøvik;3407;3407
+Innlandet;34;Ringsaker;3411;3411
+Innlandet;34;Løten;3412;3412
+Innlandet;34;Stange;3413;3413
+Innlandet;34;Nord-Odal;3414;3414
+Innlandet;34;Sør-Odal;3415;3415
+Innlandet;34;Eidskog;3416;3416
+Innlandet;34;Grue;3417;3417
+Innlandet;34;Åsnes;3418;3418
+Innlandet;34;Våler;3419;3419
+Innlandet;34;Elverum;3420;3420
+Innlandet;34;Trysil;3421;3421
+Innlandet;34;Åmot;3422;3422
+Innlandet;34;Stor-Elvdal;3423;3423
+Innlandet;34;Rendalen;3424;3424
+Innlandet;34;Engerdal;3425;3425
+Innlandet;34;Tolga;3426;3426
+Innlandet;34;Tynset;3427;3427
+Innlandet;34;Alvdal;3428;3428
+Innlandet;34;Folldal;3429;3429
+Innlandet;34;Os;3430;3430
+Innlandet;34;Dovre;3431;3431
+Innlandet;34;Lesja;3432;3432
+Innlandet;34;Skjåk;3433;3433
+Innlandet;34;Lom;3434;3434
+Innlandet;34;Vågå;3435;3435
+Innlandet;34;Nord-Fron;3436;3436
+Innlandet;34;Sel;3437;3437
+Innlandet;34;Sør-Fron;3438;3438
+Innlandet;34;Ringebu;3439;3439
+Innlandet;34;Øyer;3440;3440
+Innlandet;34;Gausdal;3441;3441
+Innlandet;34;Østre Toten;3442;3442
+Innlandet;34;Vestre Toten;3443;3443
+Innlandet;34;Gran;3446;3446
+Innlandet;34;Søndre Land;3447;3447
+Innlandet;34;Nordre Land;3448;3448
+Innlandet;34;Sør-Aurdal;3449;3449
+Innlandet;34;Etnedal;3450;3450
+Innlandet;34;Nord-Aurdal;3451;3451
+Innlandet;34;Vestre Slidre;3452;3452
+Innlandet;34;Øystre Slidre;3453;3453
+Innlandet;34;Vang;3454;3454
+Vestfold;39;Horten;3901;3801
+Vestfold;39;Holmestrand;3903;3802
+Vestfold;39;Tønsberg;3905;3803
+Vestfold;39;Sandefjord;3907;3804
+Vestfold;39;Larvik;3909;3805
+Vestfold;39;Færder;3911;3811
+Telemark;40;Porsgrunn;4001;3806
+Telemark;40;Skien;4003;3807
+Telemark;40;Notodden;4005;3808
+Telemark;40;Siljan;4010;3812
+Telemark;40;Bamble;4012;3813
+Telemark;40;Kragerø;4014;3814
+Telemark;40;Drangedal;4016;3815
+Telemark;40;Nome;4018;3816
+Telemark;40;Midt-Telemark;4020;3817
+Telemark;40;Seljord;4022;3820
+Telemark;40;Hjartdal;4024;3819
+Telemark;40;Tinn;4026;3818
+Telemark;40;Kviteseid;4028;3821
+Telemark;40;Nissedal;4030;3822
+Telemark;40;Fyresdal;4032;3823
+Telemark;40;Tokke;4034;3824
+Telemark;40;Vinje;4036;3825
+Agder;42;Risør;4201;4201
+Agder;42;Grimstad;4202;4202
+Agder;42;Arendal;4203;4203
+Agder;42;Kristiansand;4204;4204
+Agder;42;Lindesnes;4205;4205
+Agder;42;Farsund;4206;4206
+Agder;42;Flekkefjord;4207;4207
+Agder;42;Gjerstad;4211;4211
+Agder;42;Vegårshei;4212;4212
+Agder;42;Tvedestrand;4213;4213
+Agder;42;Froland;4214;4214
+Agder;42;Lillesand;4215;4215
+Agder;42;Birkenes;4216;4216
+Agder;42;Åmli;4217;4217
+Agder;42;Iveland;4218;4218
+Agder;42;Evje og Hornnes;4219;4219
+Agder;42;Bygland;4220;4220
+Agder;42;Valle;4221;4221
+Agder;42;Bykle;4222;4222
+Agder;42;Vennesla;4223;4223
+Agder;42;Åseral;4224;4224
+Agder;42;Lyngdal;4225;4225
+Agder;42;Hægebostad;4226;4226
+Agder;42;Kvinesdal;4227;4227
+Agder;42;Sirdal;4228;4228
+Vestland;46;Bergen;4601;4601
+Vestland;46;Kinn;4602;4602
+Vestland;46;Etne;4611;4611
+Vestland;46;Sveio;4612;4612
+Vestland;46;Bømlo;4613;4613
+Vestland;46;Stord;4614;4614
+Vestland;46;Fitjar;4615;4615
+Vestland;46;Tysnes;4616;4616
+Vestland;46;Kvinnherad;4617;4617
+Vestland;46;Ullensvang;4618;4618
+Vestland;46;Eidfjord;4619;4619
+Vestland;46;Ulvik;4620;4620
+Vestland;46;Voss;4621;4621
+Vestland;46;Kvam;4622;4622
+Vestland;46;Samnanger;4623;4623
+Vestland;46;Bjørnafjorden;4624;4624
+Vestland;46;Austevoll;4625;4625
+Vestland;46;Øygarden;4626;4626
+Vestland;46;Askøy;4627;4627
+Vestland;46;Vaksdal;4628;4628
+Vestland;46;Modalen;4629;4629
+Vestland;46;Osterøy;4630;4630
+Vestland;46;Alver;4631;4631
+Vestland;46;Austrheim;4632;4632
+Vestland;46;Fedje;4633;4633
+Vestland;46;Masfjorden;4634;4634
+Vestland;46;Gulen;4635;4635
+Vestland;46;Solund;4636;4636
+Vestland;46;Hyllestad;4637;4637
+Vestland;46;Høyanger;4638;4638
+Vestland;46;Vik;4639;4639
+Vestland;46;Sogndal;4640;4640
+Vestland;46;Aurland;4641;4641
+Vestland;46;Lærdal;4642;4642
+Vestland;46;Årdal;4643;4643
+Vestland;46;Luster;4644;4644
+Vestland;46;Askvoll;4645;4645
+Vestland;46;Fjaler;4646;4646
+Vestland;46;Sunnfjord;4647;4647
+Vestland;46;Bremanger;4648;4648
+Vestland;46;Stad;4649;4649
+Vestland;46;Gloppen;4650;4650
+Vestland;46;Stryn;4651;4651
+Trøndelag - Trööndelage;50;Trondheim - Tråante;5001;5001
+Trøndelag - Trööndelage;50;Steinkjer;5006;5006
+Trøndelag - Trööndelage;50;Namsos - Nåavmesjenjaelmie;5007;5007
+Trøndelag - Trööndelage;50;Frøya;5014;5014
+Trøndelag - Trööndelage;50;Osen;5020;5020
+Trøndelag - Trööndelage;50;Oppdal;5021;5021
+Trøndelag - Trööndelage;50;Rennebu;5022;5022
+Trøndelag - Trööndelage;50;Rosse - Røros;5025;5025
+Trøndelag - Trööndelage;50;Holtålen;5026;5026
+Trøndelag - Trööndelage;50;Midtre Gauldal;5027;5027
+Trøndelag - Trööndelage;50;Melhus;5028;5028
+Trøndelag - Trööndelage;50;Skaun;5029;5029
+Trøndelag - Trööndelage;50;Malvik;5031;5031
+Trøndelag - Trööndelage;50;Selbu;5032;5032
+Trøndelag - Trööndelage;50;Tydal;5033;5033
+Trøndelag - Trööndelage;50;Meråker;5034;5034
+Trøndelag - Trööndelage;50;Stjørdal;5035;5035
+Trøndelag - Trööndelage;50;Frosta;5036;5036
+Trøndelag - Trööndelage;50;Levanger;5037;5037
+Trøndelag - Trööndelage;50;Verdal;5038;5038
+Trøndelag - Trööndelage;50;Snåase - Snåsa;5041;5041
+Trøndelag - Trööndelage;50;Lierne;5042;5042
+Trøndelag - Trööndelage;50;Raarvihke - Røyrvik;5043;5043
+Trøndelag - Trööndelage;50;Namsskogan;5044;5044
+Trøndelag - Trööndelage;50;Grong;5045;5045
+Trøndelag - Trööndelage;50;Høylandet;5046;5046
+Trøndelag - Trööndelage;50;Overhalla;5047;5047
+Trøndelag - Trööndelage;50;Flatanger;5049;5049
+Trøndelag - Trööndelage;50;Leka;5052;5052
+Trøndelag - Trööndelage;50;Inderøy;5053;5053
+Trøndelag - Trööndelage;50;Indre Fosen;5054;5054
+Trøndelag - Trööndelage;50;Heim;5055;5055
+Trøndelag - Trööndelage;50;Hitra;5056;5056
+Trøndelag - Trööndelage;50;Ørland;5057;5057
+Trøndelag - Trööndelage;50;Åfjord;5058;5058
+Trøndelag - Trööndelage;50;Orkland;5059;5059
+Trøndelag - Trööndelage;50;Nærøysund;5060;5060
+Trøndelag - Trööndelage;50;Rindal;5061;5061
+Troms – Romsa – Tromssa;55;Tromsø;5501;5401
+Troms – Romsa – Tromssa;55;Harstad - Hárstták;5503;5402
+Troms – Romsa – Tromssa;55;Kvæfjord;5510;5411
+Troms – Romsa – Tromssa;55;Tjeldsund - Dielddanuorri;5512;5412
+Troms – Romsa – Tromssa;55;Ibestad;5514;5413
+Troms – Romsa – Tromssa;55;Gratangen;5516;5414
+Troms – Romsa – Tromssa;55;Loabák - Lavangen;5518;5415
+Troms – Romsa – Tromssa;55;Bardu;5520;5416
+Troms – Romsa – Tromssa;55;Salangen;5522;5417
+Troms – Romsa – Tromssa;55;Målselv;5524;5418
+Troms – Romsa – Tromssa;55;Sørreisa;5526;5419
+Troms – Romsa – Tromssa;55;Dyrøy;5528;5420
+Troms – Romsa – Tromssa;55;Senja;5530;5421
+Troms – Romsa – Tromssa;55;Balsfjord;5532;5422
+Troms – Romsa – Tromssa;55;Karlsøy;5534;5423
+Troms – Romsa – Tromssa;55;Lyngen;5536;5424
+Troms – Romsa – Tromssa;55;Storfjord - Omasvuotna - Omasvuono;5538;5425
+Troms – Romsa – Tromssa;55;Gáivuotna - Kåfjord - Kaivuono;5540;5426
+Troms – Romsa – Tromssa;55;Skjervøy;5542;5427
+Troms – Romsa – Tromssa;55;Nordreisa - Ráisa - Raisi;5544;5428
+Troms – Romsa – Tromssa;55;Kvænangen;5546;5429
+Finnmark – Finnmárku – Finmarkku;56;Alta;5601;5403
+Finnmark – Finnmárku – Finmarkku;56;Hammerfest - Hámmerfeasta;5603;5406
+Finnmark – Finnmárku – Finmarkku;56;Sør-Varanger;5605;5444
+Finnmark – Finnmárku – Finmarkku;56;Vadsø;5607;5405
+Finnmark – Finnmárku – Finmarkku;56;Kárášjohka - Karasjok;5610;5437
+Finnmark – Finnmárku – Finmarkku;56;Guovdageaidnu - Kautokeino;5612;5430
+Finnmark – Finnmárku – Finmarkku;56;Loppa;5614;5432
+Finnmark – Finnmárku – Finmarkku;56;Hasvik;5616;5433
+Finnmark – Finnmárku – Finmarkku;56;Måsøy;5618;5434
+Finnmark – Finnmárku – Finmarkku;56;Nordkapp;5620;5435
+Finnmark – Finnmárku – Finmarkku;56;Porsanger - Porsáŋgu - Porsanki;5622;5436
+Finnmark – Finnmárku – Finmarkku;56;Lebesby;5624;5438
+Finnmark – Finnmárku – Finmarkku;56;Gamvik;5626;5439
+Finnmark – Finnmárku – Finmarkku;56;Deatnu - Tana;5628;5441
+Finnmark – Finnmárku – Finmarkku;56;Berlevåg;5630;5440
+Finnmark – Finnmárku – Finmarkku;56;Båtsfjord;5632;5443
+Finnmark – Finnmárku – Finmarkku;56;Vardø;5634;5404
+Finnmark – Finnmárku – Finmarkku;56;Unjárga - Nesseby;5636;5442

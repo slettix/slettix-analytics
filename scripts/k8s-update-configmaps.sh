@@ -35,6 +35,9 @@ update_jobs() {
   # slik at DAG-kode kan lese manifester fra /opt/airflow/jobs/<product_id>.json
   _tmpdir=$(mktemp -d)
   cp jobs/*.py "$_tmpdir/"
+  # CSV-er er referansedata DAG-er trenger (f.eks. kommuner.csv) — uten
+  # disse failes load_*_reference-tasks med FileNotFoundError.
+  cp jobs/*.csv "$_tmpdir/" 2>/dev/null || true
   cp conf/products/*.json "$_tmpdir/"
   kubectl create configmap airflow-jobs \
     --namespace "$NS" \

@@ -1,0 +1,135 @@
+{% extends "base.html" %}
+{% block title %}Analyseprosjekter — Slettix Analytics{% endblock %}
+
+{% block content %}
+<div class="d-flex align-items-center mb-3 flex-wrap gap-2">
+  <div>
+    <h1 class="h3 mb-0"><i class="bi bi-folder me-2"></i>Analyseprosjekter</h1>
+    <p class="text-muted mb-0 small">Samling av notebooks, dashboards og modeller på tvers av dataprodukter</p>
+  </div>
+  {% if current_user %}
+  <a href="/prosjekter/ny" class="btn btn-success ms-auto">
+    <i class="bi bi-plus-circle me-1"></i>Nytt prosjekt
+  </a>
+  {% endif %}
+</div>
+
+{# ── Faner ── #}
+<ul class="nav nav-tabs mb-3" id="project-tabs">
+  {% if current_user %}
+  <li class="nav-item">
+    <a class="nav-link {% if filter == 'mine' %}active{% endif %}" href="/prosjekter?filter=mine">
+      <i class="bi bi-person-circle me-1"></i>Mine prosjekter
+    </a>
+  </li>
+  {% endif %}
+  <li class="nav-item">
+    <a class="nav-link {% if not filter and not show_archived %}active{% endif %}" href="/prosjekter">
+      <i class="bi bi-collection me-1"></i>Alle prosjekter
+    </a>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link {% if show_archived %}active{% endif %}" href="/prosjekter?include_archived=true">
+      <i class="bi bi-archive me-1"></i>Arkiv
+    </a>
+  </li>
+</ul>
+
+{# ── Søk ── #}
+<input type="text" id="project-search" class="form-control mb-3" placeholder="Søk i navn eller beskrivelse…">
+
+{# ── Liste ── #}
+<div id="project-list" class="row g-3">
+  <div class="col-12 text-muted text-center py-5">Laster…</div>
+</div>
+
+<script>
+const FILTER         = {{ filter | tojson }};
+const INCLUDE_ARCHIVED = {{ show_archived | tojson }};
+const IS_LOGGED_IN   = {% if current_user %}true{% else %}false{% endif %};
+
+let ALL_PROJECTS = [];
+
+async function loadProjects() {
+  const params = new URLSearchParams();
+  if (FILTER === "mine") params.set("filter", "mine");
+  if (INCLUDE_ARCHIVED)   params.set("include_archived", "true");
+  try {
+    const r = await fetch("/api/projects?" + params.toString());
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const data = await r.json();
+    ALL_PROJECTS = data.projects || [];
+    render(ALL_PROJECTS);
+  } catch (err) {
+    document.getElementById("project-list").innerHTML =
+      `<div class="col-12 text-danger small">Kunne ikke laste: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+function render(projects) {
+  const root = document.getElementById("project-list");
+  if (!projects.length) {
+    root.innerHTML = `
+      <div class="col-12 text-muted text-center py-5">
+        <i class="bi bi-folder-x fs-1 d-block mb-2"></i>
+        <p class="mb-2">Ingen prosjekter ${FILTER === "mine" ? "du er medlem av" : "å vise"} ennå.</p>
+        ${IS_LOGGED_IN ? '<a href="/prosjekter/ny" class="btn btn-sm btn-primary">Opprett ditt første prosjekt</a>' : ''}
+      </div>`;
+    return;
+  }
+  root.innerHTML = projects.map(p => {
+    const archived = p.status === "archived";
+    const desc     = (p.description || "").slice(0, 140);
+    const updated  = relativeTime(p.updated_at);
+    return `
+      <div class="col-md-6 col-lg-4">
+        <a href="/prosjekter/${encodeURIComponent(p.slug)}" class="text-decoration-none text-body">
+          <div class="card h-100 shadow-sm ${archived ? 'opacity-50' : ''}">
+            <div class="card-body">
+              <div class="d-flex align-items-start justify-content-between mb-2">
+                <h5 class="card-title mb-0">${escapeHtml(p.name)}</h5>
+                ${archived ? '<span class="badge bg-secondary">Arkiv</span>' : '<span class="badge bg-success">Aktiv</span>'}
+              </div>
+              <p class="card-text small text-muted mb-2">${escapeHtml(desc) || '<em>Ingen beskrivelse</em>'}${desc.length === 140 ? '…' : ''}</p>
+              <div class="d-flex justify-content-between small text-muted">
+                <span><i class="bi bi-clock me-1"></i>${updated}</span>
+                <code class="small">${escapeHtml(p.slug)}</code>
+              </div>
+            </div>
+          </div>
+        </a>
+      </div>`;
+  }).join("");
+}
+
+document.getElementById("project-search").addEventListener("input", (e) => {
+  const q = e.target.value.toLowerCase().trim();
+  if (!q) { render(ALL_PROJECTS); return; }
+  render(ALL_PROJECTS.filter(p =>
+    p.name.toLowerCase().includes(q) ||
+    (p.description || "").toLowerCase().includes(q) ||
+    p.slug.toLowerCase().includes(q)
+  ));
+});
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+                  .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+function relativeTime(iso) {
+  if (!iso) return "";
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1)    return "akkurat nå";
+  if (mins < 60)   return `for ${mins} min siden`;
+  const h = Math.floor(mins / 60);
+  if (h < 24)      return `for ${h}t siden`;
+  const d = Math.floor(h / 24);
+  if (d === 1)     return "i går";
+  if (d < 30)      return `for ${d} dager siden`;
+  return new Date(iso).toLocaleDateString("nb-NO");
+}
+
+loadProjects();
+</script>
+{% endblock %}

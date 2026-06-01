@@ -68,8 +68,8 @@ spec:
     "spark.sql.shuffle.partitions": "8"
   driver:
     cores: 1
-    memory: "512m"
-    memoryOverhead: "256m"
+    memory: "1g"
+    memoryOverhead: "384m"
     serviceAccount: spark
     labels:
       version: "3.5.8"
@@ -91,8 +91,8 @@ spec:
   executor:
     instances: 1
     cores: 1
-    memory: "512m"
-    memoryOverhead: "128m"
+    memory: "1g"
+    memoryOverhead: "256m"
     env:
       - name: AWS_ACCESS_KEY_ID
         valueFrom:
@@ -454,11 +454,15 @@ with DAG(
         execution_timeout=timedelta(minutes=5),
     )
 
-    # C-1 til C-5 kjøres parallelt; deretter kvalitetssjekk og registrering
-    [
-        population_stats,
-        cohort_demographics,
-        marital_status_trends,
-        migration_flows,
-        household_structure,
-    ] >> quality_check >> register_links
+    # Sekvensielt — unngår NodeNotReady-press på Docker Desktop-klusteret
+    # (samme mønster som helse_dar_gold; parallell-kjøring av 5 Spark-jobber
+    # ga "Initial job has not accepted any resources" og falte over).
+    (
+        population_stats
+        >> cohort_demographics
+        >> marital_status_trends
+        >> migration_flows
+        >> household_structure
+        >> quality_check
+        >> register_links
+    )

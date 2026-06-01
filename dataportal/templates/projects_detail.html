@@ -1,0 +1,554 @@
+{% extends "base.html" %}
+{% block title %}{{ project.name }} — Slettix Analytics{% endblock %}
+
+{% block content %}
+<nav aria-label="breadcrumb" class="mb-2">
+  <ol class="breadcrumb">
+    <li class="breadcrumb-item"><a href="/prosjekter">Prosjekter</a></li>
+    <li class="breadcrumb-item active">{{ project.name }}</li>
+  </ol>
+</nav>
+
+{# ── Header med actions ── #}
+<div class="d-flex align-items-start mb-3 flex-wrap gap-2">
+  <div class="flex-grow-1">
+    <h1 class="h3 mb-1">
+      <i class="bi bi-folder me-2"></i>{{ project.name }}
+      {% if project.status == 'archived' %}<span class="badge bg-secondary ms-2">Arkiv</span>{% endif %}
+    </h1>
+    <div class="text-muted small">
+      <code>{{ project.slug }}</code> · opprettet
+      <span title="{{ project.created_at }}">for {{ ((now - project.created_at_dt).days) if project.created_at_dt else '?' }} dager siden</span>
+    </div>
+  </div>
+  {% if my_role %}
+  <div class="d-flex gap-2 flex-wrap">
+    {% if my_role in ['owner', 'contributor'] and not active_project %}
+    <button id="enter-room-btn" class="btn btn-success btn-sm">
+      <i class="bi bi-box-arrow-in-right me-1"></i>Gå inn i prosjektrom
+    </button>
+    {% endif %}
+    {# PRJ-16: lenke til prosjektets Jupyter-mappe #}
+    <a href="{{ jupyter_url }}/lab/tree/projects/{{ project.slug }}" target="_blank" rel="noopener" class="btn btn-outline-warning btn-sm">
+      <i class="bi bi-journal-code me-1"></i>Åpne i Jupyter
+    </a>
+    {% if my_role == 'owner' %}
+    <button class="btn btn-outline-primary btn-sm" data-bs-toggle="modal" data-bs-target="#inviteModal">
+      <i class="bi bi-person-plus me-1"></i>Invitér
+    </button>
+    <button class="btn btn-outline-secondary btn-sm" data-bs-toggle="modal" data-bs-target="#editModal">
+      <i class="bi bi-pencil me-1"></i>Rediger
+    </button>
+    {% if project.status == 'active' %}
+    <button id="archive-btn" class="btn btn-outline-warning btn-sm">
+      <i class="bi bi-archive me-1"></i>Arkivér
+    </button>
+    {% else %}
+    <button id="unarchive-btn" class="btn btn-outline-success btn-sm">
+      <i class="bi bi-arrow-up-circle me-1"></i>Gjenåpne
+    </button>
+    {% endif %}
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+
+{% if project.description %}
+<p class="text-muted">{{ project.description }}</p>
+{% endif %}
+
+{# ── Tabs ── #}
+<ul class="nav nav-tabs mb-3" id="project-tabs" role="tablist">
+  <li class="nav-item"><a class="nav-link active" data-bs-toggle="tab" href="#tab-oversikt">Oversikt</a></li>
+  <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-artefakter" id="tab-artefakter-link">Artefakter <span id="artifact-count-badge" class="badge bg-light text-dark border ms-1">—</span></a></li>
+  <li class="nav-item"><a class="nav-link" data-bs-toggle="tab" href="#tab-aktivitet">Aktivitet</a></li>
+</ul>
+
+<div class="tab-content">
+
+  {# ── Oversikt-tab ── #}
+  <div class="tab-pane fade show active" id="tab-oversikt">
+    <div class="row g-3">
+      <div class="col-md-7">
+        <div class="card shadow-sm">
+          <div class="card-body">
+            <h6 class="text-muted small text-uppercase mb-3"><i class="bi bi-people me-1"></i>Medlemmer (<span id="member-count">—</span>)</h6>
+            <ul id="member-list" class="list-unstyled mb-0">
+              <li class="text-muted small">Laster…</li>
+            </ul>
+            {% if my_role == 'owner' %}
+            <button class="btn btn-sm btn-outline-primary mt-3" data-bs-toggle="modal" data-bs-target="#inviteModal">
+              <i class="bi bi-person-plus me-1"></i>Legg til medlem
+            </button>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+      <div class="col-md-5">
+        <div class="card shadow-sm">
+          <div class="card-body">
+            <h6 class="text-muted small text-uppercase mb-3"><i class="bi bi-info-circle me-1"></i>Detaljer</h6>
+            <dl class="small mb-0">
+              <dt>Status</dt><dd>{{ project.status }}</dd>
+              <dt>Eier</dt><dd id="owner-display">…</dd>
+              <dt>Opprettet</dt><dd>{{ project.created_at[:10] }}</dd>
+              <dt>Sist endret</dt><dd>{{ project.updated_at[:10] }}</dd>
+            </dl>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  {# ── Artefakter-tab ── #}
+  <div class="tab-pane fade" id="tab-artefakter">
+    {% if my_role in ['owner', 'contributor'] %}
+    <div class="d-flex justify-content-end mb-3">
+      <button class="btn btn-sm btn-success" data-bs-toggle="modal" data-bs-target="#addArtifactModal">
+        <i class="bi bi-plus-circle me-1"></i>Legg til artefakt
+      </button>
+    </div>
+    {% endif %}
+    {% if my_role %}
+    <div id="artifact-list">
+      <div class="text-muted text-center py-5">Laster…</div>
+    </div>
+    {% else %}
+    <div class="alert alert-warning">
+      <i class="bi bi-lock me-1"></i>Artefakt-innhold krever medlemskap.
+    </div>
+    {% endif %}
+  </div>
+
+  {# ── Aktivitet-tab ── #}
+  <div class="tab-pane fade" id="tab-aktivitet">
+    {% if my_role %}
+    <ul id="activity-list" class="list-group">
+      <li class="list-group-item text-muted small">Laster…</li>
+    </ul>
+    {% else %}
+    <div class="alert alert-warning">
+      <i class="bi bi-lock me-1"></i>Aktivitetsfeed krever medlemskap.
+    </div>
+    {% endif %}
+  </div>
+
+</div>
+
+<script>
+const PROJECT_SLUG = {{ project.slug | tojson }};
+const PROJECT_ID   = {{ project.id   | tojson }};
+const MY_ROLE      = {{ my_role      | tojson }};
+
+async function loadMembers() {
+  if (!MY_ROLE) return;  // viewers under public-metadata får ikke medlemslisten
+  try {
+    const r = await fetch(`/api/projects/${PROJECT_SLUG}/members`);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const data = await r.json();
+    const members = data.members || [];
+    document.getElementById("member-count").textContent = members.length;
+    document.getElementById("member-list").innerHTML = members.map(m => `
+      <li class="d-flex align-items-center justify-content-between py-1 border-bottom">
+        <div>
+          <strong>${escapeHtml(m.username || "?")}</strong>
+          <small class="text-muted ms-1">${escapeHtml(m.email || "")}</small>
+        </div>
+        <span class="badge ${m.role === 'owner' ? 'bg-primary' : m.role === 'contributor' ? 'bg-info' : 'bg-secondary'}">${m.role}</span>
+      </li>`).join("");
+    const owner = members.find(m => m.role === "owner");
+    if (owner) document.getElementById("owner-display").textContent = owner.username;
+  } catch (err) {
+    document.getElementById("member-list").innerHTML = `<li class="text-danger small">Feil: ${escapeHtml(err.message)}</li>`;
+  }
+}
+
+async function loadArtifacts() {
+  if (!MY_ROLE) return;
+  try {
+    const r = await fetch(`/api/projects/${PROJECT_SLUG}/artifacts`);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const data = await r.json();
+    const arts = data.artifacts || [];
+    document.getElementById("artifact-count-badge").textContent = arts.length;
+    const root = document.getElementById("artifact-list");
+    if (!arts.length) {
+      root.innerHTML = '<div class="text-muted text-center py-5"><em>Ingen artefakter ennå. ' +
+        (MY_ROLE !== 'viewer' ? 'Klikk "Legg til artefakt".' : 'Bare contributors+ kan legge til.') + '</em></div>';
+      return;
+    }
+    // Grupper per type
+    const groups = {};
+    arts.forEach(a => { (groups[a.artifact_type] ||= []).push(a); });
+    const typeLabels = {
+      notebook:    {label: "Notebooks",          icon: "bi-journal-code"},
+      dashboard:   {label: "Dashboards",         icon: "bi-bar-chart-line"},
+      dataproduct: {label: "Dataprodukter",      icon: "bi-database"},
+      document:    {label: "Dokumenter",         icon: "bi-file-text"},
+      ml_model:    {label: "ML-modeller",        icon: "bi-cpu"},
+    };
+    let html = "";
+    for (const [type, items] of Object.entries(groups)) {
+      const t = typeLabels[type] || {label: type, icon: "bi-box"};
+      html += `<h6 class="text-muted small text-uppercase mt-3"><i class="bi ${t.icon} me-1"></i>${t.label} (${items.length})</h6><ul class="list-group mb-3">`;
+      items.forEach(a => {
+        const link = a.ref_url || (a.artifact_type === "dataproduct" ? `/products/${a.ref_id}` : "#");
+        html += `<li class="list-group-item d-flex justify-content-between align-items-start">
+          <div>
+            <a href="${escapeHtml(link)}" target="_blank" rel="noopener" class="text-decoration-none">${escapeHtml(a.title)}</a>
+            ${a.description ? '<div class="small text-muted">' + escapeHtml(a.description) + '</div>' : ''}
+          </div>
+          <small class="text-muted">${relativeTime(a.added_at)}</small>
+        </li>`;
+      });
+      html += `</ul>`;
+      if (type === "ml_model") {
+        html += '<div class="alert alert-info small"><i class="bi bi-stars me-1"></i>Snart full MLflow-integrasjon (epic #200) — foreløpig kun lenker.</div>';
+      }
+    }
+    root.innerHTML = html;
+  } catch (err) {
+    document.getElementById("artifact-list").innerHTML = `<div class="text-danger small">Feil: ${escapeHtml(err.message)}</div>`;
+  }
+}
+
+async function loadActivity() {
+  if (!MY_ROLE) return;
+  try {
+    const r = await fetch(`/api/projects/${PROJECT_SLUG}/activity?limit=50`);
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const data = await r.json();
+    const events = data.events || [];
+    const root = document.getElementById("activity-list");
+    if (!events.length) { root.innerHTML = '<li class="list-group-item text-muted small">Ingen aktivitet ennå.</li>'; return; }
+    root.innerHTML = events.map(e => `
+      <li class="list-group-item">
+        <strong>${escapeHtml(e.actor_username || "system")}</strong>
+        <span class="text-muted">${formatEventVerb(e.event_type)}</span>
+        <small class="text-muted ms-2">${relativeTime(e.ts)}</small>
+        ${e.payload && Object.keys(e.payload).length ? '<pre class="small text-muted mt-1 mb-0" style="white-space:pre-wrap;">' + escapeHtml(JSON.stringify(e.payload)) + '</pre>' : ''}
+      </li>`).join("");
+  } catch (err) {
+    document.getElementById("activity-list").innerHTML = `<li class="list-group-item text-danger small">Feil: ${escapeHtml(err.message)}</li>`;
+  }
+}
+
+function formatEventVerb(t) {
+  const map = {
+    project_created:       "opprettet prosjektet",
+    project_archived:      "arkiverte prosjektet",
+    project_unarchived:    "gjenåpnet prosjektet",
+    project_updated:       "oppdaterte prosjekt-metadata",
+    member_added:          "la til medlem",
+    member_removed:        "fjernet medlem",
+    role_changed:          "endret rolle",
+    ownership_transferred: "overførte eierskap",
+    artifact_added:        "la til artefakt",
+    artifact_removed:      "fjernet artefakt",
+  };
+  return map[t] || t;
+}
+
+// Actions
+const enterBtn = document.getElementById("enter-room-btn");
+if (enterBtn) enterBtn.addEventListener("click", async () => {
+  const r = await fetch(`/api/projects/${PROJECT_SLUG}/enter`, {method: "POST"});
+  if (r.ok) location.reload();
+  else alert("Kunne ikke gå inn i prosjektrom (HTTP " + r.status + ")");
+});
+
+const archiveBtn = document.getElementById("archive-btn");
+if (archiveBtn) archiveBtn.addEventListener("click", async () => {
+  if (!confirm("Arkivér prosjektet? Det blir fortsatt synlig under «Arkiv»-fanen.")) return;
+  const r = await fetch(`/api/projects/${PROJECT_SLUG}/archive`, {method: "POST"});
+  if (r.ok) location.reload();
+});
+
+const unarchiveBtn = document.getElementById("unarchive-btn");
+if (unarchiveBtn) unarchiveBtn.addEventListener("click", async () => {
+  const r = await fetch(`/api/projects/${PROJECT_SLUG}/unarchive`, {method: "POST"});
+  if (r.ok) location.reload();
+});
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+                  .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+}
+function relativeTime(iso) {
+  if (!iso) return "";
+  const diffMs = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diffMs / 60000);
+  if (mins < 1)    return "akkurat nå";
+  if (mins < 60)   return `for ${mins} min siden`;
+  const h = Math.floor(mins / 60);
+  if (h < 24)      return `for ${h}t siden`;
+  const d = Math.floor(h / 24);
+  return d === 1 ? "i går" : `for ${d} dager siden`;
+}
+
+loadMembers();
+loadArtifacts();
+loadActivity();
+</script>
+
+{# ════════════════════ Modaler (PRJ-11) ════════════════════ #}
+
+{% if my_role == 'owner' %}
+{# ── Invitér medlem ── #}
+<div class="modal fade" id="inviteModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-person-plus me-2"></i>Invitér medlem</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label">Søk bruker</label>
+          <input id="invite-search" type="text" class="form-control" placeholder="brukernavn eller e-post" autocomplete="off">
+          <ul id="invite-results" class="list-group list-group-flush border rounded mt-1" style="max-height:200px;overflow-y:auto;display:none;"></ul>
+          <input type="hidden" id="invite-user-id">
+          <small id="invite-selected" class="text-muted"></small>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Rolle</label>
+          <select id="invite-role" class="form-select">
+            <option value="contributor">Contributor — kan legge til artefakter</option>
+            <option value="viewer">Viewer — kun lese</option>
+          </select>
+        </div>
+        <div id="invite-error" class="alert alert-danger d-none"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Avbryt</button>
+        <button id="invite-submit" type="button" class="btn btn-primary" disabled>Invitér</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ── Rediger prosjekt ── #}
+<div class="modal fade" id="editModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-pencil me-2"></i>Rediger prosjekt</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label">Navn</label>
+          <input id="edit-name" type="text" class="form-control" value="{{ project.name }}">
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Beskrivelse</label>
+          <textarea id="edit-description" class="form-control" rows="4">{{ project.description or '' }}</textarea>
+        </div>
+        <div id="edit-error" class="alert alert-danger d-none"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Avbryt</button>
+        <button id="edit-submit" type="button" class="btn btn-primary">Lagre</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+{% if my_role in ['owner', 'contributor'] %}
+{# ── Legg til artefakt ── #}
+<div class="modal fade" id="addArtifactModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-lg">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="bi bi-plus-circle me-2"></i>Legg til artefakt</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <div class="mb-3">
+          <label class="form-label">Type</label>
+          <select id="art-type" class="form-select">
+            <option value="notebook">📓 Notebook (Jupyter)</option>
+            <option value="dashboard">📊 Dashboard (Superset)</option>
+            <option value="dataproduct">🗄 Dataprodukt (fra katalogen)</option>
+            <option value="document">📄 Dokument (markdown)</option>
+            <option value="ml_model">🤖 ML-modell (URL/sti)</option>
+          </select>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Tittel <span class="text-danger">*</span></label>
+          <input id="art-title" type="text" class="form-control" maxlength="200">
+        </div>
+
+        {# Type-spesifikke felter #}
+        <div id="art-fields-notebook" class="art-fields">
+          <label class="form-label">Jupyter-sti eller URL</label>
+          <input id="art-notebook-url" type="text" class="form-control" placeholder="/lab/tree/my-notebook.ipynb">
+        </div>
+        <div id="art-fields-dashboard" class="art-fields d-none">
+          <label class="form-label">Superset-URL</label>
+          <input id="art-dashboard-url" type="text" class="form-control" placeholder="{{ superset_url }}/dashboard/12">
+        </div>
+        <div id="art-fields-dataproduct" class="art-fields d-none">
+          <label class="form-label">Dataprodukt</label>
+          <select id="art-dataproduct-id" class="form-select"><option>Laster…</option></select>
+        </div>
+        <div id="art-fields-document" class="art-fields d-none">
+          <label class="form-label">Innhold (markdown)</label>
+          <textarea id="art-document-content" class="form-control font-monospace" rows="6"></textarea>
+          <small class="text-muted">Lagres som dokument-artefakt (ref_url genereres automatisk).</small>
+        </div>
+        <div id="art-fields-ml_model" class="art-fields d-none">
+          <label class="form-label">URL eller sti</label>
+          <input id="art-mlmodel-url" type="text" class="form-control" placeholder="s3://gold/models/cluster_v1.pkl">
+          <div class="alert alert-info small mt-2 mb-0">
+            <i class="bi bi-stars me-1"></i>Snart full MLflow-integrasjon (epic #200). Foreløpig kun URL/sti.
+          </div>
+        </div>
+
+        <div class="mb-3 mt-3">
+          <label class="form-label">Beskrivelse (valgfri)</label>
+          <textarea id="art-description" class="form-control" rows="2"></textarea>
+        </div>
+        <div class="mb-3">
+          <label class="form-label">Tags (komma-separert)</label>
+          <input id="art-tags" type="text" class="form-control" placeholder="hypotese, Q2">
+        </div>
+        <div id="art-error" class="alert alert-danger d-none"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Avbryt</button>
+        <button id="art-submit" type="button" class="btn btn-success">Legg til</button>
+      </div>
+    </div>
+  </div>
+</div>
+{% endif %}
+
+<script>
+// ── Invitér-modal ──────────────────────────────────────────────────────────
+const inviteSearch = document.getElementById("invite-search");
+if (inviteSearch) {
+  let searchTimeout = null;
+  inviteSearch.addEventListener("input", () => {
+    clearTimeout(searchTimeout);
+    searchTimeout = setTimeout(async () => {
+      const q = inviteSearch.value.trim();
+      if (q.length < 2) { document.getElementById("invite-results").style.display = "none"; return; }
+      const r = await fetch(`/api/users/search?q=${encodeURIComponent(q)}&limit=10`);
+      if (!r.ok) return;
+      const data = await r.json();
+      const ul = document.getElementById("invite-results");
+      ul.innerHTML = (data.users || []).map(u => `
+        <li class="list-group-item list-group-item-action" data-id="${u.id}" data-name="${escapeHtml(u.username)}" style="cursor:pointer;">
+          <strong>${escapeHtml(u.username)}</strong>
+          <small class="text-muted ms-2">${escapeHtml(u.email || '')}</small>
+        </li>`).join("");
+      ul.style.display = data.users.length ? "block" : "none";
+      ul.querySelectorAll("li").forEach(li => {
+        li.addEventListener("click", () => {
+          document.getElementById("invite-user-id").value = li.dataset.id;
+          document.getElementById("invite-selected").innerHTML = '<i class="bi bi-check-circle text-success me-1"></i>Valgt: <strong>' + li.dataset.name + '</strong>';
+          document.getElementById("invite-submit").disabled = false;
+          inviteSearch.value = "";
+          ul.style.display = "none";
+        });
+      });
+    }, 200);
+  });
+
+  document.getElementById("invite-submit").addEventListener("click", async () => {
+    const userId = document.getElementById("invite-user-id").value;
+    const role   = document.getElementById("invite-role").value;
+    const errEl  = document.getElementById("invite-error");
+    errEl.classList.add("d-none");
+    try {
+      const r = await fetch(`/api/projects/${PROJECT_SLUG}/members`, {
+        method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({user_id: userId, role}),
+      });
+      if (!r.ok) { const b = await r.json().catch(() => ({})); throw new Error(b.detail || ("HTTP " + r.status)); }
+      location.reload();
+    } catch (err) {
+      errEl.textContent = err.message; errEl.classList.remove("d-none");
+    }
+  });
+}
+
+// ── Rediger-modal ──────────────────────────────────────────────────────────
+const editSubmit = document.getElementById("edit-submit");
+if (editSubmit) {
+  editSubmit.addEventListener("click", async () => {
+    const errEl = document.getElementById("edit-error");
+    errEl.classList.add("d-none");
+    try {
+      const r = await fetch(`/api/projects/${PROJECT_SLUG}`, {
+        method: "PATCH", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({
+          name: document.getElementById("edit-name").value,
+          description: document.getElementById("edit-description").value,
+        }),
+      });
+      if (!r.ok) { const b = await r.json().catch(() => ({})); throw new Error(b.detail || ("HTTP " + r.status)); }
+      location.reload();
+    } catch (err) {
+      errEl.textContent = err.message; errEl.classList.remove("d-none");
+    }
+  });
+}
+
+// ── Add-artifact-modal ─────────────────────────────────────────────────────
+const artType = document.getElementById("art-type");
+if (artType) {
+  function showFields(type) {
+    document.querySelectorAll(".art-fields").forEach(el => el.classList.add("d-none"));
+    document.getElementById("art-fields-" + type).classList.remove("d-none");
+  }
+  artType.addEventListener("change", () => showFields(artType.value));
+
+  // Last produktliste én gang
+  fetch("/api/products").then(r => r.json()).then(data => {
+    const sel = document.getElementById("art-dataproduct-id");
+    if (!sel) return;
+    const products = (data.products || data || []).map(p => ({id: p.id, name: p.name || p.id}));
+    sel.innerHTML = products.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)} (${escapeHtml(p.id)})</option>`).join("");
+  }).catch(() => {});
+
+  document.getElementById("art-submit").addEventListener("click", async () => {
+    const errEl = document.getElementById("art-error");
+    errEl.classList.add("d-none");
+    const type  = artType.value;
+    const title = document.getElementById("art-title").value.trim();
+    if (!title) { errEl.textContent = "Tittel er påkrevd"; errEl.classList.remove("d-none"); return; }
+
+    let ref_url = null, ref_id = null;
+    if (type === "notebook")    ref_url = document.getElementById("art-notebook-url").value.trim();
+    if (type === "dashboard")   ref_url = document.getElementById("art-dashboard-url").value.trim();
+    if (type === "dataproduct") ref_id  = document.getElementById("art-dataproduct-id").value;
+    if (type === "ml_model")    ref_url = document.getElementById("art-mlmodel-url").value.trim();
+    if (type === "document") {
+      // V1: lagre content som beskrivelse-felt for enkelhetens skyld
+      // (full MinIO-document-lagring kan komme senere — markdown vises i UI)
+      ref_url = "inline";
+    }
+
+    const tags = document.getElementById("art-tags").value.split(",").map(t => t.trim()).filter(t => t);
+    let description = document.getElementById("art-description").value;
+    if (type === "document") {
+      description = document.getElementById("art-document-content").value;
+    }
+
+    try {
+      const r = await fetch(`/api/projects/${PROJECT_SLUG}/artifacts`, {
+        method: "POST", headers: {"Content-Type":"application/json"},
+        body: JSON.stringify({artifact_type: type, title, ref_url, ref_id, description, tags}),
+      });
+      if (!r.ok) { const b = await r.json().catch(() => ({})); throw new Error(b.detail || ("HTTP " + r.status)); }
+      location.reload();
+    } catch (err) {
+      errEl.textContent = err.message; errEl.classList.remove("d-none");
+    }
+  });
+}
+</script>
+{% endblock %}

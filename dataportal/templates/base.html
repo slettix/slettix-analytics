@@ -313,6 +313,8 @@
 {% set path = request.url.path %}
 {% if path == '/katalog' or path.startswith('/products') or path == '/browse' %}
   {% set section = 'katalog' %}
+{% elif path == '/prosjekter' or path.startswith('/prosjekter') %}
+  {% set section = 'prosjekter' %}
 {% elif path == '/create-analytical' %}
   {% set section = 'bygg' %}
 {% elif path.startswith('/pipeline') %}
@@ -325,6 +327,24 @@
   {% set section = 'admin' %}
 {% else %}
   {% set section = '' %}
+{% endif %}
+
+{# ── Prosjektrom-banner (PRJ-6, epic #199) ── #}
+{% if active_project %}
+<div id="project-room-banner" style="background:#0d6efd; color:#fff; padding:.5rem 1rem; font-size:.9rem; display:flex; align-items:center; gap:.5rem; flex-wrap:wrap;">
+  <span><i class="bi bi-folder-fill me-1"></i>I prosjektrom:</span>
+  <a href="/prosjekter/{{ active_project.slug }}" style="color:#fff; font-weight:600; text-decoration:underline;">{{ active_project.name }}</a>
+  <span class="ms-auto small" style="opacity:.85;">Nye notebooks, dashboards og pipelines blir lagt til i dette prosjektet.</span>
+  <button id="leave-project-btn" class="btn btn-sm btn-light" style="font-size:.8rem;">
+    <i class="bi bi-box-arrow-left me-1"></i>Forlat
+  </button>
+</div>
+<script>
+document.getElementById("leave-project-btn").addEventListener("click", async () => {
+  const r = await fetch("/api/projects/leave", {method: "POST"});
+  if (r.ok) location.reload();
+});
+</script>
 {% endif %}
 
 {# ── Mobilstripe (hamburger + logo) ── #}
@@ -389,6 +409,50 @@
         <i class="bi bi-folder2-open link-icon"></i>Delta Browser
       </a>
     </div>
+    {% endif %}
+
+    {# ─ Prosjekter (PRJ-7, epic #199) ─ #}
+    <a href="/prosjekter" class="sidebar-link {% if section == 'prosjekter' and path == '/prosjekter' %}active{% endif %}">
+      <i class="bi bi-folder link-icon"></i>
+      Prosjekter
+      {% if active_project %}<span class="badge bg-primary ms-2" style="font-size:.55rem;">aktiv</span>{% endif %}
+    </a>
+    {% if section == 'prosjekter' %}
+    <div class="sidebar-sub">
+      {% if current_user %}
+      <a href="/prosjekter?filter=mine" class="sidebar-link {% if request.query_params.get('filter') == 'mine' %}active{% endif %}">
+        <i class="bi bi-person-circle link-icon"></i>Mine prosjekter
+      </a>
+      {% endif %}
+      <a href="/prosjekter" class="sidebar-link {% if path == '/prosjekter' and not request.query_params.get('filter') %}active{% endif %}">
+        <i class="bi bi-collection link-icon"></i>Alle prosjekter
+      </a>
+      <a href="/prosjekter/ny" class="sidebar-link {% if path == '/prosjekter/ny' %}active{% endif %}">
+        <i class="bi bi-plus-circle link-icon"></i>Nytt prosjekt
+      </a>
+    </div>
+    {% endif %}
+    {% if active_project %}
+    {# Snarveier til pågående prosjekt — vises uavhengig av section #}
+    <div class="sidebar-sub" style="padding-left:1.5rem;">
+      <a href="/prosjekter/{{ active_project.slug }}" class="sidebar-link" style="font-size:.85rem;">
+        <i class="bi bi-folder-fill text-primary link-icon"></i>{{ active_project.name[:20] }}{% if active_project.name|length > 20 %}…{% endif %}
+      </a>
+      <a href="#" class="sidebar-link text-muted" id="sidebar-leave-project-link" style="font-size:.8rem;">
+        <i class="bi bi-box-arrow-left link-icon"></i>Forlat prosjektrom
+      </a>
+    </div>
+    <script>
+    (function() {
+      const el = document.getElementById("sidebar-leave-project-link");
+      if (!el) return;
+      el.addEventListener("click", async (e) => {
+        e.preventDefault();
+        const r = await fetch("/api/projects/leave", {method: "POST"});
+        if (r.ok) location.reload();
+      });
+    })();
+    </script>
     {% endif %}
 
     {# ─ Bygg ─ #}
