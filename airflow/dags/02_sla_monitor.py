@@ -1,15 +1,17 @@
 """
 02_sla_monitor — Airflow DAG for SLA-overvåking av dataprodukter.
 
-Kjører hvert 30. minutt og sjekker om hvert dataprodukt med en
+Kjører nattlig kl 07:00 UTC (etter at daglige Bronze→Silver→Gold-pipelines
+har fullført) og sjekker om hvert dataprodukt med en
 `quality_sla.freshness_hours`-definisjon er oppdatert i tide.
 
 Resultat lagres til s3://gold/sla_results/<product_id>/latest.json
 og er tilgjengelig via GET /api/products/{id}/sla i portalen.
 
-PERF-4: etter SLA-sjekk beregnes også 30-dagers compliance-aggregat
-(`sla_compliance_30d`) og PATCH-es til produktmanifestet, slik at
-portalen kan vise verdien uten å lese 1440 MinIO-objekter per visning.
+PERF-4: etter SLA-sjekk beregnes også 7-dagers compliance-aggregat
+(`sla_compliance_30d` — feltnavnet beholdt for bakoverkompatibilitet med
+portalen) og PATCH-es til produktmanifestet, slik at portalen kan vise
+verdien uten å lese hundrevis av MinIO-objekter per visning.
 """
 
 import json
@@ -32,7 +34,7 @@ default_args = {
 }
 
 
-def _compute_compliance_30d(s3, log, product_id: str, days: int = 30) -> float | None:
+def _compute_compliance_30d(s3, log, product_id: str, days: int = 7) -> float | None:
     """Les SLA-historikk siste N dager og returner compliance i prosent.
 
     Bruker key-prefix-filter på timestamp i filnavn (`<YYYYMMDDTHHMMSS>.json`)
@@ -215,7 +217,7 @@ def check_sla(**context):
         checked += 1
 
         # PERF-4: beregn 30d-compliance og PATCH til portal-manifest. Best-effort.
-        compliance_30d = _compute_compliance_30d(s3, log, product_id, days=30)
+        compliance_30d = _compute_compliance_30d(s3, log, product_id, days=7)
         if compliance_30d is not None:
             _patch_manifest(log, product_id, {
                 "sla_compliance_30d":          compliance_30d,
@@ -228,7 +230,7 @@ def check_sla(**context):
 with DAG(
     dag_id="02_sla_monitor",
     description="Overvåker SLA-ferskhet for alle registrerte dataprodukter",
-    schedule_interval="*/30 * * * *",
+    schedule_interval="0 7 * * *",
     start_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
     catchup=False,
     default_args=default_args,
@@ -238,4 +240,20 @@ with DAG(
     PythonOperator(
         task_id="check_sla",
         python_callable=check_sla,
+        # Safety margin mot OOM — default worker-pod-memory (256Mi) er for
+        # liten når jobben holder Delta-historikk for alle produkter + 7d
+        # SLA-historikk i minne samtidig.
+        executor_config={
+            "pod_override": {
+                "spec": {
+                    "containers": [{
+                        "name": "base",
+                        "resources": {
+                            "requests": {"memory": "512Mi"},
+                            "limits":   {"memory": "1Gi"},
+                        },
+                    }],
+                },
+            },
+        },
     )

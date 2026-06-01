@@ -141,6 +141,11 @@ def init_db() -> None:
         if row[0] == 0:
             _create_user_inner(conn, "admin", "admin@slettix.local", "admin", role="admin")
 
+    # PRJ-1 (epic #199): migrer analyseprosjekt-tabellene. Sirkulær import
+    # løses ved å importere her, ikke på modul-nivå.
+    import projects  # noqa: WPS433
+    projects.init_project_schema()
+
 
 def _create_user_inner(conn, username: str, email: str, password: str, role: str = "user") -> dict:
     user_id = str(uuid.uuid4())
@@ -546,6 +551,98 @@ def get_product_views(product_id: str, days: int = 30) -> int:
             (product_id, cutoff),
         ).fetchone()
         return row[0] if row else 0
+
+
+# ── Aggregat-helpers for BUZZ-1 (epic #177) ───────────────────────────────────
+
+
+def usage_by_product_in_window(start_iso: str, end_iso: str) -> dict[str, int]:
+    """Telle alle usage-events per produkt i [start_iso, end_iso).
+
+    Inkluderer alle actions — ikke bare 'view'. Brukes til trend-beregning
+    der vi sammenlikner siste 7d med uken før.
+    """
+    with _db() as conn:
+        rows = conn.execute(
+            """SELECT product_id, COUNT(*) AS n
+               FROM usage_events
+               WHERE ts >= ? AND ts < ? AND product_id != '__platform__'
+               GROUP BY product_id""",
+            (start_iso, end_iso),
+        ).fetchall()
+    return {r["product_id"]: r["n"] for r in rows}
+
+
+def distinct_active_users(start_iso: str, end_iso: str) -> int:
+    """Antall unike user_id med aktivitet i vinduet. Anonyme events (NULL
+    user_id) telles ikke."""
+    with _db() as conn:
+        row = conn.execute(
+            """SELECT COUNT(DISTINCT user_id) AS n
+               FROM usage_events
+               WHERE ts >= ? AND ts < ? AND user_id IS NOT NULL""",
+            (start_iso, end_iso),
+        ).fetchone()
+    return row["n"] if row else 0
+
+
+def usage_summary_by_user(user_id: str, days: int = 7) -> dict:
+    """Personlig usage-aggregat for BUZZ-3.
+
+    Returnerer:
+      - products_viewed_window: distinkt antall produkter sett siste N dager
+      - products_viewed_ever:   distinkt totalt (brukes til is_new_user)
+      - new_to_user_window:     produkter sett siste N dager men aldri før
+      - questions_asked_window: antall agent-spørsmål siste N dager
+      - product_views_window:   liste over (product_id, view_count) for siste N dager
+    """
+    cutoff = (datetime.now(tz=timezone.utc) - timedelta(days=days)).isoformat()
+    with _db() as conn:
+        viewed_now = conn.execute(
+            """SELECT COUNT(DISTINCT product_id) AS n
+               FROM usage_events
+               WHERE user_id = ? AND action = 'view' AND ts >= ? AND product_id != '__platform__'""",
+            (user_id, cutoff),
+        ).fetchone()["n"]
+        viewed_ever = conn.execute(
+            """SELECT COUNT(DISTINCT product_id) AS n
+               FROM usage_events
+               WHERE user_id = ? AND action = 'view' AND product_id != '__platform__'""",
+            (user_id,),
+        ).fetchone()["n"]
+        # Nye-for-brukeren: produkter sett siste N dager som ikke finnes i
+        # historikk før cutoff.
+        new_to_user = conn.execute(
+            """SELECT COUNT(DISTINCT product_id) AS n
+               FROM usage_events
+               WHERE user_id = ? AND action = 'view' AND ts >= ? AND product_id != '__platform__'
+                 AND product_id NOT IN (
+                     SELECT DISTINCT product_id FROM usage_events
+                     WHERE user_id = ? AND action = 'view' AND ts < ?
+                 )""",
+            (user_id, cutoff, user_id, cutoff),
+        ).fetchone()["n"]
+        questions = conn.execute(
+            """SELECT COUNT(*) AS n
+               FROM usage_events
+               WHERE user_id = ? AND action IN ('agent_ask', 'agent_explain') AND ts >= ?""",
+            (user_id, cutoff),
+        ).fetchone()["n"]
+        # Per-produkt views for top_domains-utregning
+        rows = conn.execute(
+            """SELECT product_id, COUNT(*) AS views
+               FROM usage_events
+               WHERE user_id = ? AND action = 'view' AND ts >= ? AND product_id != '__platform__'
+               GROUP BY product_id""",
+            (user_id, cutoff),
+        ).fetchall()
+    return {
+        "products_viewed_window": viewed_now,
+        "products_viewed_ever":   viewed_ever,
+        "new_to_user_window":     new_to_user,
+        "questions_asked_window": questions,
+        "product_views_window":   [{"product_id": r["product_id"], "views": r["views"]} for r in rows],
+    }
 
 
 def update_incident(incident_id: str, status: str, updated_by: str) -> dict | None:

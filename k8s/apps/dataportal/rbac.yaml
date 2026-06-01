@@ -13,7 +13,13 @@ rules:
     verbs: ["get", "patch"]
   - apiGroups: ["apps"]
     resources: ["deployments"]
-    resourceNames: ["airflow-scheduler", "airflow-webserver"]
+    resourceNames: ["airflow-scheduler", "airflow-webserver", "dataportal"]
+    verbs: ["get", "patch"]
+  # Admin-UI kan oppdatere API-nøkler i slettix-credentials (kun denne).
+  # ServiceAccount default får ikke `list` på secrets — bare `get`/`patch` på navngitt.
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames: ["slettix-credentials"]
     verbs: ["get", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

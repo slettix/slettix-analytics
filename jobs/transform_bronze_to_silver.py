@@ -169,9 +169,18 @@ def upsert_to_silver(spark: SparkSession, df: DataFrame, target: str, primary_ke
         log.info(f"Created Silver table at {target} with {df.count()} rows")
 
 
+def _normalize_s3_path(path: str) -> str:
+    """Normaliser s3:// → s3a:// — jobben har kun S3A-driveren konfigurert
+    via spark.hadoop.fs.s3a.*. Wizarden lagrer paths som s3:// i configen,
+    så vi normaliserer ved bruk i stedet for å kreve at den endres."""
+    if isinstance(path, str) and path.startswith("s3://"):
+        return "s3a://" + path[len("s3://"):]
+    return path
+
+
 def run(spark: SparkSession, config: dict) -> None:
-    source           = config["source"]
-    target           = config["target"]
+    source           = _normalize_s3_path(config["source"])
+    target           = _normalize_s3_path(config["target"])
     primary_key      = config["primary_key"]
     null_rules       = config.get("null_handling", {})
     cast_rules       = config.get("cast", {})
@@ -263,16 +272,17 @@ def main():
     args = parser.parse_args()
 
     # SparkSession opprettes først — _load_config trenger den for å lese
-    # s3a://-stier via Spark sin egen reader.
+    # s3a://-stier via Spark sin egen reader. AppName inkluderer config-slug
+    # (foreldermappen) for tydeligere identifikasjon i Spark UI.
+    config_slug = Path(args.config).parent.name or "config"
     spark = (
         SparkSession.builder
-        .appName("bronze_to_silver")
+        .appName(f"bronze_to_silver:{config_slug}")
         .getOrCreate()
     )
     spark.sparkContext.setLogLevel("WARN")
 
     config = _load_config(args.config, spark=spark)
-
     run(spark, config)
     spark.stop()
 

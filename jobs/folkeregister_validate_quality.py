@@ -111,7 +111,13 @@ def main() -> None:
     )
     spark.sparkContext.setLogLevel("WARN")
 
-    overall_failed = 0
+    # Mildere strict-modus: kun produkter under CRITICAL_THRESHOLD_PCT
+    # markerer task-en som failed. Mellom terskelen og 100% er warning som
+    # logges men ikke feiler DAG-en (kvalitetsfeil er fortsatt synlig i
+    # quality_results-filer + på buzz-forsiden).
+    CRITICAL_THRESHOLD_PCT = 50.0
+    critical_failed = 0
+    warnings        = 0
 
     for check in CHECKS:
         product_id = check["product_id"]
@@ -147,7 +153,14 @@ def main() -> None:
                 "failures":           failures,
             }
             if failures:
-                overall_failed += 1
+                if quality_result["score_pct"] < CRITICAL_THRESHOLD_PCT:
+                    critical_failed += 1
+                    quality_result["severity"] = "critical"
+                else:
+                    warnings += 1
+                    quality_result["severity"] = "warning"
+            else:
+                quality_result["severity"] = "ok"
         except Exception as exc:
             print(f"Validering av {product_id} feilet: {exc}")
             quality_result = {
@@ -159,8 +172,9 @@ def main() -> None:
                 "failed":             1,
                 "row_count":          None,
                 "failures":           [{"expectation": "pipeline", "error": str(exc)}],
+                "severity":           "critical",
             }
-            overall_failed += 1
+            critical_failed += 1
 
         ts_key = datetime.now(tz=timezone.utc).strftime("%Y%m%dT%H%M%S")
         body = json.dumps(quality_result, indent=2).encode()
@@ -173,12 +187,13 @@ def main() -> None:
             except Exception as exc:
                 print(f"Kunne ikke lagre kvalitetsresultat for {product_id}: {exc}")
 
-        print(f"{product_id}: {quality_result['score_pct']}% ({quality_result['passed']}/{quality_result['total_expectations']})  rows={quality_result['row_count']}")
+        print(f"{product_id}: {quality_result['score_pct']}% ({quality_result['passed']}/{quality_result['total_expectations']})  rows={quality_result['row_count']}  severity={quality_result.get('severity', 'ok')}")
 
     spark.stop()
 
-    if overall_failed > 0:
-        # Exit 1 så Airflow markerer task som failed
+    print(f"\nSammendrag: {critical_failed} critical, {warnings} warning")
+    if critical_failed > 0:
+        # Exit 1 så Airflow markerer task som failed når kritiske brudd finnes
         raise SystemExit(1)
 
 

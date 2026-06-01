@@ -6,7 +6,7 @@
 {# ── Breadcrumb ── #}
 <nav aria-label="breadcrumb" class="mb-3">
   <ol class="breadcrumb">
-    <li class="breadcrumb-item"><a href="/">Katalog</a></li>
+    <li class="breadcrumb-item"><a href="/katalog">Katalog</a></li>
     <li class="breadcrumb-item active">Lag analytisk dataprodukt</li>
   </ol>
 </nav>
@@ -490,7 +490,7 @@ document.getElementById("create-btn").addEventListener("click", async () => {
     }
     window.open(data.notebook_url, "_blank");
     // Redirect til katalog
-    setTimeout(() => { window.location.href = "/"; }, 800);
+    setTimeout(() => { window.location.href = "/katalog"; }, 800);
 
   } catch (e) {
     let msg = e.message;
