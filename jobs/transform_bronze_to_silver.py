@@ -228,30 +228,42 @@ def run(spark: SparkSession, config: dict) -> None:
     })
 
 
-def _load_config(spark, path: str) -> dict:
+def _load_config(path: str, spark: SparkSession | None = None) -> dict:
     """Les config-JSON fra lokal sti eller S3/S3A (SILVER-3).
 
-    For S3-stier brukes Spark/Hadoop S3A — som allerede er konfigurert
-    via spark.hadoop.fs.s3a.*-conf — slik at vi unngår en separat
-    boto3-avhengighet i Spark-imaget."""
+    For s3://-stier brukes Spark sin egen `wholeTextFiles`-reader, som
+    arver s3a-konfigen fra SparkSession. Det unngår avhengighet til
+    boto3 i Spark-imaget.
+
+    Wizardens deploy lagrer payloaden som
+    `{slug, config: {...}, saved_at}` — funksjonen pakker ut `config`
+    så den faktiske transformasjons-configen returneres uansett format.
+    """
     if path.startswith(("s3://", "s3a://")):
-        # S3A er den eneste konfigurerte S3-driveren i jobben; normaliser
-        # s3:// → s3a:// så Hadoop ikke faller tilbake på s3n eller feiler.
-        if path.startswith("s3://"):
-            path = "s3a://" + path[len("s3://"):]
-        # wholetext må settes via reader-kwarg (ikke .option(...)) — som boolsk
-        # via .option() konverteres True → "True", og Spark krever "true".
-        content = spark.read.text(path, wholetext=True).collect()[0][0]
-        data = json.loads(content)
+        s3a_path = path.replace("s3://", "s3a://", 1)
+        if spark is None:
+            spark = SparkSession.builder.getOrCreate()
+        rdd = spark.sparkContext.wholeTextFiles(s3a_path)
+        contents = rdd.collect()
+        if not contents:
+            raise FileNotFoundError(f"Fant ikke config-fil på {s3a_path}")
+        raw = json.loads(contents[0][1])
     else:
-        data = json.loads(Path(path).read_text())
-    # Silver-wizarden lagrer alltid en wrapper i s3://config/silver/{slug}/current.json:
-    #   {"slug": ..., "config": {...selve config...}, "saved_at": ...}
-    # (jf. dataportal/main.py:_save_silver_config). Unwrappe når wrapperen er der,
-    # så lokale flate test-configer fortsatt funker uten endring.
-    if isinstance(data, dict) and "config" in data and isinstance(data["config"], dict):
-        return data["config"]
-    return data
+        raw = json.loads(Path(path).read_text())
+
+    if isinstance(raw, dict) and "source" not in raw and isinstance(raw.get("config"), dict):
+        cfg = raw["config"]
+    else:
+        cfg = raw
+
+    # Spark s3a-driveren registreres bare for `s3a://`. Normaliserer eldre
+    # configs som bruker `s3://` for source/target slik at Delta-leseren
+    # finner riktig FileSystem-impl.
+    for key in ("source", "target"):
+        val = cfg.get(key)
+        if isinstance(val, str) and val.startswith("s3://"):
+            cfg[key] = val.replace("s3://", "s3a://", 1)
+    return cfg
 
 
 def main():
@@ -259,9 +271,9 @@ def main():
     parser.add_argument("--config", required=True, help="Path to silver config JSON (lokal eller s3a://)")
     args = parser.parse_args()
 
-    # SparkSession må bygges før config kan leses fra S3A — Hadoop-driveren
-    # lever i JVM-en og initialiseres med sessionen. AppName avledes derfor
-    # fra config-slug-en (foreldermappen) i stedet for target-tabellen.
+    # SparkSession opprettes først — _load_config trenger den for å lese
+    # s3a://-stier via Spark sin egen reader. AppName inkluderer config-slug
+    # (foreldermappen) for tydeligere identifikasjon i Spark UI.
     config_slug = Path(args.config).parent.name or "config"
     spark = (
         SparkSession.builder
@@ -270,7 +282,7 @@ def main():
     )
     spark.sparkContext.setLogLevel("WARN")
 
-    config = _load_config(spark, args.config)
+    config = _load_config(args.config, spark=spark)
     run(spark, config)
     spark.stop()
 
